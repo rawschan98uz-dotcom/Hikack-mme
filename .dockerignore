@@ -1,0 +1,16 @@
+**/.venv
+**/node_modules
+**/__pycache__
+**/*.pyc
+**/.git
+**/.env
+**/.env.local
+**/db.sqlite3
+**/dist
+**/.cursor
+**/terminals
+references/
+docs/
+scripts/
+node_modules/
+*.log

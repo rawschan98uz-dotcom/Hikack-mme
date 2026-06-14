@@ -1,0 +1,401 @@
+{
+  "url": "https://ravvatech188.modme.uz/dashboard/default",
+  "title": "RavvaTech",
+  "capturedAt": "2026-06-10T06:50:48.834Z",
+  "links": [
+    {
+      "text": "Other",
+      "href": "#"
+    },
+    {
+      "text": "",
+      "href": "/"
+    },
+    {
+      "text": "Support",
+      "href": "https://t.me/modme_support"
+    },
+    {
+      "text": "Reminders",
+      "href": "/reminders"
+    },
+    {
+      "text": "Account",
+      "href": "/user"
+    },
+    {
+      "text": "Active leads 0",
+      "href": "/leads"
+    },
+    {
+      "text": "Teachers",
+      "href": "/teachers"
+    },
+    {
+      "text": "Groups 0",
+      "href": "/groups"
+    },
+    {
+      "text": "Students",
+      "href": "/students"
+    },
+    {
+      "text": "Rating",
+      "href": "/rating"
+    },
+    {
+      "text": "Attendance reports",
+      "href": "/attendance-reports"
+    },
+    {
+      "text": "Teacher attendance reports",
+      "href": "/teacher-attendance-reports"
+    },
+    {
+      "text": "Settings",
+      "href": "#undefined"
+    },
+    {
+      "text": "All payments",
+      "href": "/finance/payments"
+    },
+    {
+      "text": "Withdraw",
+      "href": "/finance/withdraw"
+    },
+    {
+      "text": "Total Expenses",
+      "href": "/finance/cost"
+    },
+    {
+      "text": "Salaries new",
+      "href": "/finance/new-salaries"
+    },
+    {
+      "text": "Debtors 0",
+      "href": "/students/debtors"
+    },
+    {
+      "text": "Conversion reports",
+      "href": "/reports/conversion"
+    },
+    {
+      "text": "Attendance reports",
+      "href": "/reports/attendance"
+    },
+    {
+      "text": "Leads reports",
+      "href": "/reports/leads"
+    },
+    {
+      "text": "Students left the group",
+      "href": "/reports/left-students"
+    },
+    {
+      "text": "Workly Report",
+      "href": "/reports/workly"
+    },
+    {
+      "text": "Sent SMS log",
+      "href": "/sms"
+    },
+    {
+      "text": "Call log",
+      "href": "/call"
+    },
+    {
+      "text": "Logs",
+      "href": "/history/logs"
+    },
+    {
+      "text": "SMS settings",
+      "href": "/auto-sms"
+    },
+    {
+      "text": "VoIP settings",
+      "href": "/admin/voip"
+    },
+    {
+      "text": "Grade",
+      "href": "/settings-grade"
+    },
+    {
+      "text": "General settings",
+      "href": "/settings"
+    },
+    {
+      "text": "Staff",
+      "href": "/staff/list"
+    },
+    {
+      "text": "Billing",
+      "href": "/billing"
+    },
+    {
+      "text": "Roadmap",
+      "href": "/roadmap"
+    },
+    {
+      "text": "Courses",
+      "href": "/courses"
+    },
+    {
+      "text": "Rooms",
+      "href": "/rooms"
+    },
+    {
+      "text": "Holidays",
+      "href": "/holiday"
+    },
+    {
+      "text": "Archive",
+      "href": "/archive/list"
+    },
+    {
+      "text": "Students left the group",
+      "href": "/left-students"
+    },
+    {
+      "text": "Forms",
+      "href": "/form"
+    },
+    {
+      "text": "What's new",
+      "href": "/blog/news"
+    },
+    {
+      "text": "Tags",
+      "href": "/tags"
+    },
+    {
+      "text": "Active students 0",
+      "href": "/students/list?statuses=5"
+    },
+    {
+      "text": "In a trial lesson 0",
+      "href": "/students/list?statuses=1"
+    },
+    {
+      "text": "Paid during the month 0",
+      "href": "/students/list?finance=paid_during_the_month"
+    },
+    {
+      "text": "Left active group 0",
+      "href": "/left-students?statuses=left_active_group"
+    },
+    {
+      "text": "Left after trial period 0",
+      "href": "/left-students?statuses=left_after_trial"
+    },
+    {
+      "text": "Video tutorials",
+      "href": "https://modme.uz/support/video-courses"
+    },
+    {
+      "text": "Payment mode:",
+      "href": "https://modme-crm.gitbook.io/modme-crm/get-started/tolov-rejimini-tanlash"
+    },
+    {
+      "text": "",
+      "href": "https://modme.uz"
+    }
+  ],
+  "menuItems": [
+    {
+      "text": "Other",
+      "href": "#"
+    },
+    {
+      "text": "",
+      "href": "/"
+    },
+    {
+      "text": "Support",
+      "href": "https://t.me/modme_support"
+    },
+    {
+      "text": "Reminders",
+      "href": "/reminders"
+    },
+    {
+      "text": "Account",
+      "href": "/user"
+    },
+    {
+      "text": "Active leads 0",
+      "href": "/leads"
+    },
+    {
+      "text": "Teachers",
+      "href": "/teachers"
+    },
+    {
+      "text": "Groups 0",
+      "href": "/groups"
+    },
+    {
+      "text": "Students",
+      "href": "/students"
+    },
+    {
+      "text": "Rating",
+      "href": "/rating"
+    },
+    {
+      "text": "Attendance reports",
+      "href": "/attendance-reports"
+    },
+    {
+      "text": "Teacher attendance reports",
+      "href": "/teacher-attendance-reports"
+    },
+    {
+      "text": "Settings",
+      "href": "#undefined"
+    },
+    {
+      "text": "All payments",
+      "href": "/finance/payments"
+    },
+    {
+      "text": "Withdraw",
+      "href": "/finance/withdraw"
+    },
+    {
+      "text": "Total Expenses",
+      "href": "/finance/cost"
+    },
+    {
+      "text": "Salaries new",
+      "href": "/finance/new-salaries"
+    },
+    {
+      "text": "Debtors 0",
+      "href": "/students/debtors"
+    },
+    {
+      "text": "Conversion reports",
+      "href": "/reports/conversion"
+    },
+    {
+      "text": "Attendance reports",
+      "href": "/reports/attendance"
+    },
+    {
+      "text": "Leads reports",
+      "href": "/reports/leads"
+    },
+    {
+      "text": "Students left the group",
+      "href": "/reports/left-students"
+    },
+    {
+      "text": "Workly Report",
+      "href": "/reports/workly"
+    },
+    {
+      "text": "Sent SMS log",
+      "href": "/sms"
+    },
+    {
+      "text": "Call log",
+      "href": "/call"
+    },
+    {
+      "text": "Logs",
+      "href": "/history/logs"
+    },
+    {
+      "text": "SMS settings",
+      "href": "/auto-sms"
+    },
+    {
+      "text": "VoIP settings",
+      "href": "/admin/voip"
+    },
+    {
+      "text": "Grade",
+      "href": "/settings-grade"
+    },
+    {
+      "text": "General settings",
+      "href": "/settings"
+    },
+    {
+      "text": "Staff",
+      "href": "/staff/list"
+    },
+    {
+      "text": "Billing",
+      "href": "/billing"
+    },
+    {
+      "text": "Roadmap",
+      "href": "/roadmap"
+    },
+    {
+      "text": "Courses",
+      "href": "/courses"
+    },
+    {
+      "text": "Rooms",
+      "href": "/rooms"
+    },
+    {
+      "text": "Holidays",
+      "href": "/holiday"
+    },
+    {
+      "text": "Archive",
+      "href": "/archive/list"
+    },
+    {
+      "text": "Students left the group",
+      "href": "/left-students"
+    },
+    {
+      "text": "Forms",
+      "href": "/form"
+    },
+    {
+      "text": "What's new",
+      "href": "/blog/news"
+    },
+    {
+      "text": "Tags",
+      "href": "/tags"
+    },
+    {
+      "text": "Active students 0",
+      "href": "/students/list?statuses=5"
+    },
+    {
+      "text": "In a trial lesson 0",
+      "href": "/students/list?statuses=1"
+    },
+    {
+      "text": "Paid during the month 0",
+      "href": "/students/list?finance=paid_during_the_month"
+    },
+    {
+      "text": "Left active group 0",
+      "href": "/left-students?statuses=left_active_group"
+    },
+    {
+      "text": "Left after trial period 0",
+      "href": "/left-students?statuses=left_after_trial"
+    },
+    {
+      "text": "Video tutorials",
+      "href": "https://modme.uz/support/video-courses"
+    },
+    {
+      "text": "Payment mode:",
+      "href": "https://modme-crm.gitbook.io/modme-crm/get-started/tolov-rejimini-tanlash"
+    },
+    {
+      "text": "",
+      "href": "https://modme.uz"
+    }
+  ]
+}

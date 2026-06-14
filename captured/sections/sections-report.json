@@ -1,0 +1,1247 @@
+[
+  {
+    "route": "/dashboard/default",
+    "url": "https://ravvatech188.modme.uz/dashboard/default",
+    "title": "RavvaTech",
+    "headings": [
+      "Task Result",
+      "Schedule",
+      "Create reminder"
+    ],
+    "buttons": [
+      "Ravshan",
+      "Cancel",
+      "Task done",
+      "More",
+      "Pay",
+      "Reset",
+      "Create"
+    ],
+    "tableHeaders": [],
+    "tabs": [
+      "Title"
+    ],
+    "apis": [
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/200x200.png/006644",
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/640x480.png/00bb44",
+      "GET https://api.modme.uz/v1/blog/",
+      "GET https://api.modme.uz/v1/branch",
+      "GET https://api.modme.uz/v1/company/subdomain/ravvatech188",
+      "GET https://api.modme.uz/v1/dashboard",
+      "GET https://api.modme.uz/v1/replenishments/debit_char",
+      "GET https://api.modme.uz/v1/schedule",
+      "POST https://api.modme.uz/v1/broadcasting/auth",
+      "POST https://api.modme.uz/v2/reminder/index"
+    ]
+  },
+  {
+    "route": "/leads",
+    "url": "https://ravvatech188.modme.uz/leads",
+    "title": "RavvaTech",
+    "headings": [
+      "Task Result",
+      "Hide filters",
+      "Client sources",
+      "Do you want to attach a section?",
+      "Lead delete (archive) reason",
+      "Create reminder"
+    ],
+    "buttons": [
+      "Ravshan",
+      "Cancel",
+      "Task done",
+      "Clear",
+      "Apply",
+      "Filters",
+      "No",
+      "Yes",
+      "Delete",
+      "Reset",
+      "Create"
+    ],
+    "tableHeaders": [],
+    "tabs": [
+      "Title"
+    ],
+    "apis": [
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/200x200.png/006644",
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/640x480.png/00bb44",
+      "GET https://api.modme.uz/v1/blog/",
+      "GET https://api.modme.uz/v1/branch",
+      "GET https://api.modme.uz/v1/company/subdomain/ravvatech188",
+      "GET https://api.modme.uz/v1/course",
+      "GET https://api.modme.uz/v1/leadSection",
+      "GET https://api.modme.uz/v1/leadSource",
+      "GET https://api.modme.uz/v1/leads/archive-reason",
+      "GET https://api.modme.uz/v1/tags",
+      "GET https://api.modme.uz/v1/user",
+      "POST https://api.modme.uz/v1/broadcasting/auth",
+      "POST https://api.modme.uz/v2/reminder/index"
+    ]
+  },
+  {
+    "route": "/teachers",
+    "url": "https://ravvatech188.modme.uz/teachers/list",
+    "title": "RavvaTech",
+    "headings": [
+      "Task Result",
+      "Teachers",
+      "Attention!",
+      "Create reminder"
+    ],
+    "buttons": [
+      "Ravshan",
+      "Cancel",
+      "Task done",
+      "More",
+      "Pay",
+      "ADD NEW",
+      "Import",
+      "Reset",
+      "Create"
+    ],
+    "tableHeaders": [],
+    "tabs": [
+      "Title"
+    ],
+    "apis": [
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/200x200.png/006644",
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/640x480.png/00bb44",
+      "GET https://api.modme.uz/v1/blog/",
+      "GET https://api.modme.uz/v1/branch",
+      "GET https://api.modme.uz/v1/company/subdomain/ravvatech188",
+      "GET https://api.modme.uz/v1/user",
+      "POST https://api.modme.uz/v1/broadcasting/auth",
+      "POST https://api.modme.uz/v2/reminder/index"
+    ]
+  },
+  {
+    "route": "/groups",
+    "url": "https://ravvatech188.modme.uz/groups/list",
+    "title": "RavvaTech",
+    "headings": [
+      "Task Result",
+      "Groups",
+      "Create reminder"
+    ],
+    "buttons": [
+      "Ravshan",
+      "Cancel",
+      "Task done",
+      "More",
+      "Pay",
+      "ADD NEW",
+      "Filters",
+      "Columns",
+      "Reset",
+      "Create"
+    ],
+    "tableHeaders": [
+      "Group (Click to sort ascending)",
+      "Course (Click to sort ascending)",
+      "Teacher (Click to sort ascending)",
+      "Days (Click to sort ascending)",
+      "Training dates (Click to sort ascending)",
+      "Week of study (Click to sort ascending)",
+      "Room (Click to sort ascending)",
+      "Tags (Click to sort ascending)",
+      "Students (Click to sort ascending)",
+      "Actions"
+    ],
+    "tabs": [
+      "Title"
+    ],
+    "apis": [
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/200x200.png/006644",
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/640x480.png/00bb44",
+      "GET https://api.modme.uz/v1/blog/",
+      "GET https://api.modme.uz/v1/branch",
+      "GET https://api.modme.uz/v1/company/subdomain/ravvatech188",
+      "GET https://api.modme.uz/v1/course",
+      "GET https://api.modme.uz/v1/group",
+      "GET https://api.modme.uz/v1/tags",
+      "GET https://api.modme.uz/v1/user",
+      "POST https://api.modme.uz/v1/broadcasting/auth",
+      "POST https://api.modme.uz/v2/reminder/index"
+    ]
+  },
+  {
+    "route": "/students",
+    "url": "https://ravvatech188.modme.uz/students/list",
+    "title": "RavvaTech",
+    "headings": [
+      "Task Result",
+      "Students",
+      "Create reminder"
+    ],
+    "buttons": [
+      "Ravshan",
+      "Cancel",
+      "Task done",
+      "More",
+      "Pay",
+      "ADD NEW",
+      "Filters",
+      "Columns",
+      "1",
+      "Reset",
+      "Create"
+    ],
+    "tableHeaders": [
+      "Photo",
+      "Name",
+      "Phone",
+      "Groups",
+      "Teachers",
+      "Training dates",
+      "Balance",
+      "Comment"
+    ],
+    "tabs": [
+      "Title"
+    ],
+    "apis": [
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/200x200.png/006644",
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/640x480.png/00bb44",
+      "GET https://api.modme.uz/v1/blog/",
+      "GET https://api.modme.uz/v1/branch",
+      "GET https://api.modme.uz/v1/company/subdomain/ravvatech188",
+      "GET https://api.modme.uz/v1/course",
+      "GET https://api.modme.uz/v1/group",
+      "GET https://api.modme.uz/v1/tags",
+      "GET https://api.modme.uz/v1/user",
+      "POST https://api.modme.uz/v1/broadcasting/auth",
+      "POST https://api.modme.uz/v2/reminder/index"
+    ]
+  },
+  {
+    "route": "/students/list?statuses=5",
+    "url": "https://ravvatech188.modme.uz/students/list?statuses=5",
+    "title": "RavvaTech",
+    "headings": [
+      "Task Result",
+      "Students",
+      "Create reminder"
+    ],
+    "buttons": [
+      "Ravshan",
+      "Cancel",
+      "Task done",
+      "More",
+      "Pay",
+      "ADD NEW",
+      "Filters",
+      "Columns",
+      "1",
+      "Reset",
+      "Create"
+    ],
+    "tableHeaders": [
+      "Photo",
+      "Name",
+      "Phone",
+      "Groups",
+      "Teachers",
+      "Training dates",
+      "Balance",
+      "Comment"
+    ],
+    "tabs": [
+      "Title"
+    ],
+    "apis": [
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/200x200.png/006644",
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/640x480.png/00bb44",
+      "GET https://api.modme.uz/v1/blog/",
+      "GET https://api.modme.uz/v1/branch",
+      "GET https://api.modme.uz/v1/company/subdomain/ravvatech188",
+      "GET https://api.modme.uz/v1/course",
+      "GET https://api.modme.uz/v1/group",
+      "GET https://api.modme.uz/v1/tags",
+      "GET https://api.modme.uz/v1/user",
+      "POST https://api.modme.uz/v1/broadcasting/auth",
+      "POST https://api.modme.uz/v2/reminder/index"
+    ]
+  },
+  {
+    "route": "/students/debtors",
+    "url": "https://ravvatech188.modme.uz/students/debtors",
+    "title": "RavvaTech",
+    "headings": [
+      "Task Result",
+      "Debtors",
+      "Create reminder"
+    ],
+    "buttons": [
+      "Ravshan",
+      "Cancel",
+      "Task done",
+      "More",
+      "Pay",
+      "Filter",
+      "Filters",
+      "Reset",
+      "Create"
+    ],
+    "tableHeaders": [],
+    "tabs": [
+      "Title"
+    ],
+    "apis": [
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/200x200.png/006644",
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/640x480.png/00bb44",
+      "GET https://api.modme.uz/v1/blog/",
+      "GET https://api.modme.uz/v1/branch",
+      "GET https://api.modme.uz/v1/company/subdomain/ravvatech188",
+      "GET https://api.modme.uz/v1/group",
+      "POST https://api.modme.uz/v1/broadcasting/auth",
+      "POST https://api.modme.uz/v1/user/debtors/list/7250",
+      "POST https://api.modme.uz/v1/user/debtors/totals/7250",
+      "POST https://api.modme.uz/v2/reminder/index"
+    ]
+  },
+  {
+    "route": "/reminders",
+    "url": "https://ravvatech188.modme.uz/reminders",
+    "title": "RavvaTech",
+    "headings": [
+      "Task Result",
+      "Reminders",
+      "Overdue",
+      "Today",
+      "Future",
+      "Details",
+      "Create reminder"
+    ],
+    "buttons": [
+      "Ravshan",
+      "Cancel",
+      "Task done",
+      "More",
+      "Pay",
+      "Add",
+      "Reset",
+      "Create"
+    ],
+    "tableHeaders": [],
+    "tabs": [
+      "Title"
+    ],
+    "apis": [
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/200x200.png/006644",
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/640x480.png/00bb44",
+      "GET https://api.modme.uz/v1/blog/",
+      "GET https://api.modme.uz/v1/branch",
+      "GET https://api.modme.uz/v1/company/subdomain/ravvatech188",
+      "GET https://api.modme.uz/v1/tags",
+      "GET https://api.modme.uz/v1/user",
+      "POST https://api.modme.uz/v1/broadcasting/auth",
+      "POST https://api.modme.uz/v2/reminder/index"
+    ]
+  },
+  {
+    "route": "/rating",
+    "url": "https://ravvatech188.modme.uz/rating",
+    "title": "RavvaTech",
+    "headings": [
+      "Task Result",
+      "Rating",
+      "Create reminder"
+    ],
+    "buttons": [
+      "Ravshan",
+      "Cancel",
+      "Task done",
+      "More",
+      "Pay",
+      "Reset",
+      "Create"
+    ],
+    "tableHeaders": [
+      "№",
+      "Name",
+      "Group",
+      "Grade"
+    ],
+    "tabs": [
+      "Title",
+      "Graph",
+      "Table"
+    ],
+    "apis": [
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/200x200.png/006644",
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/640x480.png/00bb44",
+      "GET https://api.modme.uz/v1/blog/",
+      "GET https://api.modme.uz/v1/branch",
+      "GET https://api.modme.uz/v1/company/subdomain/ravvatech188",
+      "GET https://api.modme.uz/v2/scores/branch",
+      "POST https://api.modme.uz/v1/broadcasting/auth",
+      "POST https://api.modme.uz/v2/reminder/index"
+    ]
+  },
+  {
+    "route": "/attendance-reports",
+    "url": "https://ravvatech188.modme.uz/attendance-reports",
+    "title": "RavvaTech",
+    "headings": [
+      "Task Result",
+      "Attendance reports",
+      "Add new note",
+      "Create reminder"
+    ],
+    "buttons": [
+      "Ravshan",
+      "Cancel",
+      "Task done",
+      "More",
+      "Pay",
+      "Filter",
+      "Reset",
+      "Create"
+    ],
+    "tableHeaders": [
+      "№",
+      "Name",
+      "Phone",
+      "Status",
+      "Group",
+      "Teacher",
+      "Lesson time",
+      "Attendance",
+      "Last comment",
+      "Actions"
+    ],
+    "tabs": [
+      "Title"
+    ],
+    "apis": [
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/200x200.png/006644",
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/640x480.png/00bb44",
+      "GET https://api.modme.uz/v1/blog/",
+      "GET https://api.modme.uz/v1/branch",
+      "GET https://api.modme.uz/v1/company/subdomain/ravvatech188",
+      "GET https://api.modme.uz/v1/group",
+      "GET https://api.modme.uz/v1/user",
+      "GET https://api.modme.uz/v2/attendance-report/date-filter",
+      "POST https://api.modme.uz/v1/broadcasting/auth",
+      "POST https://api.modme.uz/v2/reminder/index"
+    ]
+  },
+  {
+    "route": "/finance/payments",
+    "url": "https://ravvatech188.modme.uz/finance/payments",
+    "title": "RavvaTech",
+    "headings": [
+      "Task Result",
+      "All payments",
+      "Create reminder"
+    ],
+    "buttons": [
+      "Ravshan",
+      "Cancel",
+      "Task done",
+      "More",
+      "Pay",
+      "Filter",
+      "Filters",
+      "Reset",
+      "Create"
+    ],
+    "tableHeaders": [
+      "Date (Click to sort ascending)",
+      "Name (Click to sort ascending)",
+      "Sum (Click to sort ascending)",
+      "Method pay (Click to sort ascending)",
+      "Teacher (Click to sort ascending)",
+      "Comment (Click to clear sorting)",
+      "Creator (Click to sort ascending)"
+    ],
+    "tabs": [
+      "Title",
+      "Details"
+    ],
+    "apis": [
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/200x200.png/006644",
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/640x480.png/00bb44",
+      "GET https://api.modme.uz/v1/blog/",
+      "GET https://api.modme.uz/v1/branch",
+      "GET https://api.modme.uz/v1/company/subdomain/ravvatech188",
+      "GET https://api.modme.uz/v1/course",
+      "GET https://api.modme.uz/v1/group",
+      "GET https://api.modme.uz/v1/replenishments",
+      "GET https://api.modme.uz/v1/replenishments/debit_char",
+      "GET https://api.modme.uz/v1/replenishments/profit",
+      "GET https://api.modme.uz/v1/user",
+      "POST https://api.modme.uz/v1/broadcasting/auth",
+      "POST https://api.modme.uz/v2/reminder/index"
+    ]
+  },
+  {
+    "route": "/finance/withdraw",
+    "url": "https://ravvatech188.modme.uz/finance/withdraw",
+    "title": "RavvaTech",
+    "headings": [
+      "Task Result",
+      "Withdraw",
+      "Create reminder"
+    ],
+    "buttons": [
+      "Ravshan",
+      "Cancel",
+      "Task done",
+      "More",
+      "Pay",
+      "Filter",
+      "Reset",
+      "Create"
+    ],
+    "tableHeaders": [
+      "Date",
+      "Name",
+      "Sum",
+      "Comment",
+      "Creator",
+      "Actions"
+    ],
+    "tabs": [
+      "Title"
+    ],
+    "apis": [
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/200x200.png/006644",
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/640x480.png/00bb44",
+      "GET https://api.modme.uz/v1/blog/",
+      "GET https://api.modme.uz/v1/branch",
+      "GET https://api.modme.uz/v1/company/subdomain/ravvatech188",
+      "GET https://api.modme.uz/v1/course",
+      "GET https://api.modme.uz/v1/group",
+      "GET https://api.modme.uz/v1/withdraws",
+      "GET https://api.modme.uz/v1/withdraws/credit_char",
+      "GET https://api.modme.uz/v1/withdraws/totals",
+      "POST https://api.modme.uz/v1/broadcasting/auth",
+      "POST https://api.modme.uz/v2/reminder/index"
+    ]
+  },
+  {
+    "route": "/finance/cost",
+    "url": "https://ravvatech188.modme.uz/finance/cost",
+    "title": "RavvaTech",
+    "headings": [
+      "Task Result",
+      "Total Expenses",
+      "New expense",
+      "Create reminder"
+    ],
+    "buttons": [
+      "Ravshan",
+      "Cancel",
+      "Task done",
+      "More",
+      "Pay",
+      "Submit",
+      "Filter",
+      "Filters",
+      "Add category",
+      "Reset",
+      "Create"
+    ],
+    "tableHeaders": [
+      "Date",
+      "Category",
+      "Description",
+      "Payee",
+      "Method pay",
+      "Sum",
+      "Creator",
+      "Actions"
+    ],
+    "tabs": [
+      "Title"
+    ],
+    "apis": [
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/200x200.png/006644",
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/640x480.png/00bb44",
+      "GET https://api.modme.uz/v1/blog/",
+      "GET https://api.modme.uz/v1/branch",
+      "GET https://api.modme.uz/v1/company/subdomain/ravvatech188",
+      "GET https://api.modme.uz/v1/expense",
+      "GET https://api.modme.uz/v1/expense/expense-chart",
+      "GET https://api.modme.uz/v1/expense/totals",
+      "GET https://api.modme.uz/v1/expense_types",
+      "GET https://api.modme.uz/v1/user",
+      "POST https://api.modme.uz/v1/broadcasting/auth",
+      "POST https://api.modme.uz/v2/reminder/index"
+    ]
+  },
+  {
+    "route": "/finance/new-salaries",
+    "url": "https://ravvatech188.modme.uz/finance/new-salaries",
+    "title": "RavvaTech",
+    "headings": [
+      "Task Result",
+      "Salaries",
+      "Setting salaries",
+      "New Salary Settings",
+      "Create reminder"
+    ],
+    "buttons": [
+      "Ravshan",
+      "Cancel",
+      "Task done",
+      "More",
+      "Pay",
+      "Fixed",
+      "Add",
+      "Calculate",
+      "Show in teacher's profile",
+      "Save",
+      "Reset",
+      "Create"
+    ],
+    "tableHeaders": [
+      "Calc setting",
+      "Salary type",
+      "Amount",
+      "Course",
+      "Group",
+      "Teacher",
+      "Student",
+      "Created by",
+      "Updated by",
+      "Actions"
+    ],
+    "tabs": [
+      "Title"
+    ],
+    "apis": [
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/200x200.png/006644",
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/640x480.png/00bb44",
+      "GET https://api.modme.uz/v1/blog/",
+      "GET https://api.modme.uz/v1/branch",
+      "GET https://api.modme.uz/v1/company/8072/company_salary_settings",
+      "GET https://api.modme.uz/v1/company/subdomain/ravvatech188",
+      "GET https://api.modme.uz/v2/salary-settings",
+      "POST https://api.modme.uz/v1/broadcasting/auth",
+      "POST https://api.modme.uz/v2/reminder/index"
+    ]
+  },
+  {
+    "route": "/reports/conversion",
+    "url": "https://ravvatech188.modme.uz/reports/conversion",
+    "title": "RavvaTech",
+    "headings": [
+      "Task Result",
+      "Conversion reports",
+      "Sales Pipeline",
+      "Incoming",
+      "Waiting",
+      "Set",
+      "Attended",
+      "Paid",
+      "Create reminder"
+    ],
+    "buttons": [
+      "Ravshan",
+      "Cancel",
+      "Task done",
+      "More",
+      "Pay",
+      "Incoming",
+      "Waiting",
+      "Set",
+      "Attended",
+      "Paid",
+      "Reset",
+      "Create"
+    ],
+    "tableHeaders": [
+      "Incoming",
+      "Waiting",
+      "Set",
+      "Attended",
+      "Paid",
+      "Full name",
+      "Phone",
+      "Status",
+      "Staff Name"
+    ],
+    "tabs": [
+      "Title"
+    ],
+    "apis": [
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/200x200.png/006644",
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/640x480.png/00bb44",
+      "GET https://api.modme.uz/v1/blog/",
+      "GET https://api.modme.uz/v1/branch",
+      "GET https://api.modme.uz/v1/company/subdomain/ravvatech188",
+      "GET https://api.modme.uz/v1/leadConversion",
+      "GET https://api.modme.uz/v1/leadSection",
+      "GET https://api.modme.uz/v1/leadSource",
+      "GET https://api.modme.uz/v1/partInformation",
+      "GET https://api.modme.uz/v1/user",
+      "POST https://api.modme.uz/v1/broadcasting/auth",
+      "POST https://api.modme.uz/v2/reminder/index"
+    ]
+  },
+  {
+    "route": "/reports/attendance",
+    "url": "https://ravvatech188.modme.uz/reports/attendance",
+    "title": "RavvaTech",
+    "headings": [
+      "Task Result",
+      "Attendance reports",
+      "Create reminder"
+    ],
+    "buttons": [
+      "Ravshan",
+      "Cancel",
+      "Task done",
+      "More",
+      "Pay",
+      "Filter",
+      "Reset",
+      "Create"
+    ],
+    "tableHeaders": [],
+    "tabs": [
+      "Title"
+    ],
+    "apis": [
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/200x200.png/006644",
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/640x480.png/00bb44",
+      "GET https://api.modme.uz/v1/attendance_report/",
+      "GET https://api.modme.uz/v1/blog/",
+      "GET https://api.modme.uz/v1/branch",
+      "GET https://api.modme.uz/v1/company/subdomain/ravvatech188",
+      "GET https://api.modme.uz/v1/group",
+      "POST https://api.modme.uz/v1/broadcasting/auth",
+      "POST https://api.modme.uz/v2/reminder/index"
+    ]
+  },
+  {
+    "route": "/reports/leads",
+    "url": "https://ravvatech188.modme.uz/reports/leads",
+    "title": "RavvaTech",
+    "headings": [
+      "Task Result",
+      "Leads reports",
+      "Create reminder"
+    ],
+    "buttons": [
+      "Ravshan",
+      "Cancel",
+      "Task done",
+      "More",
+      "Pay",
+      "Calculate",
+      "Reset",
+      "Create"
+    ],
+    "tableHeaders": [],
+    "tabs": [
+      "Title"
+    ],
+    "apis": [
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/200x200.png/006644",
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/640x480.png/00bb44",
+      "GET https://api.modme.uz/v1/blog/",
+      "GET https://api.modme.uz/v1/branch",
+      "GET https://api.modme.uz/v1/company/subdomain/ravvatech188",
+      "GET https://api.modme.uz/v1/leadReport/",
+      "POST https://api.modme.uz/v1/broadcasting/auth",
+      "POST https://api.modme.uz/v2/reminder/index"
+    ]
+  },
+  {
+    "route": "/courses",
+    "url": "https://ravvatech188.modme.uz/courses/list",
+    "title": "RavvaTech",
+    "headings": [
+      "Task Result",
+      "Courses",
+      "Create reminder"
+    ],
+    "buttons": [
+      "Ravshan",
+      "Cancel",
+      "Task done",
+      "More",
+      "Pay",
+      "ADD NEW",
+      "Reset",
+      "Create"
+    ],
+    "tableHeaders": [],
+    "tabs": [
+      "Title"
+    ],
+    "apis": [
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/200x200.png/006644",
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/640x480.png/00bb44",
+      "GET https://api.modme.uz/v1/blog/",
+      "GET https://api.modme.uz/v1/branch",
+      "GET https://api.modme.uz/v1/company/subdomain/ravvatech188",
+      "GET https://api.modme.uz/v1/course",
+      "POST https://api.modme.uz/v1/broadcasting/auth",
+      "POST https://api.modme.uz/v2/reminder/index"
+    ]
+  },
+  {
+    "route": "/rooms",
+    "url": "https://ravvatech188.modme.uz/rooms/list",
+    "title": "RavvaTech",
+    "headings": [
+      "Task Result",
+      "Rooms",
+      "Create reminder"
+    ],
+    "buttons": [
+      "Ravshan",
+      "Cancel",
+      "Task done",
+      "More",
+      "Pay",
+      "ADD NEW",
+      "Reset",
+      "Create"
+    ],
+    "tableHeaders": [
+      "id",
+      "Name",
+      "Room capacity",
+      "Actions"
+    ],
+    "tabs": [
+      "Title"
+    ],
+    "apis": [
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/200x200.png/006644",
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/640x480.png/00bb44",
+      "GET https://api.modme.uz/v1/blog/",
+      "GET https://api.modme.uz/v1/branch",
+      "GET https://api.modme.uz/v1/company/subdomain/ravvatech188",
+      "GET https://api.modme.uz/v1/room",
+      "POST https://api.modme.uz/v1/broadcasting/auth",
+      "POST https://api.modme.uz/v2/reminder/index"
+    ]
+  },
+  {
+    "route": "/holiday",
+    "url": "https://ravvatech188.modme.uz/holiday",
+    "title": "RavvaTech",
+    "headings": [
+      "Task Result",
+      "Holidays",
+      "Add holiday",
+      "Edit holiday",
+      "Do you realy want to delete it?",
+      "Create reminder"
+    ],
+    "buttons": [
+      "Ravshan",
+      "Cancel",
+      "Task done",
+      "More",
+      "Pay",
+      "ADD NEW",
+      "Reset",
+      "Create"
+    ],
+    "tableHeaders": [
+      "Name",
+      "Date of the holiday",
+      "Create at",
+      "Affects to payment",
+      "Actions"
+    ],
+    "tabs": [
+      "Title",
+      "Upcoming",
+      "Past"
+    ],
+    "apis": [
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/200x200.png/006644",
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/640x480.png/00bb44",
+      "GET https://api.modme.uz/v1/blog/",
+      "GET https://api.modme.uz/v1/branch",
+      "GET https://api.modme.uz/v1/company/subdomain/ravvatech188",
+      "GET https://api.modme.uz/v1/holidayRecalculation",
+      "POST https://api.modme.uz/v1/broadcasting/auth",
+      "POST https://api.modme.uz/v2/reminder/index"
+    ]
+  },
+  {
+    "route": "/settings",
+    "url": "https://ravvatech188.modme.uz/settings",
+    "title": "RavvaTech",
+    "headings": [
+      "Task Result",
+      "General settings",
+      "Create reminder"
+    ],
+    "buttons": [
+      "Ravshan",
+      "Cancel",
+      "Task done",
+      "More",
+      "Pay",
+      "Select file",
+      "Save",
+      "Reset",
+      "Create"
+    ],
+    "tableHeaders": [],
+    "tabs": [
+      "Title",
+      "General settings",
+      "Sign in",
+      "Lead form",
+      "Payment methods",
+      "Communication",
+      "Integrations",
+      "Exams",
+      "Invoice",
+      "Accrual and payment",
+      "Landing page"
+    ],
+    "apis": [
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/200x200.png/006644",
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/640x480.png/00bb44",
+      "GET https://api.modme.uz/v1/blog/",
+      "GET https://api.modme.uz/v1/branch",
+      "GET https://api.modme.uz/v1/company/8072",
+      "GET https://api.modme.uz/v1/company/subdomain/ravvatech188",
+      "POST https://api.modme.uz/v1/broadcasting/auth",
+      "POST https://api.modme.uz/v2/reminder/index"
+    ]
+  },
+  {
+    "route": "/staff/list",
+    "url": "https://ravvatech188.modme.uz/staff/list",
+    "title": "RavvaTech",
+    "headings": [
+      "Task Result",
+      "Staff",
+      "Create reminder"
+    ],
+    "buttons": [
+      "Ravshan",
+      "Cancel",
+      "Task done",
+      "More",
+      "Pay",
+      "ADD NEW",
+      "Import",
+      "Reset",
+      "Create"
+    ],
+    "tableHeaders": [
+      "id",
+      "Name",
+      "Role",
+      "Job title",
+      "Phone",
+      "Actions"
+    ],
+    "tabs": [
+      "Title"
+    ],
+    "apis": [
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/200x200.png/006644",
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/640x480.png/00bb44",
+      "GET https://api.modme.uz/v1/blog/",
+      "GET https://api.modme.uz/v1/branch",
+      "GET https://api.modme.uz/v1/company/subdomain/ravvatech188",
+      "GET https://api.modme.uz/v1/user",
+      "POST https://api.modme.uz/v1/broadcasting/auth",
+      "POST https://api.modme.uz/v2/reminder/index"
+    ]
+  },
+  {
+    "route": "/billing",
+    "url": "https://ravvatech188.modme.uz/billing/order",
+    "title": "RavvaTech",
+    "headings": [
+      "Task Result",
+      "Payment for the platform",
+      "History payments",
+      "Create reminder"
+    ],
+    "buttons": [
+      "Ravshan",
+      "Cancel",
+      "Task done",
+      "More",
+      "Pay",
+      "Reset",
+      "Create"
+    ],
+    "tableHeaders": [
+      "Sum",
+      "Created at"
+    ],
+    "tabs": [
+      "Title"
+    ],
+    "apis": [
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/200x200.png/006644",
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/640x480.png/00bb44",
+      "GET https://api.modme.uz/v1/blog/",
+      "GET https://api.modme.uz/v1/branch",
+      "GET https://api.modme.uz/v1/company/8072",
+      "GET https://api.modme.uz/v1/company/8072/payments",
+      "GET https://api.modme.uz/v1/company/subdomain/ravvatech188",
+      "GET https://api.modme.uz/v1/payme/credentials",
+      "POST https://api.modme.uz/v1/broadcasting/auth",
+      "POST https://api.modme.uz/v2/reminder/index"
+    ]
+  },
+  {
+    "route": "/archive/list",
+    "url": "https://ravvatech188.modme.uz/archive/list/all",
+    "title": "RavvaTech",
+    "headings": [
+      "Task Result",
+      "Archive",
+      "Create reminder"
+    ],
+    "buttons": [
+      "Ravshan",
+      "Cancel",
+      "Task done",
+      "More",
+      "Pay",
+      "Reasons for archiving",
+      "Delete",
+      "Reestablish",
+      "Reset",
+      "Create"
+    ],
+    "tableHeaders": [
+      "Name",
+      "Phone",
+      "Roles",
+      "Reasons for removal",
+      "Comment",
+      "Archived",
+      "Actions"
+    ],
+    "tabs": [
+      "Title"
+    ],
+    "apis": [
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/200x200.png/006644",
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/640x480.png/00bb44",
+      "GET https://api.modme.uz/v1/archiveReasons",
+      "GET https://api.modme.uz/v1/blog/",
+      "GET https://api.modme.uz/v1/branch",
+      "GET https://api.modme.uz/v1/company/8072/users/trashed",
+      "GET https://api.modme.uz/v1/company/subdomain/ravvatech188",
+      "GET https://api.modme.uz/v1/role",
+      "POST https://api.modme.uz/v1/broadcasting/auth",
+      "POST https://api.modme.uz/v2/reminder/index"
+    ]
+  },
+  {
+    "route": "/sms",
+    "url": "https://ravvatech188.modme.uz/sms/logs",
+    "title": "RavvaTech",
+    "headings": [
+      "Task Result",
+      "Sent SMS log",
+      "Create reminder"
+    ],
+    "buttons": [
+      "Ravshan",
+      "Cancel",
+      "Task done",
+      "More",
+      "Pay",
+      "1",
+      "Reset",
+      "Create"
+    ],
+    "tableHeaders": [],
+    "tabs": [
+      "Title"
+    ],
+    "apis": [
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/200x200.png/006644",
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/640x480.png/00bb44",
+      "GET https://api.modme.uz/v1/blog/",
+      "GET https://api.modme.uz/v1/branch",
+      "GET https://api.modme.uz/v1/company/subdomain/ravvatech188",
+      "GET https://api.modme.uz/v1/sms/counter",
+      "GET https://api.modme.uz/v1/sms/report",
+      "POST https://api.modme.uz/v1/broadcasting/auth",
+      "POST https://api.modme.uz/v2/reminder/index"
+    ]
+  },
+  {
+    "route": "/call",
+    "url": "https://ravvatech188.modme.uz/call/logs",
+    "title": "RavvaTech",
+    "headings": [
+      "Task Result",
+      "Call log",
+      "Create reminder"
+    ],
+    "buttons": [
+      "Ravshan",
+      "Cancel",
+      "Task done",
+      "More",
+      "Pay",
+      "Reset",
+      "Create"
+    ],
+    "tableHeaders": [
+      "Type",
+      "Play",
+      "Time",
+      "Who",
+      "To whom",
+      "Gateway",
+      "Call",
+      "Duration",
+      "Result"
+    ],
+    "tabs": [
+      "Title"
+    ],
+    "apis": [
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/200x200.png/006644",
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/640x480.png/00bb44",
+      "GET https://api.modme.uz/v1/blog/",
+      "GET https://api.modme.uz/v1/branch",
+      "GET https://api.modme.uz/v1/company/subdomain/ravvatech188",
+      "POST https://api.modme.uz/v1/broadcasting/auth",
+      "POST https://api.modme.uz/v2/reminder/index"
+    ]
+  },
+  {
+    "route": "/history/logs",
+    "error": "TimeoutError: page.goto: Timeout 60000ms exceeded.\nCall log:\n  - navigating to \"https://ravvatech188.modme.uz/history/logs\", waiting until \"networkidle\"\n"
+  },
+  {
+    "route": "/auto-sms",
+    "url": "https://ravvatech188.modme.uz/auto-sms",
+    "title": "RavvaTech",
+    "headings": [
+      "Task Result",
+      "Auto-SMS",
+      "SMS text: Advance payment notification",
+      "Example of a sent SMS",
+      "Create reminder"
+    ],
+    "buttons": [
+      "Ravshan",
+      "Cancel",
+      "Task done",
+      "More",
+      "Pay",
+      "+",
+      "-",
+      "Save",
+      "ADD NEW",
+      "Reset",
+      "Create"
+    ],
+    "tableHeaders": [
+      "SMS templates",
+      "Actions"
+    ],
+    "tabs": [
+      "Title",
+      "Auto-SMS",
+      "SMS templates"
+    ],
+    "apis": [
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/200x200.png/006644",
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/640x480.png/00bb44",
+      "GET https://api.modme.uz/v1/blog/",
+      "GET https://api.modme.uz/v1/branch",
+      "GET https://api.modme.uz/v1/company/8072/auto-sms/all",
+      "GET https://api.modme.uz/v1/company/sms/templates",
+      "GET https://api.modme.uz/v1/company/subdomain/ravvatech188",
+      "POST https://api.modme.uz/v1/broadcasting/auth",
+      "POST https://api.modme.uz/v2/reminder/index"
+    ]
+  },
+  {
+    "route": "/tags",
+    "url": "https://ravvatech188.modme.uz/tags",
+    "title": "RavvaTech",
+    "headings": [
+      "Task Result",
+      "Tags",
+      "Create reminder"
+    ],
+    "buttons": [
+      "Ravshan",
+      "Cancel",
+      "Task done",
+      "More",
+      "Pay",
+      "ADD NEW",
+      "Reset",
+      "Create"
+    ],
+    "tableHeaders": [
+      "id",
+      "Name",
+      "From Where",
+      "Actions"
+    ],
+    "tabs": [
+      "Title"
+    ],
+    "apis": [
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/200x200.png/006644",
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/640x480.png/00bb44",
+      "GET https://api.modme.uz/v1/blog/",
+      "GET https://api.modme.uz/v1/branch",
+      "GET https://api.modme.uz/v1/company/subdomain/ravvatech188",
+      "GET https://api.modme.uz/v1/tags",
+      "POST https://api.modme.uz/v1/broadcasting/auth",
+      "POST https://api.modme.uz/v2/reminder/index"
+    ]
+  },
+  {
+    "route": "/form",
+    "url": "https://ravvatech188.modme.uz/form/list",
+    "title": "RavvaTech",
+    "headings": [
+      "Task Result",
+      "Forms",
+      "Create reminder"
+    ],
+    "buttons": [
+      "Ravshan",
+      "Cancel",
+      "Task done",
+      "More",
+      "Pay",
+      "Reset",
+      "Create"
+    ],
+    "tableHeaders": [
+      "id",
+      "Name",
+      "type",
+      "Actions"
+    ],
+    "tabs": [
+      "Title"
+    ],
+    "apis": [
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/200x200.png/006644",
+      "GET https://api.modme.uz/uploads/https://via.placeholder.com/640x480.png/00bb44",
+      "GET https://api.modme.uz/v1/blog/",
+      "GET https://api.modme.uz/v1/branch",
+      "GET https://api.modme.uz/v1/company/subdomain/ravvatech188",
+      "GET https://api.modme.uz/v1/leadForm",
+      "POST https://api.modme.uz/v1/broadcasting/auth",
+      "POST https://api.modme.uz/v2/reminder/index"
+    ]
+  }
+]

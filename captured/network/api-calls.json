@@ -1,0 +1,211 @@
+[
+  {
+    "type": "request",
+    "method": "GET",
+    "url": "https://api.modme.uz/v1/company/subdomain/ravvatech188",
+    "resourceType": "xhr"
+  },
+  {
+    "type": "response",
+    "status": 200,
+    "url": "https://api.modme.uz/v1/company/subdomain/ravvatech188"
+  },
+  {
+    "type": "request",
+    "method": "POST",
+    "url": "https://api.modme.uz/v1/auth/login",
+    "resourceType": "xhr"
+  },
+  {
+    "type": "response",
+    "status": 200,
+    "url": "https://api.modme.uz/v1/auth/login"
+  },
+  {
+    "type": "request",
+    "method": "POST",
+    "url": "https://api.modme.uz/v1/auth/me",
+    "resourceType": "xhr"
+  },
+  {
+    "type": "response",
+    "status": 200,
+    "url": "https://api.modme.uz/v1/auth/me"
+  },
+  {
+    "type": "request",
+    "method": "GET",
+    "url": "https://api.modme.uz/v1/company/8072",
+    "resourceType": "xhr"
+  },
+  {
+    "type": "response",
+    "status": 200,
+    "url": "https://api.modme.uz/v1/company/8072"
+  },
+  {
+    "type": "request",
+    "method": "GET",
+    "url": "https://api.modme.uz/v1/branch",
+    "resourceType": "xhr"
+  },
+  {
+    "type": "request",
+    "method": "GET",
+    "url": "https://api.modme.uz/v1/dashboard",
+    "resourceType": "xhr"
+  },
+  {
+    "type": "request",
+    "method": "POST",
+    "url": "https://api.modme.uz/v2/reminder/index",
+    "resourceType": "xhr"
+  },
+  {
+    "type": "request",
+    "method": "GET",
+    "url": "https://api.modme.uz/v1/replenishments/debit_char",
+    "resourceType": "xhr"
+  },
+  {
+    "type": "request",
+    "method": "GET",
+    "url": "https://api.modme.uz/v1/schedule",
+    "resourceType": "xhr"
+  },
+  {
+    "type": "response",
+    "status": 200,
+    "url": "https://api.modme.uz/v1/branch"
+  },
+  {
+    "type": "request",
+    "method": "GET",
+    "url": "https://api.modme.uz/v1/blog/",
+    "resourceType": "xhr"
+  },
+  {
+    "type": "response",
+    "status": 200,
+    "url": "https://api.modme.uz/v2/reminder/index"
+  },
+  {
+    "type": "response",
+    "status": 200,
+    "url": "https://api.modme.uz/v1/replenishments/debit_char"
+  },
+  {
+    "type": "response",
+    "status": 200,
+    "url": "https://api.modme.uz/v1/schedule"
+  },
+  {
+    "type": "request",
+    "method": "POST",
+    "url": "https://api.modme.uz/v1/broadcasting/auth",
+    "resourceType": "xhr"
+  },
+  {
+    "type": "response",
+    "status": 200,
+    "url": "https://api.modme.uz/v1/dashboard"
+  },
+  {
+    "type": "response",
+    "status": 200,
+    "url": "https://api.modme.uz/v1/blog/"
+  },
+  {
+    "type": "response",
+    "status": 200,
+    "url": "https://api.modme.uz/v1/broadcasting/auth"
+  },
+  {
+    "type": "request",
+    "method": "GET",
+    "url": "https://api.modme.uz/v1/company/subdomain/ravvatech188",
+    "resourceType": "xhr"
+  },
+  {
+    "type": "request",
+    "method": "GET",
+    "url": "https://api.modme.uz/v1/branch",
+    "resourceType": "xhr"
+  },
+  {
+    "type": "request",
+    "method": "GET",
+    "url": "https://api.modme.uz/v1/dashboard",
+    "resourceType": "xhr"
+  },
+  {
+    "type": "request",
+    "method": "POST",
+    "url": "https://api.modme.uz/v2/reminder/index",
+    "resourceType": "xhr"
+  },
+  {
+    "type": "request",
+    "method": "GET",
+    "url": "https://api.modme.uz/v1/replenishments/debit_char",
+    "resourceType": "xhr"
+  },
+  {
+    "type": "request",
+    "method": "GET",
+    "url": "https://api.modme.uz/v1/schedule",
+    "resourceType": "xhr"
+  },
+  {
+    "type": "response",
+    "status": 200,
+    "url": "https://api.modme.uz/v1/company/subdomain/ravvatech188"
+  },
+  {
+    "type": "response",
+    "status": 200,
+    "url": "https://api.modme.uz/v2/reminder/index"
+  },
+  {
+    "type": "response",
+    "status": 200,
+    "url": "https://api.modme.uz/v1/branch"
+  },
+  {
+    "type": "request",
+    "method": "GET",
+    "url": "https://api.modme.uz/v1/blog/",
+    "resourceType": "xhr"
+  },
+  {
+    "type": "response",
+    "status": 200,
+    "url": "https://api.modme.uz/v1/schedule"
+  },
+  {
+    "type": "response",
+    "status": 200,
+    "url": "https://api.modme.uz/v1/replenishments/debit_char"
+  },
+  {
+    "type": "response",
+    "status": 200,
+    "url": "https://api.modme.uz/v1/dashboard"
+  },
+  {
+    "type": "request",
+    "method": "POST",
+    "url": "https://api.modme.uz/v1/broadcasting/auth",
+    "resourceType": "xhr"
+  },
+  {
+    "type": "response",
+    "status": 200,
+    "url": "https://api.modme.uz/v1/blog/"
+  },
+  {
+    "type": "response",
+    "status": 200,
+    "url": "https://api.modme.uz/v1/broadcasting/auth"
+  }
+]

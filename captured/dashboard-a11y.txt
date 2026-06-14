@@ -1,0 +1,127 @@
+- link "":
+  - /url: "#"
+- navigation:
+  - link "RavvaTech":
+    - /url: /
+    - img "RavvaTech"
+  - button ""
+  - combobox "Search"
+  - text: 
+  - button "en"
+  - button ""
+  - link "":
+    - /url: https://t.me/modme_support
+  - link "":
+    - /url: /reminders
+  - button ""
+  - button "Ravshan Ravshan":
+    - text: Ravshan
+    - img "Ravshan"
+- paragraph: Create student
+- list:
+  - listitem:
+    - link " Leads":
+      - /url: /leads
+  - listitem:
+    - link " Teachers":
+      - /url: /teachers
+  - listitem:
+    - link " Groups":
+      - /url: /groups
+  - listitem:
+    - link " Students":
+      - /url: /students
+  - listitem:
+    - link " Reminders":
+      - /url: /reminders
+  - listitem:
+    - link " Rating":
+      - /url: /rating
+  - listitem:
+    - link " Attendance reports":
+      - /url: /attendance-reports
+  - listitem:
+    - link " Teacher attendance reports":
+      - /url: /teacher-attendance-reports
+  - listitem:
+    - link " Finance":
+      - /url: "#undefined"
+  - listitem:
+    - link " Reports":
+      - /url: "#undefined"
+  - listitem:
+    - link " Settings":
+      - /url: "#undefined"
+- main:
+  - alert:
+    - text: " Platform license validity date: 16.06.2026 - 23:59 Less than 7 days"
+    - button "More"
+    - button "Pay"
+  - link " Active leads 0":
+    - /url: /leads
+    - text: 
+    - paragraph: Active leads
+    - paragraph: "0"
+  - link " Active students 0":
+    - /url: /students/list?statuses=5
+    - text: 
+    - paragraph: Active students
+    - paragraph: "0"
+  - link " Groups 0":
+    - /url: /groups
+    - text: 
+    - paragraph: Groups
+    - paragraph: "0"
+  - link " Debtors 0":
+    - /url: /students/debtors
+    - text: 
+    - paragraph: Debtors
+    - paragraph: "0"
+  - link " In a trial lesson 0":
+    - /url: /students/list?statuses=1
+    - text: 
+    - paragraph: In a trial lesson
+    - paragraph: "0"
+  - link " Paid during the month 0":
+    - /url: /students/list?finance=paid_during_the_month
+    - text: 
+    - paragraph: Paid during the month
+    - paragraph: "0"
+  - link " Left active group 0":
+    - /url: /left-students?statuses=left_active_group
+    - text: 
+    - paragraph: Left active group
+    - paragraph: "0"
+  - link " Left after trial period 0":
+    - /url: /left-students?statuses=left_after_trial
+    - text: 
+    - paragraph: Left after trial period
+    - paragraph: "0"
+  - text: No data to display
+  - heading "Schedule" [level=4]
+  - list:
+    - listitem:
+      - link "Odd days":
+        - /url: "#"
+    - listitem:
+      - link "Even days":
+        - /url: "#"
+    - listitem:
+      - link "Other":
+        - /url: "#"
+  - text: Horizontal
+  - table:
+    - rowgroup:
+      - row:
+        - columnheader
+    - rowgroup
+- contentinfo:
+  - link " Support":
+    - /url: https://t.me/modme_support
+  - link " Video tutorials":
+    - /url: https://modme.uz/support/video-courses
+  - link " Payment mode:":
+    - /url: https://modme-crm.gitbook.io/modme-crm/get-started/tolov-rejimini-tanlash
+  - text: By day
+  - link:
+    - /url: https://modme.uz

@@ -1,7 +1,15 @@
 node_modules/
+.venv/
+**/.venv/
+__pycache__/
+*.pyc
+db.sqlite3
 .env
 .env.local
 .env.*
 !.env.example
 *.log
 .DS_Store
+app/desktop/server.log
+app/desktop/server.err
+app/desktop/server.pid

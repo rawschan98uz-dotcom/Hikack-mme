@@ -17,6 +17,15 @@ def _safe_path(base: Path, rel: str) -> Path:
 
 
 @require_GET
+def spa_icon(request, path: str):
+    dist = _frontend_dist()
+    file_path = _safe_path(dist, f'icons/{path}')
+    if not file_path.is_file():
+        raise Http404('Icon not found')
+    return FileResponse(open(file_path, 'rb'))
+
+
+@require_GET
 def spa_asset(request, path: str):
     dist = _frontend_dist()
     file_path = _safe_path(dist, f'assets/{path}')

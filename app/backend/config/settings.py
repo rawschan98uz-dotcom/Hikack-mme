@@ -4,6 +4,8 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+_on_railway = bool(os.environ.get('RAILWAY_ENVIRONMENT') or os.environ.get('RAILWAY_PROJECT_ID'))
+
 SECRET_KEY = os.environ.get('SECRET_KEY', 'dev-only-change-in-production-hijack-mme')
 DEBUG = os.environ.get('DEBUG', 'true').lower() in ('1', 'true', 'yes')
 ALLOWED_HOSTS = [
@@ -11,6 +13,20 @@ ALLOWED_HOSTS = [
     for host in os.environ.get('ALLOWED_HOSTS', '*').split(',')
     if host.strip()
 ]
+
+if _on_railway:
+    for extra_host in (
+        '.up.railway.app',
+        '.railway.app',
+        '.railway.internal',
+        'localhost',
+        '127.0.0.1',
+    ):
+        if extra_host not in ALLOWED_HOSTS:
+            ALLOWED_HOSTS.append(extra_host)
+    _railway_public = os.environ.get('RAILWAY_PUBLIC_DOMAIN', '').strip()
+    if _railway_public and _railway_public not in ALLOWED_HOSTS:
+        ALLOWED_HOSTS.append(_railway_public)
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -62,11 +78,12 @@ database_url = os.environ.get('DATABASE_URL')
 if database_url:
     import dj_database_url
 
+    ssl_default = 'false' if _on_railway else 'true'
     DATABASES = {
         'default': dj_database_url.config(
             default=database_url,
             conn_max_age=600,
-            ssl_require=os.environ.get('DATABASE_SSL', 'true').lower() in ('1', 'true', 'yes'),
+            ssl_require=os.environ.get('DATABASE_SSL', ssl_default).lower() in ('1', 'true', 'yes'),
         ),
     }
 else:
@@ -93,7 +110,7 @@ STATIC_URL = 'static/'
 MEDIA_URL = 'media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
-FRONTEND_DIST = BASE_DIR.parent / 'frontend' / 'dist'
+FRONTEND_DIST = Path(os.environ.get('FRONTEND_DIST', BASE_DIR.parent / 'frontend' / 'dist'))
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 AUTH_USER_MODEL = 'accounts.User'

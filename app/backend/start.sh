@@ -4,6 +4,10 @@ set -e
 cd "$(dirname "$0")"
 
 echo "Running migrations..."
+if [ -z "$DATABASE_URL" ]; then
+  echo "ERROR: DATABASE_URL is not set. Link PostgreSQL in Railway Variables."
+  exit 1
+fi
 python manage.py migrate --noinput
 
 if [ "$SEED_DEMO" = "1" ]; then

@@ -1,58 +1,12 @@
 <script setup lang="ts">
-import { computed } from 'vue';
-
-const props = defineProps<{
+defineProps<{
   name: string;
   size?: number;
 }>();
-
-const iconSize = computed(() => `${props.size ?? 22}px`);
-
-const PNG_MASK_ICONS: Record<string, string> = {
-  teachers: '/icons/teacher-mask.png',
-  finance: '/icons/finance-mask.png',
-  settings: '/icons/settings-mask.png',
-  rating: '/icons/rating-mask.png',
-};
-
-/** Visual scale tweaks so PNG icons match SVG sidebar weight. */
-const PNG_MASK_SCALE: Partial<Record<string, number>> = {
-  finance: 1.12,
-};
-
-const pngMaskStyle = computed(() => {
-  const maskUrl = PNG_MASK_ICONS[props.name];
-  if (!maskUrl) return null;
-
-  const scale = PNG_MASK_SCALE[props.name] ?? 1;
-  const maskSize = scale === 1 ? 'contain' : `${Math.round(scale * 100)}%`;
-
-  return {
-    width: iconSize.value,
-    height: iconSize.value,
-    WebkitMaskImage: `url(${maskUrl})`,
-    maskImage: `url(${maskUrl})`,
-    WebkitMaskRepeat: 'no-repeat',
-    maskRepeat: 'no-repeat',
-    WebkitMaskPosition: 'center',
-    maskPosition: 'center',
-    WebkitMaskSize: maskSize,
-    maskSize,
-  };
-});
-
-const usesPngMask = computed(() => Boolean(PNG_MASK_ICONS[props.name]));
 </script>
 
 <template>
-  <span
-    v-if="usesPngMask"
-    class="inline-block shrink-0 bg-current"
-    :style="pngMaskStyle ?? undefined"
-    aria-hidden="true"
-  />
   <svg
-    v-else
     :width="size ?? 22"
     :height="size ?? 22"
     viewBox="0 0 24 24"
@@ -63,8 +17,34 @@ const usesPngMask = computed(() => Boolean(PNG_MASK_ICONS[props.name]));
     stroke-linejoin="round"
     aria-hidden="true"
   >
+    <!-- Teachers -->
+    <template v-if="name === 'teachers'">
+      <path d="M4 20v-1a4 4 0 014-4h8a4 4 0 014 4v1" />
+      <circle cx="12" cy="8" r="3.5" />
+      <path d="M18 4l2 1v4" />
+      <path d="M20 7h-3" />
+    </template>
+
+    <!-- Rating -->
+    <template v-else-if="name === 'rating'">
+      <path d="M12 3l2.2 4.6 5 .7-3.6 3.2 1 5L12 14.8 7.4 16.5l1-5-3.6-3.2 5-.7L12 3z" />
+    </template>
+
+    <!-- Finance -->
+    <template v-else-if="name === 'finance'">
+      <rect x="3" y="6" width="18" height="12" rx="2" />
+      <path d="M3 10h18" />
+      <path d="M7 15h.01M11 15h2" />
+    </template>
+
+    <!-- Settings -->
+    <template v-else-if="name === 'settings'">
+      <circle cx="12" cy="12" r="3" />
+      <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
+    </template>
+
     <!-- Groups: stacked layers -->
-    <template v-if="name === 'groups'">
+    <template v-else-if="name === 'groups'">
       <path d="M12 4L4 8l8 4 8-4-8-4z" />
       <path d="M4 12l8 4 8-4" />
       <path d="M4 16l8 4 8-4" />

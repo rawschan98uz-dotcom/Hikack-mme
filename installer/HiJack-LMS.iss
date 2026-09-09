@@ -18,16 +18,21 @@ OutputDir=D:\projects\Hijack-mme
 OutputBaseFilename=HiJack-LMS-Setup
 SetupIconFile=D:\projects\Hijack-mme\app\desktop\assets\lms.ico
 UninstallDisplayIcon={app}\assets\lms.ico
-Compression=zip
-SolidCompression=no
+Compression=lzma2/max
+SolidCompression=yes
 WizardStyle=modern
 ArchitecturesInstallIn64BitMode=x64compatible
 
 [Languages]
 Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
+Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "Создать ярлык на рабочем столе"; GroupDescription: "Ярлыки:"
+
+[Dirs]
+Name: "{app}\app\backend\media"; Permissions: users-modify
+Name: "{app}"; Permissions: users-modify
 
 [Files]
 ; Всё приложение, КРОМЕ базы данных
@@ -57,4 +62,14 @@ begin
     Exec(ExpandConstant('{app}\runtime\python\pythonw.exe'),
          ExpandConstant('"{app}\stop.pyw"'), '', SW_HIDE,
          ewWaitUntilTerminated, ResultCode);
+end;
+
+function UpdateReadyMemo(Space, NewLine, MemoFileInfoInfo, MemoDirInfo, MemoTypeInfo, MemoComponentsInfo, MemoGroupInfo, MemoTasksInfo: String): String;
+begin
+  Result := MemoDirInfo + NewLine + NewLine +
+            'Данные для входа в систему:' + NewLine +
+            '  Логин (телефон): 946263200' + NewLine +
+            '  Пароль: HiJack2024!' + NewLine + NewLine +
+            'Адрес в браузере: http://127.0.0.1:8000' + NewLine +
+            'Пароль можно изменить в настройках профиля.';
 end;

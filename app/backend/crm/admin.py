@@ -17,7 +17,7 @@ class GroupAdmin(admin.ModelAdmin):
 
 @admin.register(Student)
 class StudentAdmin(admin.ModelAdmin):
-    list_display = ('full_name', 'phone', 'status', 'branch', 'group')
+    list_display = ('full_name', 'photo', 'phone', 'status', 'branch', 'group', 'school')
     list_filter = ('company', 'status')
 
 

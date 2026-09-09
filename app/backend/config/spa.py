@@ -1,3 +1,4 @@
+import mimetypes
 from pathlib import Path
 
 from django.conf import settings
@@ -22,7 +23,9 @@ def spa_icon(request, path: str):
     file_path = _safe_path(dist, f'icons/{path}')
     if not file_path.is_file():
         raise Http404('Icon not found')
-    return FileResponse(open(file_path, 'rb'))
+    response = FileResponse(open(file_path, 'rb'))
+    response['Cache-Control'] = 'public, max-age=86400'
+    return response
 
 
 @require_GET
@@ -31,7 +34,9 @@ def spa_asset(request, path: str):
     file_path = _safe_path(dist, f'assets/{path}')
     if not file_path.is_file():
         raise Http404('Asset not found')
-    return FileResponse(open(file_path, 'rb'))
+    response = FileResponse(open(file_path, 'rb'))
+    response['Cache-Control'] = 'public, max-age=31536000, immutable'
+    return response
 
 
 @require_GET
@@ -39,7 +44,9 @@ def spa_index(request):
     index = _frontend_dist() / 'index.html'
     if not index.is_file():
         return _spa_missing()
-    return FileResponse(open(index, 'rb'), content_type='text/html; charset=utf-8')
+    response = FileResponse(open(index, 'rb'), content_type='text/html; charset=utf-8')
+    response['Cache-Control'] = 'no-cache'
+    return response
 
 
 def _spa_missing():
@@ -49,3 +56,16 @@ def _spa_missing():
         status=503,
         content_type='text/html; charset=utf-8',
     )
+
+
+@require_GET
+def spa_media(request, path: str):
+    media_root = Path(settings.MEDIA_ROOT)
+    file_path = _safe_path(media_root, path)
+    if not file_path.is_file():
+        raise Http404('Media not found')
+    content_type, _encoding = mimetypes.guess_type(str(file_path))
+    response = FileResponse(open(file_path, 'rb'))
+    if content_type:
+        response['Content-Type'] = content_type
+    return response

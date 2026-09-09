@@ -25,7 +25,7 @@ cd D:\projects\Hijack-mme\app
 .\start.ps1
 ```
 
-Then open http://localhost:5173 — login `903708242` / `50608991Zz!`
+Then open http://localhost:5173 — login `946263200` / `946263200`
 
 See `app/README.md` for details.
 

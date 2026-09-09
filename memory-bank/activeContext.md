@@ -18,4 +18,4 @@
 - Pixel-perfect ModMe UI, mobile apps
 
 ## Demo login
-Phone `903708242` — see `app/README.md`
+Phone `946263200` — see `app/README.md`

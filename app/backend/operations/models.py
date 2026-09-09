@@ -145,6 +145,34 @@ class SmsLog(models.Model):
     sent_at = models.DateTimeField(auto_now_add=True)
 
 
+class NotificationLog(models.Model):
+    company = models.ForeignKey('org.Company', on_delete=models.CASCADE, related_name='notification_logs')
+    student = models.ForeignKey('crm.Student', on_delete=models.CASCADE, related_name='notification_logs')
+    rule = models.CharField(max_length=64)
+    trigger_date = models.DateField()
+    target = models.CharField(max_length=64, blank=True)
+    message = models.TextField()
+    ok = models.BooleanField(default=False)
+    error = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['company', 'rule', 'trigger_date']),
+            models.Index(fields=['student', 'created_at']),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['student', 'rule', 'trigger_date'],
+                condition=models.Q(ok=True),
+                name='uniq_ok_notification_per_day',
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f'{self.student} | {self.rule} | {self.trigger_date}'
+
+
 class CallLog(models.Model):
     company = models.ForeignKey('org.Company', on_delete=models.CASCADE, related_name='call_logs')
     call_type = models.CharField(max_length=32, default='outgoing')

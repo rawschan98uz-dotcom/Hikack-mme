@@ -16,6 +16,7 @@ from api.responses import fail, ok
 from api.scope import filter_groups_queryset, filter_students_queryset, teacher_can_access_group, teacher_can_access_student
 from crm.models import Course, Group, Lead, Student
 from finance.models import Payment
+from operations import notify as notifications
 from operations.models import Reminder, Tag
 from org.models import Branch, Company, Room
 
@@ -295,13 +296,33 @@ def _apply_group_tags(group: Group, company: Company, data: dict) -> str | None:
     return None
 
 
-def _serialize_student(student: Student) -> dict:
-    return {
+def _next_payment_date(student: Student):
+    import calendar
+
+    last = (
+        Payment.objects.filter(company=student.company, student_name=student.full_name)
+        .order_by('-created_at')
+        .first()
+    )
+    if last is None:
+        return None, None
+    last_date = timezone.localtime(last.created_at).date()
+    year, month = (last_date.year + 1, 1) if last_date.month == 12 else (last_date.year, last_date.month + 1)
+    next_due = date(year, month, min(last_date.day, calendar.monthrange(year, month)[1]))
+    return last_date, next_due
+
+
+def _serialize_student(student: Student, *, detailed: bool = False) -> dict:
+    payload = {
         'id': student.id,
         'first_name': student.first_name,
         'last_name': student.last_name,
         'full_name': student.full_name,
         'phone': student.phone,
+        'photo': student.photo.url if student.photo else None,
+        'school': student.school,
+        'telegram': student.telegram,
+        'parent_telegram': student.parent_telegram,
         'status': student.status,
         'status_label': student.get_status_display(),
         'balance': student.balance,
@@ -312,6 +333,12 @@ def _serialize_student(student: Student) -> dict:
         'group': student.group.name if student.group_id else None,
         'created_at': student.created_at.isoformat(),
     }
+    if detailed:
+        last_payment_date, next_payment_date = _next_payment_date(student)
+        payload['last_payment_date'] = last_payment_date.isoformat() if last_payment_date else None
+        payload['next_payment_date'] = next_payment_date.isoformat() if next_payment_date else None
+        payload['telegram_code'] = student.telegram_code
+    return payload
 
 
 def _apply_student_fields(student: Student, company: Company, data: dict) -> str | None:
@@ -325,11 +352,20 @@ def _apply_student_fields(student: Student, company: Company, data: dict) -> str
     if 'last_name' in data:
         student.last_name = str(data.get('last_name') or '').strip()
 
+    if 'school' in data:
+        student.school = str(data.get('school') or '').strip()
+
+    if 'telegram' in data:
+        student.telegram = str(data.get('telegram') or '').strip()
+
+    if 'parent_telegram' in data:
+        student.parent_telegram = str(data.get('parent_telegram') or '').strip()
+
     phone = data.get('phone')
     if phone is not None:
         phone = _normalize_phone(str(phone))
         if len(phone) < 9:
-            return 'Valid phone is required'
+            return 'Phone must contain at least 9 digits'
         student.phone = phone
 
     status = data.get('status')
@@ -511,7 +547,7 @@ def auth_me(request):
         if phone is not None:
             phone = ''.join(ch for ch in str(phone) if ch.isdigit())
             if len(phone) < 9:
-                return fail('Valid phone is required')
+                return fail('Phone must contain at least 9 digits')
             if User.objects.filter(phone=phone).exclude(pk=user.pk).exists():
                 return fail('Phone already exists')
             user.phone = phone
@@ -767,7 +803,7 @@ def student_list(request):
 
         phone = _normalize_phone(request.data.get('phone') or '')
         if len(phone) < 9:
-            return fail('Valid phone is required')
+            return fail('Phone must contain at least 9 digits')
 
         branch_id = request.data.get('branch_id')
         if not branch_id:
@@ -854,7 +890,7 @@ def student_detail(request, student_id: int):
         return fail('Student not found', status_code=404)
 
     if request.method == 'GET':
-        return ok(_serialize_student(student))
+        return ok(_serialize_student(student, detailed=True))
 
     if request.method == 'DELETE':
         student.delete()
@@ -865,6 +901,74 @@ def student_detail(request, student_id: int):
         return fail(error)
     student.save()
     student = Student.objects.select_related('group', 'branch').get(pk=student.pk)
+    return ok(_serialize_student(student))
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def telegram_config(request):
+    config = notifications.load_config()
+    enabled = bool(config.get('enabled'))
+    username = notifications.get_bot_username(str(config.get('bot_token') or '')) if enabled else None
+    return ok({'enabled': enabled, 'bot_username': username})
+
+
+ALLOWED_PHOTO_CONTENT_TYPES = {
+    'image/jpeg': '.jpg',
+    'image/png': '.png',
+    'image/webp': '.webp',
+}
+MAX_PHOTO_SIZE = 10 * 1024 * 1024
+
+
+def _delete_photo_file(student: Student) -> None:
+    # On Windows the photo file can be briefly locked (antivirus, indexer);
+    # clearing the DB field matters more than removing the orphan file.
+    try:
+        if student.photo:
+            student.photo.delete(save=False)
+    except OSError:
+        pass
+
+
+@api_view(['POST', 'DELETE'])
+@permission_classes([IsAuthenticated])
+def student_photo(request, student_id: int):
+    company = request.user.company
+    if company is None:
+        return fail('Company not found', status_code=404)
+
+    try:
+        student = Student.objects.select_related('group', 'branch').get(
+            pk=student_id,
+            company=company,
+        )
+    except Student.DoesNotExist:
+        return fail('Student not found', status_code=404)
+
+    if not teacher_can_access_student(request.user, student):
+        return fail('Student not found', status_code=404)
+
+    if request.method == 'DELETE':
+        _delete_photo_file(student)
+        student.photo = None
+        student.save(update_fields=['photo'])
+        return ok(_serialize_student(student))
+
+    upload = request.FILES.get('photo')
+    if upload is None:
+        return fail('Photo file is required')
+    if upload.size and upload.size > MAX_PHOTO_SIZE:
+        return fail('Photo is too large (max 10 MB)')
+
+    content_type = (upload.content_type or '').lower()
+    if content_type not in ALLOWED_PHOTO_CONTENT_TYPES:
+        return fail('Only JPG, PNG or WEBP images are allowed')
+
+    _delete_photo_file(student)
+    extension = ALLOWED_PHOTO_CONTENT_TYPES[content_type]
+    student.photo.save(f'student-{student.pk}{extension}', upload, save=True)
+    student.refresh_from_db()
     return ok(_serialize_student(student))
 
 
@@ -883,7 +987,7 @@ def lead_list(request):
         if not full_name:
             return fail('Lead name is required')
         if len(phone) < 9:
-            return fail('Valid phone is required')
+            return fail('Phone must contain at least 9 digits')
         if stage not in VALID_LEAD_STAGES:
             return fail('Invalid lead stage')
 
@@ -944,7 +1048,7 @@ def lead_detail(request, lead_id: int):
     if phone is not None:
         phone = _normalize_phone(str(phone))
         if len(phone) < 9:
-            return fail('Valid phone is required')
+            return fail('Phone must contain at least 9 digits')
         lead.phone = phone
 
     if stage is not None:

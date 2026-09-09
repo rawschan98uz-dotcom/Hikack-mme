@@ -25,9 +25,12 @@ ROUTE_RULES: list[tuple[tuple[str, ...], str, str | None]] = [
 
     (('GET',), r'^students$', P.PERM_STUDENTS_VIEW),
     (('POST',), r'^students$', P.PERM_STUDENTS_WRITE),
+    (('POST',), r'^students/import$', P.PERM_STUDENTS_WRITE),
     (('GET',), r'^students/\d+$', P.PERM_STUDENTS_VIEW),
-    (('PATCH',), r'^students/\d+$', P.PERM_STUDENTS_WRITE),
+    (('PATCH', 'POST'), r'^students/\d+$', P.PERM_STUDENTS_WRITE),
     (('DELETE',), r'^students/\d+$', P.PERM_STUDENTS_WRITE),
+    (('POST', 'DELETE'), r'^students/\d+/photo$', P.PERM_STUDENTS_WRITE),
+    (('GET',), r'^telegram/config$', P.PERM_STUDENTS_VIEW),
 
     (('GET',), r'^leads$', P.PERM_LEADS_VIEW),
     (('POST',), r'^leads$', P.PERM_LEADS_WRITE),

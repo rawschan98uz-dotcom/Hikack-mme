@@ -212,5 +212,10 @@ if ($Network) {
   Show-NetworkInfo -InfoPort $Port
 }
 
-Write-Host "Opening $LocalUrl"
-Open-AppWindow -TargetUrl $LocalUrl
+# bust the browser cache: new dist -> new URL -> always fresh page
+$distStamp = 0
+if (Test-Path $DistIndex) { $distStamp = (Get-Item $DistIndex).LastWriteTimeUtc.Ticks }
+$OpenUrl = "${LocalUrl}?v=${distStamp}"
+
+Write-Host "Opening $OpenUrl"
+Open-AppWindow -TargetUrl $OpenUrl

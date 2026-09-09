@@ -32,7 +32,7 @@ class Command(BaseCommand):
             defaults={
                 'name': 'Hi Jack LMS',
                 'balance_mode': Company.PaymentMode.DAILY,
-                'phone': '903708242',
+                'phone': '946263200',
                 'address': 'Tashkent, Uzbekistan',
                 'work_start_time': time(9, 0),
                 'work_end_time': time(18, 0),
@@ -46,7 +46,7 @@ class Command(BaseCommand):
         )
 
         user, created = User.objects.get_or_create(
-            phone='903708242',
+            phone='946263200',
             defaults={
                 'first_name': 'Ravshan',
                 'last_name': 'Demo',
@@ -57,7 +57,7 @@ class Command(BaseCommand):
                 'is_superuser': True,
             },
         )
-        user.set_password('50608991Zz!')
+        user.set_password('946263200')
         user.company = company
         user.is_superuser = True
         user.is_staff = True
@@ -92,7 +92,7 @@ class Command(BaseCommand):
             t.company = company
             t.user_type = User.UserType.TEACHER
             t.job_title = title
-            t.set_password('demo1234')
+            t.set_password('946263200')
             t.save()
             TeacherBranch.objects.get_or_create(teacher=t, branch=branch)
             teachers.append(t)
@@ -286,7 +286,7 @@ class Command(BaseCommand):
             s.user_type = User.UserType.STAFF
             s.staff_role = staff_role
             s.job_title = title
-            s.set_password('demo1234')
+            s.set_password('946263200')
             s.save()
             staff_accounts.append(s)
 
@@ -414,5 +414,5 @@ class Command(BaseCommand):
         )
 
         self.stdout.write(self.style.SUCCESS(
-            f'Demo ready: company={company.subdomain}, login=903708242'
+            f'Demo ready: company={company.subdomain}, login=946263200'
         ))

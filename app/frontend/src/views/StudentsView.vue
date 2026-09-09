@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 
@@ -6,6 +6,7 @@ import client, { type ApiEnvelope } from '../api/client';
 import { useAuthStore } from '../stores/auth';
 import { PERM } from '../utils/rbac';
 import { downloadCsv } from '../utils/csvExport';
+import ImportCsvModal from '../components/ImportCsvModal.vue';
 import {
   groupRoute,
   hasCreateFlag,
@@ -31,6 +32,13 @@ interface StudentRow {
   last_name: string;
   full_name: string;
   phone: string;
+  photo: string | null;
+  school: string;
+  telegram: string;
+  parent_telegram: string;
+  telegram_code?: string | null;
+  last_payment_date?: string | null;
+  next_payment_date?: string | null;
   status: number;
   status_label: string;
   balance: number;
@@ -65,6 +73,12 @@ const panelLoading = ref(false);
 const formError = ref('');
 const editingStudent = ref<StudentRow | null>(null);
 const detailStudent = ref<StudentRow | null>(null);
+const photoFile = ref<File | null>(null);
+const photoPreview = ref('');
+const photoMarkedRemove = ref(false);
+const photoInput = ref<HTMLInputElement | null>(null);
+const tgBotUsername = ref('');
+const showImportModal = ref(false);
 
 const filters = reactive({
   branch_id: '',
@@ -77,6 +91,9 @@ const form = reactive({
   first_name: '',
   last_name: '',
   phone: '',
+  school: '',
+  telegram: '',
+  parent_telegram: '',
   status: 1,
   balance: 0,
   paid_this_month: false,
@@ -103,18 +120,21 @@ const panelTitle = computed(() => {
 
 const isReadOnly = computed(() => Boolean(detailStudent.value && !editingStudent.value));
 const canExportStudents = computed(() => auth.can(PERM.STUDENTS_VIEW));
+const canImportStudents = computed(() => auth.can(PERM.STUDENTS_WRITE));
 
 function exportCsv() {
   downloadCsv(
     'students.csv',
-    ['Name', 'Phone', 'Status', 'Group', 'Branch', 'Balance'],
+    ['Name', 'Phone', 'Status', 'School', 'Group', 'Branch', 'Balance', 'Telegram (parents)'],
     rows.value.map((row) => [
       row.full_name,
       row.phone,
       row.status_label,
+      row.school,
       row.group ?? '',
       row.branch,
       row.balance,
+      row.parent_telegram,
     ]),
   );
 }
@@ -124,12 +144,40 @@ const filteredGroups = computed(() => {
   return groups.value.filter((group) => group.branch_id === form.branch_id);
 });
 
+function initials(name: string) {
+  return name
+    .split(' ')
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? '')
+    .join('');
+}
+
+function formatAddedDate(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  const dd = String(date.getDate()).padStart(2, '0');
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  return `${dd}.${mm}.${date.getFullYear()}`;
+}
+
+function statusBadgeClass(status: number) {
+  if (status === 6) return 'bg-red-100 text-red-700';
+  if (status === 5) return 'bg-emerald-100 text-emerald-700';
+  if (status === 1) return 'bg-sky-100 text-sky-700';
+  return 'bg-fb-canvas text-fb-secondary';
+}
+
 const tableRows = computed(() =>
   rows.value.map((row) => ({
     id: row.id,
+    photo: row.photo,
+    initials: initials(row.full_name),
     full_name: row.full_name,
     phone: row.phone,
+    status: row.status,
     statusText: row.status_label,
+    school: row.school || '—',
     group: row.group ?? '—',
     group_id: row.group_id,
     branch: row.branch,
@@ -158,6 +206,9 @@ function resetForm() {
   form.first_name = '';
   form.last_name = '';
   form.phone = '';
+  form.school = '';
+  form.telegram = '';
+  form.parent_telegram = '';
   form.status = 1;
   form.balance = 0;
   form.paid_this_month = false;
@@ -166,17 +217,26 @@ function resetForm() {
   formError.value = '';
   editingStudent.value = null;
   detailStudent.value = null;
+  photoFile.value = null;
+  photoPreview.value = '';
+  photoMarkedRemove.value = false;
 }
 
 function fillForm(student: StudentRow) {
   form.first_name = student.first_name;
   form.last_name = student.last_name;
   form.phone = student.phone;
+  form.school = student.school ?? '';
+  form.telegram = student.telegram ?? '';
+  form.parent_telegram = student.parent_telegram ?? '';
   form.status = student.status;
   form.balance = student.balance;
   form.paid_this_month = student.paid_this_month;
   form.branch_id = student.branch_id;
   form.group_id = student.group_id ?? '';
+  photoFile.value = null;
+  photoPreview.value = student.photo ?? '';
+  photoMarkedRemove.value = false;
 }
 
 function openCreatePanel() {
@@ -207,6 +267,37 @@ function closePanel() {
   resetForm();
   if (route.query.open) {
     router.replace(routeWithoutOpen(route));
+  }
+}
+
+function parentTgLink(code: string | null | undefined) {
+  if (!tgBotUsername.value || !code) return '';
+  return `https://t.me/${tgBotUsername.value}?start=${code}`;
+}
+
+const detailParentTgLink = computed(() => parentTgLink(detailStudent.value?.telegram_code));
+
+async function copyText(text: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const area = document.createElement('textarea');
+    area.value = text;
+    document.body.appendChild(area);
+    area.select();
+    document.execCommand('copy');
+    document.body.removeChild(area);
+  }
+}
+
+async function loadTelegramConfig() {
+  try {
+    const { data } = await client.get<ApiEnvelope<{ enabled: boolean; bot_username: string | null }>>('/telegram/config');
+    if (data.data.enabled && data.data.bot_username) {
+      tgBotUsername.value = data.data.bot_username;
+    }
+  } catch {
+    // notifications module unavailable - hide invite links
   }
 }
 
@@ -243,17 +334,57 @@ async function loadStudents() {
   }
 }
 
+const ALLOWED_PHOTO_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+const MAX_PHOTO_MB = 10;
+
+function onPhotoChange(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = '';
+  if (!file) return;
+  if (!ALLOWED_PHOTO_TYPES.includes(file.type)) {
+    formError.value = 'Only JPG, PNG or WEBP photos are allowed';
+    return;
+  }
+  if (file.size > MAX_PHOTO_MB * 1024 * 1024) {
+    formError.value = `Photo is too large (max ${MAX_PHOTO_MB} MB)`;
+    return;
+  }
+  formError.value = '';
+  photoFile.value = file;
+  photoMarkedRemove.value = false;
+  photoPreview.value = URL.createObjectURL(file);
+}
+
+function triggerPhotoSelect() {
+  photoInput.value?.click();
+}
+
+function removePhoto() {
+  photoFile.value = null;
+  photoPreview.value = '';
+  photoMarkedRemove.value = true;
+}
+
 function buildPayload() {
   return {
     first_name: form.first_name.trim(),
     last_name: form.last_name.trim(),
     phone: form.phone.trim(),
+    school: form.school.trim(),
+    telegram: form.telegram.trim(),
+    parent_telegram: form.parent_telegram.trim(),
     status: form.status,
     balance: form.balance,
     paid_this_month: form.paid_this_month,
     branch_id: form.branch_id,
     group_id: form.group_id === '' ? null : form.group_id,
   };
+}
+
+function apiErrorMessage(error: unknown, fallback: string) {
+  const response = (error as { response?: { data?: { message?: string } } }).response;
+  return response?.data?.message || fallback;
 }
 
 async function submitStudent() {
@@ -274,17 +405,31 @@ async function submitStudent() {
   saving.value = true;
   try {
     const payload = buildPayload();
+    let studentId: number | null = editingStudent.value?.id ?? null;
     if (editingStudent.value) {
       await client.patch(`/students/${editingStudent.value.id}`, payload);
     } else {
-      await client.post('/students', payload);
+      const { data } = await client.post<ApiEnvelope<StudentRow>>('/students', payload);
+      studentId = data.data.id;
+    }
+    if (studentId) {
+      if (photoFile.value) {
+        const formData = new FormData();
+        formData.append('photo', photoFile.value);
+        await client.post(`/students/${studentId}/photo`, formData, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+        });
+      } else if (photoMarkedRemove.value) {
+        await client.delete(`/students/${studentId}/photo`);
+      }
     }
     closePanel();
     await loadStudents();
-  } catch {
-    formError.value = editingStudent.value
-      ? 'Could not update student'
-      : 'Could not create student';
+  } catch (error) {
+    formError.value = apiErrorMessage(
+      error,
+      editingStudent.value ? 'Could not update student' : 'Could not create student',
+    );
   } finally {
     saving.value = false;
   }
@@ -299,8 +444,8 @@ async function deleteStudent() {
     await client.delete(`/students/${detailStudent.value.id}`);
     closePanel();
     await loadStudents();
-  } catch {
-    window.alert('Could not delete student');
+  } catch (error) {
+    window.alert(apiErrorMessage(error, 'Could not delete student'));
   } finally {
     deleting.value = false;
   }
@@ -350,6 +495,7 @@ watch(
 
 onMounted(async () => {
   syncFiltersFromRoute();
+  loadTelegramConfig();
   try {
     await Promise.all([loadOptions(), loadStudents()]);
     await maybeOpenFromRoute();
@@ -372,6 +518,14 @@ onMounted(async () => {
           @click="exportCsv"
         >
           Export
+        </button>
+        <button
+          v-if="canImportStudents"
+          type="button"
+          class="rounded-lg border border-fb-line px-4 py-2 text-sm font-medium text-fb-secondary hover:border-fb-blue hover:text-fb-blue"
+          @click="showImportModal = true"
+        >
+          Import
         </button>
         <button
           type="button"
@@ -448,9 +602,10 @@ onMounted(async () => {
       <table v-else class="w-full text-base">
         <thead class="border-b border-fb-line bg-fb-canvas">
           <tr>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Name</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Student</th>
             <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Phone</th>
             <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Status</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">School</th>
             <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Group</th>
             <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Branch</th>
             <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Balance</th>
@@ -461,12 +616,30 @@ onMounted(async () => {
           <tr
             v-for="row in tableRows"
             :key="row.id"
-            class="cursor-pointer border-b border-fb-line hover:bg-fb-hover/40"
+            class="cursor-pointer border-b border-fb-line"
+            :class="row.status === 6 ? 'bg-red-50 hover:bg-red-100/70' : 'hover:bg-fb-hover/40'"
             @click="openDetailPanel(row.id)"
           >
-            <td class="px-5 py-4 font-medium text-fb-text">{{ row.full_name }}</td>
+            <td class="px-5 py-4">
+              <div class="flex items-center gap-3">
+                <img
+                  v-if="row.photo"
+                  :src="row.photo"
+                  alt=""
+                  class="h-9 w-9 shrink-0 rounded-full border border-fb-line object-cover"
+                />
+                <div
+                  v-else
+                  class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-fb-line bg-fb-canvas text-xs font-semibold text-fb-secondary"
+                >
+                  {{ row.initials }}
+                </div>
+                <span class="font-medium text-fb-text">{{ row.full_name }}</span>
+              </div>
+            </td>
             <td class="px-5 py-4 text-fb-secondary">{{ row.phone }}</td>
             <td class="px-5 py-4 text-fb-secondary">{{ row.statusText }}</td>
+            <td class="px-5 py-4 text-fb-secondary">{{ row.school }}</td>
             <td class="px-5 py-4 text-fb-secondary">
               <button
                 v-if="row.group_id"
@@ -497,7 +670,150 @@ onMounted(async () => {
         <div v-if="panelLoading" class="flex-1 p-6 text-fb-secondary">Loading…</div>
 
         <form v-else class="flex flex-1 flex-col overflow-hidden" @submit.prevent="submitStudent">
-          <div class="flex-1 space-y-4 overflow-y-auto p-6">
+          <div v-if="isReadOnly && detailStudent" class="flex-1 overflow-y-auto p-6">
+            <div class="flex items-center gap-4">
+              <img
+                v-if="photoPreview"
+                :src="photoPreview"
+                alt=""
+                class="h-24 w-24 shrink-0 rounded-full border border-fb-line object-cover"
+              />
+              <div
+                v-else
+                class="flex h-24 w-24 shrink-0 items-center justify-center rounded-full border border-fb-line bg-fb-canvas text-2xl font-semibold text-fb-secondary"
+              >
+                {{ initials(detailStudent.full_name) }}
+              </div>
+              <div class="min-w-0">
+                <div class="truncate text-lg font-semibold text-fb-text">{{ detailStudent.full_name }}</div>
+                <span
+                  class="mt-1 inline-block rounded-full px-2.5 py-0.5 text-xs font-medium"
+                  :class="statusBadgeClass(detailStudent.status)"
+                >
+                  {{ detailStudent.status_label }}
+                </span>
+                <div class="mt-1 text-sm text-fb-secondary">{{ detailStudent.phone }}</div>
+              </div>
+            </div>
+
+            <dl class="mt-6 space-y-3 text-sm">
+              <div class="flex items-center justify-between gap-4 border-b border-fb-line pb-2">
+                <dt class="text-fb-secondary">School</dt>
+                <dd class="text-right font-medium text-fb-text">{{ detailStudent.school || '-' }}</dd>
+              </div>
+              <div class="flex items-center justify-between gap-4 border-b border-fb-line pb-2">
+                <dt class="text-fb-secondary">Telegram (student)</dt>
+                <dd class="text-right font-medium text-fb-text">{{ detailStudent.telegram || '-' }}</dd>
+              </div>
+              <div class="flex items-center justify-between gap-4 border-b border-fb-line pb-2">
+                <dt class="text-fb-secondary">Telegram (parents)</dt>
+                <dd class="text-right font-medium" :class="detailStudent.parent_telegram ? 'text-fb-text' : 'text-fb-secondary'">
+                  {{ detailStudent.parent_telegram || 'not set' }}
+                </dd>
+              </div>
+              <div class="flex items-center justify-between gap-4 border-b border-fb-line pb-2">
+                <dt class="text-fb-secondary">Next payment</dt>
+                <dd class="text-right font-medium text-fb-text">
+                  {{ detailStudent.next_payment_date ? formatAddedDate(detailStudent.next_payment_date) : '-' }}
+                </dd>
+              </div>
+              <div class="flex items-center justify-between gap-4 border-b border-fb-line pb-2">
+                <dt class="text-fb-secondary">Group</dt>
+                <dd class="text-right">
+                  <button
+                    v-if="detailStudent.group_id"
+                    type="button"
+                    class="font-medium text-fb-blue hover:underline"
+                    @click="goGroup(detailStudent)"
+                  >
+                    {{ detailStudent.group }}
+                  </button>
+                  <span v-else class="font-medium text-fb-text">-</span>
+                </dd>
+              </div>
+              <div class="flex items-center justify-between gap-4 border-b border-fb-line pb-2">
+                <dt class="text-fb-secondary">Branch</dt>
+                <dd class="text-right font-medium text-fb-text">{{ detailStudent.branch }}</dd>
+              </div>
+              <div class="flex items-center justify-between gap-4 border-b border-fb-line pb-2">
+                <dt class="text-fb-secondary">Balance</dt>
+                <dd
+                  class="text-right font-medium"
+                  :class="detailStudent.balance < 0 || detailStudent.status === 6 ? 'text-fb-danger' : 'text-fb-text'"
+                >
+                  {{ detailStudent.balance.toLocaleString() }}
+                </dd>
+              </div>
+              <div class="flex items-center justify-between gap-4 border-b border-fb-line pb-2">
+                <dt class="text-fb-secondary">Paid this month</dt>
+                <dd class="text-right font-medium text-fb-text">{{ detailStudent.paid_this_month ? 'Yes' : 'No' }}</dd>
+              </div>
+              <div class="flex items-center justify-between gap-4">
+                <dt class="text-fb-secondary">Added</dt>
+                <dd class="text-right font-medium text-fb-text">{{ formatAddedDate(detailStudent.created_at) }}</dd>
+              </div>
+            </dl>
+
+            <div v-if="detailParentTgLink" class="mt-5 rounded-lg border border-fb-line bg-fb-canvas px-4 py-3 text-sm">
+              <div class="font-medium text-fb-text">Parents invite link</div>
+              <p class="mt-1 text-fb-secondary">
+                Send this link to the parents. They open it, press Start, and the bot starts sending them notifications automatically.
+              </p>
+              <div class="mt-2 flex items-center gap-2">
+                <a :href="detailParentTgLink" target="_blank" rel="noopener" class="break-all text-fb-blue hover:underline">
+                  {{ detailParentTgLink }}
+                </a>
+                <button
+                  type="button"
+                  class="ml-auto shrink-0 rounded-lg border border-fb-line px-3 py-1 text-xs font-medium text-fb-secondary hover:border-fb-blue hover:text-fb-blue"
+                  @click="copyText(detailParentTgLink)"
+                >
+                  Copy
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div v-else class="flex-1 space-y-4 overflow-y-auto p-6">
+            <div class="flex items-center gap-4">
+              <img
+                v-if="photoPreview"
+                :src="photoPreview"
+                alt=""
+                class="h-20 w-20 shrink-0 rounded-full border border-fb-line object-cover"
+              />
+              <div
+                v-else
+                class="flex h-20 w-20 shrink-0 items-center justify-center rounded-full border border-fb-line bg-fb-canvas text-lg font-semibold text-fb-secondary"
+              >
+                {{ initials([form.first_name, form.last_name].filter(Boolean).join(' ')) }}
+              </div>
+              <div class="flex flex-col items-start gap-2">
+                <input
+                  ref="photoInput"
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  class="hidden"
+                  @change="onPhotoChange"
+                />
+                <button
+                  type="button"
+                  class="rounded-lg border border-fb-line px-3 py-1.5 text-sm font-medium text-fb-secondary hover:border-fb-blue hover:text-fb-blue"
+                  @click="triggerPhotoSelect"
+                >
+                  Upload photo
+                </button>
+                <button
+                  v-if="photoPreview || photoMarkedRemove"
+                  type="button"
+                  class="text-xs text-fb-danger hover:underline"
+                  @click="removePhoto"
+                >
+                  Remove photo
+                </button>
+              </div>
+            </div>
+
             <div class="grid grid-cols-2 gap-3">
               <div>
                 <label class="mb-1 block text-sm font-medium text-fb-secondary">First name</label>
@@ -529,6 +845,59 @@ onMounted(async () => {
                 :readonly="isReadOnly"
                 class="w-full rounded-lg border border-fb-line px-3 py-2 read-only:bg-fb-canvas focus:border-fb-blue focus:outline-none"
               />
+            </div>
+
+            <div>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">School</label>
+              <input
+                v-model="form.school"
+                type="text"
+                placeholder="e.g. School #45"
+                :readonly="isReadOnly"
+                class="w-full rounded-lg border border-fb-line px-3 py-2 read-only:bg-fb-canvas focus:border-fb-blue focus:outline-none"
+              />
+            </div>
+
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="mb-1 block text-sm font-medium text-fb-secondary">Telegram (student)</label>
+                <input
+                  v-model="form.telegram"
+                  type="text"
+                  placeholder="@username"
+                  :readonly="isReadOnly"
+                  class="w-full rounded-lg border border-fb-line px-3 py-2 read-only:bg-fb-canvas focus:border-fb-blue focus:outline-none"
+                />
+              </div>
+              <div>
+                <label class="mb-1 block text-sm font-medium text-fb-secondary">Telegram (parents)</label>
+                <input
+                  v-model="form.parent_telegram"
+                  type="text"
+                  placeholder="@username or chat_id"
+                  :readonly="isReadOnly"
+                  class="w-full rounded-lg border border-fb-line px-3 py-2 read-only:bg-fb-canvas focus:border-fb-blue focus:outline-none"
+                />
+              </div>
+            </div>
+
+            <div v-if="detailParentTgLink" class="rounded-lg border border-fb-line bg-fb-canvas px-4 py-3 text-sm">
+              <div class="font-medium text-fb-text">Parents invite link</div>
+              <p class="mt-1 text-fb-secondary">
+                Send this link to the parents. They open it, press Start, and the bot starts sending them notifications automatically.
+              </p>
+              <div class="mt-2 flex items-center gap-2">
+                <a :href="detailParentTgLink" target="_blank" rel="noopener" class="break-all text-fb-blue hover:underline">
+                  {{ detailParentTgLink }}
+                </a>
+                <button
+                  type="button"
+                  class="ml-auto shrink-0 rounded-lg border border-fb-line px-3 py-1 text-xs font-medium text-fb-secondary hover:border-fb-blue hover:text-fb-blue"
+                  @click="copyText(detailParentTgLink)"
+                >
+                  Copy
+                </button>
+              </div>
             </div>
 
             <div>
@@ -649,5 +1018,16 @@ onMounted(async () => {
         </form>
       </div>
     </div>
+
+    <ImportCsvModal
+      v-model:open="showImportModal"
+      title="Import students"
+      upload-url="/students/import"
+      template-filename="students-import-template.csv"
+      :template-header="['first_name', 'last_name', 'phone', 'school', 'branch', 'group', 'status', 'balance', 'parent_telegram']"
+      :template-example="['Ali', 'Valiyev', '998901234567', 'School #5', 'Main branch', '', 'Active', '0', '@parent_tg']"
+      columns-help="Required: first_name, phone. Optional: last_name, school, branch (name or ID), group (name or ID), status (trial, active, debtor), balance, parent_telegram."
+      @imported="loadStudents"
+    />
   </div>
 </template>

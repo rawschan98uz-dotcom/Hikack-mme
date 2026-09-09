@@ -1,3 +1,5 @@
+import secrets
+
 from django.conf import settings
 from django.db import models
 
@@ -76,6 +78,11 @@ class Student(models.Model):
     first_name = models.CharField(max_length=150)
     last_name = models.CharField(max_length=150, blank=True)
     phone = models.CharField(max_length=15)
+    photo = models.ImageField(upload_to='students/photos/', null=True, blank=True)
+    school = models.CharField(max_length=255, blank=True)
+    telegram = models.CharField(max_length=64, blank=True)
+    parent_telegram = models.CharField(max_length=64, blank=True)
+    telegram_code = models.CharField(max_length=16, null=True, blank=True, unique=True)
     status = models.IntegerField(choices=Status.choices, default=Status.TRIAL)
     balance = models.IntegerField(default=0)
     paid_this_month = models.BooleanField(default=False)
@@ -84,6 +91,16 @@ class Student(models.Model):
     @property
     def full_name(self) -> str:
         return f'{self.first_name} {self.last_name}'.strip()
+
+    def save(self, *args, **kwargs):
+        if not self.telegram_code:
+            alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+            for _ in range(20):
+                code = ''.join(secrets.choice(alphabet) for _ in range(8))
+                if not Student.objects.filter(telegram_code=code).exists():
+                    self.telegram_code = code
+                    break
+        super().save(*args, **kwargs)
 
     def __str__(self) -> str:
         return self.full_name

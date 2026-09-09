@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 
 import NavIcon from '../components/NavIcon.vue';
+import { APP_VERSION } from '../version';
 import QuickAddMenu, { type QuickAddMenuItem } from '../components/QuickAddMenu.vue';
 import ScheduleDrawer from '../components/ScheduleDrawer.vue';
 import { firstFlyoutLink, filterNavSections, flyoutSectionForPath, primaryNav, sectionForPath } from '../config/navigation';
@@ -241,6 +242,7 @@ function logout() {
           </span>
         </button>
       </nav>
+      <div class="pb-3 text-center text-[11px] font-medium text-fb-icon">v{{ APP_VERSION }}</div>
     </aside>
 
     <!-- Secondary flyout -->

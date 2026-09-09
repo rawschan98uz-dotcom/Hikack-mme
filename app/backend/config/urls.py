@@ -2,7 +2,7 @@ from django.contrib import admin
 from django.http import HttpResponse
 from django.urls import include, path, re_path
 
-from config.spa import spa_asset, spa_icon, spa_index
+from config.spa import spa_asset, spa_icon, spa_index, spa_media
 
 
 def health_check(_request):
@@ -15,5 +15,6 @@ urlpatterns = [
     path('v1/', include('api.v1.urls')),
     re_path(r'^assets/(?P<path>.+)$', spa_asset),
     re_path(r'^icons/(?P<path>.+)$', spa_icon),
+    re_path(r'^media/(?P<path>.+)$', spa_media),
     re_path(r'^(?!v1/|admin/|static/|media/|health/|icons/|assets/).*$', spa_index),
 ]

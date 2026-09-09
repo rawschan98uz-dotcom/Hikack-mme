@@ -1,0 +1,45 @@
+{
+  "_comment_1": "Скопируйте этот файл как notifications.json (рядом) и заполните bot_token.",
+  "_comment_2": "Правила (rules) можно добавлять и убирать — интерфейс не нужен, программа подхватит файл сама через пару минут.",
+  "_comment_3": "Типы правил: attendance_absent (прогул), payment_due (оплата скоро), payment_overdue (оплата просрочена).",
+  "_comment_4": "В текстах можно использовать: {student} {first_name} {group} {branch} {school} {phone} {date} {due_date} {days} {last_payment_date}",
+  "_comment_5": "quiet_hours — тихие часы, в это время сообщения не отправляются.",
+  "enabled": true,
+  "bot_token": "123456:ВАШ_ТОКЕН_ОТ_BotFather",
+  "poll_interval_minutes": 10,
+  "quiet_hours": {
+    "enabled": true,
+    "from": "21:00",
+    "to": "09:00"
+  },
+  "rules": [
+    {
+      "name": "absence",
+      "type": "attendance_absent",
+      "enabled": true,
+      "min_age_minutes": 15,
+      "message": "Уважаемые родители! Ваш ребёнок {student} ({group}) отсутствовал на занятии {date}."
+    },
+    {
+      "name": "payment_reminder",
+      "type": "payment_due",
+      "enabled": true,
+      "days_before": 3,
+      "message": "Напоминание: до {due_date} нужно оплатить обучение ({student}, группа {group})."
+    },
+    {
+      "name": "payment_overdue",
+      "type": "payment_overdue",
+      "enabled": true,
+      "days_after": 1,
+      "every_days": 3,
+      "message": "Оплата за обучение ({student}, группа {group}) просрочена на {days} дн. — срок оплаты был {due_date}."
+    }
+  ],
+  "auto_reply": {
+    "enabled": true,
+    "message": "Здравствуйте! Это бот уведомлений учебного центра. Чтобы получать уведомления о вашем ребёнке, откройте персональную ссылку, которую выдал администратор, и нажмите Start.",
+    "subscribed_message": "Готово! Теперь вам будут приходить уведомления об ученике {student} ({group}).",
+    "unknown_code_message": "Не нашёл ученика по этой ссылке. Проверьте ссылку или обратитесь к администратору."
+  }
+}

@@ -33,8 +33,8 @@ App: http://localhost:5173
 
 | Field | Value |
 |-------|-------|
-| Phone | `903708242` |
-| Password | `50608991Zz!` |
+| Phone | `946263200` |
+| Password | `946263200` |
 
 ## What's included
 

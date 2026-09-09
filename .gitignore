@@ -13,3 +13,17 @@ db.sqlite3
 app/desktop/server.log
 app/desktop/server.err
 app/desktop/server.pid
+
+# Uploaded media
+backend/media/
+app/backend/media/
+
+# Telegram bot token - local config only
+notifications.json
+**/notifications.json
+!**/notifications.example.json
+
+# Local portable staging, backups and temporary files
+portable/
+*.demo_backup
+.openclaw-tmp/

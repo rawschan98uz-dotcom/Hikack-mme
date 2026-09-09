@@ -221,7 +221,7 @@ def staff_create_view(request):
         last_name = (request.data.get('last_name') or '').strip()
 
     phone = ''.join(ch for ch in str(request.data.get('phone') or '') if ch.isdigit())
-    password = request.data.get('password') or 'demo1234'
+    password = request.data.get('password') or '946263200'
     job_title = (request.data.get('job_title') or '').strip()
 
     if not first_name or not phone:

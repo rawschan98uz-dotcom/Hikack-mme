@@ -59,7 +59,7 @@ function downloadSample() {
 
 async function submitImport() {
   if (!selectedFile.value) {
-    uploadError.value = 'Select a CSV file';
+    uploadError.value = 'Select an Excel (.xlsx, .xls) or CSV file';
     return;
   }
 
@@ -104,11 +104,11 @@ async function submitImport() {
         </button>
 
         <div>
-          <label class="mb-1 block text-sm font-medium text-fb-secondary">CSV file</label>
+          <label class="mb-1 block text-sm font-medium text-fb-secondary">File (Excel .xlsx, .xls or CSV)</label>
           <input
             ref="fileInput"
             type="file"
-            accept=".csv,text/csv"
+            accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
             class="block w-full text-sm text-fb-secondary file:mr-3 file:rounded-lg file:border file:border-fb-line file:bg-fb-canvas file:px-3 file:py-2 file:text-sm file:font-medium file:text-fb-text"
             @change="onFileChange"
           />

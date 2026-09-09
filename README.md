@@ -82,7 +82,7 @@ To log in to a newly deployed or cleaned system:
 | Parameter | Value |
 |---|---|
 | **Phone / Login** | `946263200` |
-| **Password** | `946263200` |
+| **Password** | `HiJack2024!` |
 | **Role** | CEO / Administrator |
 
 ---

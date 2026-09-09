@@ -34,7 +34,7 @@ App: http://localhost:5173
 | Field | Value |
 |---|---|
 | Phone | `946263200` |
-| Password | `946263200` |
+| Password | `HiJack2024!` |
 
 ## Key Features
 

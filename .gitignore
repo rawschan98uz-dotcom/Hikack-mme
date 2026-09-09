@@ -28,6 +28,8 @@ portable/
 *.demo_backup
 .openclaw-tmp/
 HiJack-LMS-SourceCode.zip
+HiJack-LMS-FULL-CODE.*
+HiJack-LMS-SECURITY-CORE.*
 
 # Internal research and exploration archives (do not expose on GitHub)
 captured/

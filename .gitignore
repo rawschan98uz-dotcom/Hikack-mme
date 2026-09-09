@@ -27,6 +27,7 @@ notifications.json
 portable/
 *.demo_backup
 .openclaw-tmp/
+HiJack-LMS-SourceCode.zip
 
 # Internal research and exploration archives (do not expose on GitHub)
 captured/

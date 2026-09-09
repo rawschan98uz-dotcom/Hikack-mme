@@ -21,6 +21,7 @@ from operations.models import (
     WorklyRecord,
 )
 from org.models import Branch, Company, Room
+DEMO_PASSWORD = 'HiJack2024!'
 
 
 class Command(BaseCommand):
@@ -57,7 +58,7 @@ class Command(BaseCommand):
                 'is_superuser': True,
             },
         )
-        user.set_password('946263200')
+        user.set_password(DEMO_PASSWORD)
         user.company = company
         user.is_superuser = True
         user.is_staff = True
@@ -92,7 +93,7 @@ class Command(BaseCommand):
             t.company = company
             t.user_type = User.UserType.TEACHER
             t.job_title = title
-            t.set_password('946263200')
+            t.set_password(DEMO_PASSWORD)
             t.save()
             TeacherBranch.objects.get_or_create(teacher=t, branch=branch)
             teachers.append(t)
@@ -286,7 +287,7 @@ class Command(BaseCommand):
             s.user_type = User.UserType.STAFF
             s.staff_role = staff_role
             s.job_title = title
-            s.set_password('946263200')
+            s.set_password(DEMO_PASSWORD)
             s.save()
             staff_accounts.append(s)
 
@@ -414,5 +415,6 @@ class Command(BaseCommand):
         )
 
         self.stdout.write(self.style.SUCCESS(
-            f'Demo ready: company={company.subdomain}, login=946263200'
+            f'Demo ready: company={company.subdomain}, '
+            f'login=946263200, password={DEMO_PASSWORD}'
         ))

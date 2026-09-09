@@ -14,6 +14,16 @@ from accounts.models import TeacherBranch, User
 from accounts.rbac import get_effective_role, get_role_label, get_user_permissions
 from api.responses import fail, ok
 from api.scope import filter_groups_queryset, filter_students_queryset, teacher_can_access_group, teacher_can_access_student
+from api.utils import (
+    safe_int,
+    normalize_phone,
+    is_valid_phone,
+    paginate_queryset,
+    get_photo_url,
+    parse_date_safe,
+    parse_time_safe,
+    validate_course_code,
+)
 from crm.models import Course, Group, Lead, Student
 from finance.models import Payment
 from operations import notify as notifications
@@ -61,7 +71,7 @@ VALID_STUDENT_STATUSES = {choice[0] for choice in Student.Status.choices}
 
 
 def _normalize_phone(phone: str) -> str:
-    return ''.join(ch for ch in phone if ch.isdigit())
+    return normalize_phone(phone)
 
 
 def _serialize_lead(lead: Lead) -> dict:
@@ -319,7 +329,8 @@ def _serialize_student(student: Student, *, detailed: bool = False) -> dict:
         'last_name': student.last_name,
         'full_name': student.full_name,
         'phone': student.phone,
-        'photo': student.photo.url if student.photo else None,
+        # ✅ ИСПРАВЛЕНО: проверяем существование файла
+        'photo': get_photo_url(student.photo),
         'school': student.school,
         'telegram': student.telegram,
         'parent_telegram': student.parent_telegram,
@@ -335,8 +346,12 @@ def _serialize_student(student: Student, *, detailed: bool = False) -> dict:
     }
     if detailed:
         last_payment_date, next_payment_date = _next_payment_date(student)
-        payload['last_payment_date'] = last_payment_date.isoformat() if last_payment_date else None
-        payload['next_payment_date'] = next_payment_date.isoformat() if next_payment_date else None
+        payload['last_payment_date'] = (
+            last_payment_date.isoformat() if last_payment_date else None
+        )
+        payload['next_payment_date'] = (
+            next_payment_date.isoformat() if next_payment_date else None
+        )
         payload['telegram_code'] = student.telegram_code
     return payload
 
@@ -363,26 +378,25 @@ def _apply_student_fields(student: Student, company: Company, data: dict) -> str
 
     phone = data.get('phone')
     if phone is not None:
-        phone = _normalize_phone(str(phone))
+        # ✅ ИСПРАВЛЕНО: нормализация с удалением кода страны
+        phone = normalize_phone(str(phone))
         if len(phone) < 9:
             return 'Phone must contain at least 9 digits'
         student.phone = phone
 
     status = data.get('status')
     if status is not None:
-        try:
-            status = int(status)
-        except (TypeError, ValueError):
-            return 'Invalid status'
-        if status not in VALID_STUDENT_STATUSES:
+        status = safe_int(status, default=None)
+        if status is None or status not in VALID_STUDENT_STATUSES:
             return 'Invalid status'
         student.status = status
 
     if 'balance' in data:
-        try:
-            student.balance = int(data.get('balance') or 0)
-        except (TypeError, ValueError):
-            return 'Invalid balance'
+        # ✅ ИСПРАВЛЕНО: safe_int с ограничениями
+        student.balance = safe_int(
+            data.get('balance'), default=0,
+            min_val=-100_000_000, max_val=100_000_000
+        )
 
     if 'paid_this_month' in data:
         student.paid_this_month = bool(data.get('paid_this_month'))
@@ -497,10 +511,15 @@ def company_by_subdomain(request, subdomain: str):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def company_detail(request, company_id: int):
+    # ✅ ИСПРАВЛЕНО: 2 строки — проверяем что это своя компания
+    if company_id != request.user.company_id:
+        return fail('Access denied', 403)
+
     try:
         company = Company.objects.get(pk=company_id)
     except Company.DoesNotExist:
         return fail('Company not found', 404)
+
     return ok(_serialize_company(company))
 
 
@@ -653,6 +672,8 @@ def group_list(request):
         return ok([])
 
     if request.method == 'POST':
+        # ═══ ВАЛИДАЦИЯ (всё ДО сохранения) ═══
+
         name = (request.data.get('name') or '').strip()
         if not name:
             return fail('Group name is required')
@@ -665,29 +686,50 @@ def group_list(request):
         except (Branch.DoesNotExist, TypeError, ValueError):
             return fail('Invalid branch')
 
-        days = request.data.get('days', Group.Days.ODD)
-        try:
-            days = int(days)
-        except (TypeError, ValueError):
-            return fail('Invalid schedule')
+        days = safe_int(request.data.get('days', Group.Days.ODD),
+                        default=Group.Days.ODD)
         if days not in VALID_GROUP_DAYS:
             return fail('Invalid schedule')
 
+        # ✅ ИСПРАВЛЕНО: Валидируем теги ДО создания группы
+        tag_ids = None
+        if 'tag_ids' in request.data:
+            raw_tags = request.data.get('tag_ids')
+            if raw_tags in (None, ''):
+                tag_ids = []
+            else:
+                tag_ids = raw_tags if isinstance(raw_tags, list) else _parse_id_list(str(raw_tags))
+                # Проверяем, что ВСЕ теги существуют и принадлежат компании
+                existing_tags = list(Tag.objects.filter(pk__in=tag_ids, company=company))
+                if len(existing_tags) != len(set(tag_ids)):
+                    return fail('One or more tags not found')
+
+        # ═══ СОЗДАНИЕ (все данные уже проверены) ═══
+
         group = Group(company=company, branch=branch, name=name, days=days)
+
+        # Применяем остальные поля
         error = _apply_group_fields(group, company, request.data)
         if error:
             return fail(error)
+
+        # Сохраняем
         group.save()
-        tag_error = _apply_group_tags(group, company, request.data)
-        if tag_error:
-            group.delete()
-            return fail(tag_error)
-        group = Group.objects.select_related('course', 'branch', 'teacher', 'room').prefetch_related(
-            'tags',
-        ).annotate(
-            students_count=Count('students'),
+
+        # Устанавливаем теги (уже валидированы)
+        if tag_ids is not None:
+            group.tags.set(existing_tags)
+
+        # Перезагружаем для получения annotations
+        group = Group.objects.select_related(
+            'course', 'branch', 'teacher', 'room'
+        ).prefetch_related('tags').annotate(
+            students_count=Count('students')
         ).get(pk=group.pk)
+
         return ok(_serialize_group(group), status_code=201)
+
+    # ═══ GET — с пагинацией ═══
 
     branch_id = request.query_params.get('branch_id')
     teacher_id = request.query_params.get('teacher_id')
@@ -698,8 +740,8 @@ def group_list(request):
     day_ids = _parse_id_list(request.query_params.get('days'))
     tag_ids = _parse_id_list(request.query_params.get('tag_ids'))
     status = request.query_params.get('status')
-    start_date = _parse_date_param(request.query_params.get('start_date'))
-    end_date = _parse_date_param(request.query_params.get('end_date'))
+    start_date = parse_date_safe(request.query_params.get('start_date'))
+    end_date = parse_date_safe(request.query_params.get('end_date'))
     query = (request.query_params.get('q') or '').strip()
 
     qs = Group.objects.filter(company=company).select_related(
@@ -720,10 +762,7 @@ def group_list(request):
     if status == 'all':
         pass
     elif status:
-        try:
-            qs = qs.filter(status=int(status))
-        except ValueError:
-            pass
+        qs = qs.filter(status=safe_int(status, default=Group.Status.ACTIVE))
     else:
         qs = qs.filter(status=Group.Status.ACTIVE)
     if start_date:
@@ -737,7 +776,15 @@ def group_list(request):
     if query:
         qs = qs.filter(Q(name__icontains=query) | Q(course__name__icontains=query))
 
-    return ok([_serialize_group(group) for group in qs[:200]])
+    # ✅ Пагинация вместо hard limit
+    page = paginate_queryset(qs, request, default_limit=200)
+
+    return ok({
+        'count': page['count'],
+        'has_more': page['has_more'],
+        'next_offset': page['next_offset'],
+        'results': [_serialize_group(g) for g in page['results']],
+    })
 
 
 @api_view(['GET', 'PATCH', 'DELETE'])
@@ -748,10 +795,10 @@ def group_detail(request, group_id: int):
         return fail('Company not found', status_code=404)
 
     try:
-        group = Group.objects.select_related('course', 'branch', 'teacher', 'room').prefetch_related(
-            'tags',
-        ).annotate(
-            students_count=Count('students'),
+        group = Group.objects.select_related(
+            'course', 'branch', 'teacher', 'room'
+        ).prefetch_related('tags').annotate(
+            students_count=Count('students')
         ).get(pk=group_id, company=company)
     except Group.DoesNotExist:
         return fail('Group not found', status_code=404)
@@ -766,18 +813,37 @@ def group_detail(request, group_id: int):
         group.delete()
         return ok({'deleted': True})
 
+    # PATCH
+
+    # ✅ Валидируем теги ДО обновления
+    tag_ids = None
+    existing_tags = []
+    if 'tag_ids' in request.data:
+        raw_tags = request.data.get('tag_ids')
+        if raw_tags in (None, ''):
+            tag_ids = []
+        else:
+            tag_ids = raw_tags if isinstance(raw_tags, list) else _parse_id_list(str(raw_tags))
+            existing_tags = list(Tag.objects.filter(pk__in=tag_ids, company=company))
+            if len(existing_tags) != len(set(tag_ids)):
+                return fail('One or more tags not found')
+
     error = _apply_group_fields(group, company, request.data)
     if error:
         return fail(error)
+
     group.save()
-    tag_error = _apply_group_tags(group, company, request.data)
-    if tag_error:
-        return fail(tag_error)
-    group = Group.objects.select_related('course', 'branch', 'teacher', 'room').prefetch_related(
-        'tags',
-    ).annotate(
-        students_count=Count('students'),
+
+    if tag_ids is not None:
+        group.tags.set(existing_tags)
+
+    # Перезагружаем
+    group = Group.objects.select_related(
+        'course', 'branch', 'teacher', 'room'
+    ).prefetch_related('tags').annotate(
+        students_count=Count('students')
     ).get(pk=group.pk)
+
     return ok(_serialize_group(group))
 
 
@@ -801,7 +867,8 @@ def student_list(request):
         else:
             last_name = (request.data.get('last_name') or '').strip()
 
-        phone = _normalize_phone(request.data.get('phone') or '')
+        # ✅ ИСПРАВЛЕНО: используем normalize_phone из utils
+        phone = normalize_phone(request.data.get('phone') or '')
         if len(phone) < 9:
             return fail('Phone must contain at least 9 digits')
 
@@ -813,11 +880,8 @@ def student_list(request):
         except (Branch.DoesNotExist, TypeError, ValueError):
             return fail('Invalid branch')
 
-        status = request.data.get('status', Student.Status.TRIAL)
-        try:
-            status = int(status)
-        except (TypeError, ValueError):
-            return fail('Invalid status')
+        status = safe_int(request.data.get('status', Student.Status.TRIAL),
+                         default=Student.Status.TRIAL)
         if status not in VALID_STUDENT_STATUSES:
             return fail('Invalid status')
 
@@ -836,17 +900,17 @@ def student_list(request):
         student = Student.objects.select_related('group', 'branch').get(pk=student.pk)
         return ok(_serialize_student(student), status_code=201)
 
-    qs = Student.objects.filter(company=company).select_related('group', 'branch').order_by(
-        'first_name', 'last_name',
-    )
+    # GET
+    qs = Student.objects.filter(company=company).select_related(
+        'group', 'branch'
+    ).order_by('first_name', 'last_name')
     qs = filter_students_queryset(qs, request.user)
 
     statuses = request.query_params.get('statuses')
     if statuses:
-        try:
-            qs = qs.filter(status=int(statuses))
-        except ValueError:
-            pass
+        status_val = safe_int(statuses, default=None)
+        if status_val is not None:
+            qs = qs.filter(status=status_val)
 
     branch_id = request.query_params.get('branch_id')
     if branch_id:
@@ -868,7 +932,15 @@ def student_list(request):
             | Q(phone__icontains=query),
         )
 
-    return ok([_serialize_student(student) for student in qs[:200]])
+    # ✅ Пагинация
+    page = paginate_queryset(qs, request, default_limit=200)
+
+    return ok({
+        'count': page['count'],
+        'has_more': page['has_more'],
+        'next_offset': page['next_offset'],
+        'results': [_serialize_student(s) for s in page['results']],
+    })
 
 
 @api_view(['GET', 'PATCH', 'DELETE'])
@@ -981,7 +1053,10 @@ def lead_list(request):
 
     if request.method == 'POST':
         full_name = (request.data.get('full_name') or '').strip()
-        phone = _normalize_phone(request.data.get('phone') or '')
+        
+        # ✅ ИСПРАВЛЕНО: нормализация
+        phone = normalize_phone(request.data.get('phone') or '')
+        
         stage = (request.data.get('stage') or Lead.Stage.INCOMING).strip().lower()
 
         if not full_name:
@@ -1016,7 +1091,15 @@ def lead_list(request):
     if query:
         qs = qs.filter(Q(full_name__icontains=query) | Q(phone__icontains=query))
 
-    return ok([_serialize_lead(lead) for lead in qs[:200]])
+    # ✅ Пагинация
+    page = paginate_queryset(qs, request, default_limit=200)
+
+    return ok({
+        'count': page['count'],
+        'has_more': page['has_more'],
+        'next_offset': page['next_offset'],
+        'results': [_serialize_lead(lead) for lead in page['results']],
+    })
 
 
 @api_view(['GET', 'PATCH'])
@@ -1046,7 +1129,8 @@ def lead_detail(request, lead_id: int):
         lead.full_name = full_name
 
     if phone is not None:
-        phone = _normalize_phone(str(phone))
+        # ✅ Нормализация
+        phone = normalize_phone(str(phone))
         if len(phone) < 9:
             return fail('Phone must contain at least 9 digits')
         lead.phone = phone
@@ -1081,6 +1165,18 @@ def lead_archive(request, lead_id: int):
     return ok(_serialize_lead(lead))
 
 
+def _serialize_course(course: Course) -> dict:
+    return {
+        'id': course.id,
+        'name': course.name,
+        'code': course.code,
+        'price': course.price,
+        'lesson_duration': course.lesson_duration,
+        'course_duration': course.course_duration,
+        'description': course.description,
+    }
+
+
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
 def course_list(request):
@@ -1094,14 +1190,23 @@ def course_list(request):
             return fail('Course name is required')
 
         code = (request.data.get('code') or '').strip().lower()
-        if not code:
-            return fail('Course code is required')
-        if not re.fullmatch(r'(a1|a2|b1|b2|c1|c2)', code):
-            return fail('Course code must be a CEFR level: a1, a2, b1, b2, c1, c2')
+        
+        # ✅ ИСПРАВЛЕНО: гибкая валидация (не только CEFR)
+        is_valid, error_msg = validate_course_code(code)
+        if not is_valid:
+            return fail(error_msg)
 
-        price = int(request.data.get('price') or 0)
-        lesson_duration = int(request.data.get('lesson_duration') or 90)
-        course_duration = int(request.data.get('course_duration') or 12)
+        # ✅ Проверка на дубликат внутри компании
+        if Course.objects.filter(company=company, code=code).exists():
+            return fail(f'Course with code "{code}" already exists')
+
+        # ✅ ИСПРАВЛЕНО: безопасные числа
+        price = safe_int(request.data.get('price'), default=0,
+                        min_val=0, max_val=100_000_000)
+        lesson_duration = safe_int(request.data.get('lesson_duration'), default=90,
+                                  min_val=15, max_val=480)
+        course_duration = safe_int(request.data.get('course_duration'), default=12,
+                                  min_val=1, max_val=120)
         description = (request.data.get('description') or '').strip()
 
         course = Course.objects.create(
@@ -1113,30 +1218,10 @@ def course_list(request):
             course_duration=course_duration,
             description=description,
         )
-        return ok({
-            'id': course.id,
-            'name': course.name,
-            'code': course.code,
-            'price': course.price,
-            'lesson_duration': course.lesson_duration,
-            'course_duration': course.course_duration,
-            'description': course.description,
-        }, status_code=201)
+        return ok(_serialize_course(course), status_code=201)
 
     data = [_serialize_course(course) for course in Course.objects.filter(company=company)]
     return ok(data)
-
-
-def _serialize_course(course: Course) -> dict:
-    return {
-        'id': course.id,
-        'name': course.name,
-        'code': course.code,
-        'price': course.price,
-        'lesson_duration': course.lesson_duration,
-        'course_duration': course.course_duration,
-        'description': course.description,
-    }
 
 
 @api_view(['GET', 'PATCH', 'DELETE'])
@@ -1168,20 +1253,36 @@ def course_detail(request, course_id: int):
 
     if 'code' in request.data:
         code = str(request.data.get('code') or '').strip().lower()
-        if not code:
-            return fail('Course code is required')
-        if not re.fullmatch(r'(a1|a2|b1|b2|c1|c2)', code):
-            return fail('Course code must be a CEFR level: a1, a2, b1, b2, c1, c2')
+        
+        # ✅ Гибкая валидация
+        is_valid, error_msg = validate_course_code(code)
+        if not is_valid:
+            return fail(error_msg)
+
+        # Проверка на дубликат (исключая текущий)
+        if Course.objects.filter(
+            company=company, code=code
+        ).exclude(pk=course.pk).exists():
+            return fail(f'Course with code "{code}" already exists')
+
         course.code = code
 
+    # ✅ Безопасные числа
     if 'price' in request.data:
-        course.price = int(request.data.get('price') or 0)
+        course.price = safe_int(request.data.get('price'), default=0,
+                               min_val=0, max_val=100_000_000)
 
     if 'lesson_duration' in request.data:
-        course.lesson_duration = int(request.data.get('lesson_duration') or 90)
+        course.lesson_duration = safe_int(
+            request.data.get('lesson_duration'), default=90,
+            min_val=15, max_val=480
+        )
 
     if 'course_duration' in request.data:
-        course.course_duration = int(request.data.get('course_duration') or 12)
+        course.course_duration = safe_int(
+            request.data.get('course_duration'), default=12,
+            min_val=1, max_val=120
+        )
 
     if 'description' in request.data:
         course.description = str(request.data.get('description') or '').strip()

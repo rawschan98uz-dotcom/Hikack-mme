@@ -7,7 +7,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 _on_railway = bool(os.environ.get('RAILWAY_ENVIRONMENT') or os.environ.get('RAILWAY_PROJECT_ID'))
 
 SECRET_KEY = os.environ.get('SECRET_KEY', 'dev-only-change-in-production-hijack-mme')
-DEBUG = os.environ.get('DEBUG', 'true').lower() in ('1', 'true', 'yes')
+DEBUG = os.environ.get('DEBUG', 'false').lower() in ('1', 'true', 'yes')
 ALLOWED_HOSTS = [
     host.strip()
     for host in os.environ.get('ALLOWED_HOSTS', '*').split(',')
@@ -116,7 +116,13 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 AUTH_USER_MODEL = 'accounts.User'
 
-CORS_ALLOW_ALL_ORIGINS = os.environ.get('CORS_ALLOW_ALL_ORIGINS', 'true').lower() in ('1', 'true', 'yes')
+CORS_ALLOW_ALL_ORIGINS = False
+CORS_ALLOWED_ORIGINS = [
+    'http://localhost:5173',      # Vite dev server
+    'http://127.0.0.1:5173',      # Vite dev server (alternative)
+    'http://localhost:8000',      # Django direct
+    'http://127.0.0.1:8000',      # Django direct
+]
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (

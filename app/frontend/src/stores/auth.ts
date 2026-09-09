@@ -99,6 +99,11 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
+  function getAuthHeaders(): Record<string, string> {
+    const t = token.value ?? localStorage.getItem('access_token');
+    return t ? { Authorization: `Bearer ${t}` } : {};
+  }
+
   return {
     user,
     token,
@@ -113,5 +118,6 @@ export const useAuthStore = defineStore('auth', () => {
     updateProfile,
     logout,
     syncTokenFromStorage,
+    getAuthHeaders,
   };
 });

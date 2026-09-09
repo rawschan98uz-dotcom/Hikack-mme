@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 
@@ -280,7 +280,7 @@ function logout() {
 
     <!-- Main column -->
     <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-      <!-- Top header (ModMe-style) -->
+      <!-- Top header -->
       <header class="relative z-30 h-[72px] overflow-visible border-b border-fb-line bg-fb-card px-6 flex items-center gap-5 shrink-0">
         <!-- Logo + quick add -->
         <div class="flex items-center gap-4 shrink-0">

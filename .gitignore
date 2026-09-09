@@ -27,3 +27,11 @@ notifications.json
 portable/
 *.demo_backup
 .openclaw-tmp/
+
+# Internal research and exploration archives (do not expose on GitHub)
+captured/
+references/
+scripts/
+docs/
+memory-bank/
+

@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { onMounted, ref } from 'vue';
 
 import client, { type ApiEnvelope } from '../api/client';
@@ -113,8 +113,7 @@ onMounted(load);
       </div>
 
       <div v-else class="bg-fb-card rounded-xl border border-fb-line p-8 text-fb-secondary">
-        Tab «{{ activeTab }}» — configure using screenshot
-        <code class="text-xs">captured/sections/settings.png</code>
+        Раздел «{{ activeTab }}» будет доступен в следующем обновлении.
       </div>
     </template>
   </div>

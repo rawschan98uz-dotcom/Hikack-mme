@@ -1,4 +1,4 @@
-"""Role-based access control — ModMe-style permission matrix."""
+"""Role-based access control — permission matrix."""
 
 from __future__ import annotations
 

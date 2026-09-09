@@ -18,10 +18,6 @@ export default {
           hover: '#E7F3FF',
           danger: '#E41E3F',
         },
-        modme: {
-          orange: '#1877F2',
-          dark: '#050505',
-        },
       },
       fontFamily: {
         sans: [

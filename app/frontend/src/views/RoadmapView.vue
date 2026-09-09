@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 const milestones = [
   { status: 'done', title: 'CRM core', detail: 'Leads, students, groups, teachers' },
   { status: 'done', title: 'Finance module', detail: 'Payments, expenses, salaries, debtors' },
@@ -24,22 +24,12 @@ function statusClass(status: string) {
 
 <template>
   <div class="space-y-6">
-    <div class="flex flex-wrap items-center justify-between gap-3">
+    <div>
       <h1 class="text-xl font-semibold text-fb-text">Roadmap</h1>
-      <a
-        href="https://modme.uz"
-        target="_blank"
-        rel="noopener noreferrer"
-        class="rounded-lg bg-fb-blue px-4 py-2 text-sm font-medium text-white hover:opacity-90"
-      >
-        modme.uz →
-      </a>
+      <p class="mt-2 max-w-2xl text-sm text-fb-secondary">
+        План развития и будущие обновления платформы HiJack LMS.
+      </p>
     </div>
-
-    <p class="max-w-2xl text-sm text-fb-secondary">
-      Product roadmap for ModMe platform features. Local clone mirrors implemented modules;
-      upcoming items follow the official ModMe release plan.
-    </p>
 
     <div class="space-y-3">
       <article

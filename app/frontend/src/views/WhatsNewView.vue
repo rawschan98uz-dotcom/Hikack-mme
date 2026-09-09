@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 const updates = [
   {
     date: '2026-06-10',
@@ -8,7 +8,7 @@ const updates = [
   {
     date: '2026-06-10',
     title: 'Settings: Archive, Forms, Tags, Roadmap',
-    body: 'Archive bulk actions, ModMe-style Forms/Tags tables, and a Roadmap page with milestones.',
+    body: 'Archive bulk actions, customizable Forms/Tags tables, and a Roadmap page with milestones.',
   },
   {
     date: '2026-06-09',
@@ -17,8 +17,8 @@ const updates = [
   },
   {
     date: '2026-06-08',
-    title: 'Local MVP clone ready',
-    body: 'Django API + Vue frontend with demo seed data for RavvaTech center.',
+    title: 'HiJack LMS core release',
+    body: 'Django REST API + Vue frontend with comprehensive center management.',
   },
 ];
 </script>
@@ -28,15 +28,7 @@ const updates = [
     <div>
       <h1 class="text-[28px] font-normal text-fb-text">What's new</h1>
       <p class="mt-2 text-fb-secondary">
-        Release notes for this local ModMe clone. Live updates:
-        <a
-          href="https://modme.uz"
-          target="_blank"
-          rel="noopener noreferrer"
-          class="text-fb-blue hover:underline"
-        >
-          modme.uz
-        </a>
+        Release notes and system updates for HiJack LMS.
       </p>
     </div>
 

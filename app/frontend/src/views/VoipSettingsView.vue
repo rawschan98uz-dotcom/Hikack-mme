@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { onMounted, ref } from 'vue';
 
 import client, { type ApiEnvelope } from '../api/client';
@@ -59,7 +59,7 @@ onMounted(load);
       </label>
       <div>
         <label class="mb-1 block text-sm font-medium text-fb-secondary">Gateway</label>
-        <input v-model="settings.voip_gateway" type="text" placeholder="e.g. Modme VoIP" class="w-full rounded-lg border px-3 py-2" />
+        <input v-model="settings.voip_gateway" type="text" placeholder="e.g. SIP / Zadarma / Custom Gateway" class="w-full rounded-lg border px-3 py-2" />
       </div>
       <div>
         <label class="mb-1 block text-sm font-medium text-fb-secondary">Caller ID</label>

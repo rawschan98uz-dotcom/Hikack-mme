@@ -5,7 +5,7 @@ from api.rbac_routes import resolve_permission
 
 
 class RbacPermission(BasePermission):
-    """Enforce ModMe-style RBAC based on request path and HTTP method."""
+    """Enforce LMS RBAC based on request path and HTTP method."""
 
     message = 'You do not have permission to perform this action.'
 

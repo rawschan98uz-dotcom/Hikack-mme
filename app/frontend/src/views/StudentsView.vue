@@ -1021,12 +1021,12 @@ onMounted(async () => {
 
     <ImportCsvModal
       v-model:open="showImportModal"
-      title="Import students"
+      title="Импорт учеников"
       upload-url="/students/import"
       template-filename="students-import-template.csv"
       :template-header="['first_name', 'last_name', 'phone', 'school', 'branch', 'group', 'status', 'balance', 'parent_telegram']"
       :template-example="['Ali', 'Valiyev', '998901234567', 'School #5', 'Main branch', '', 'Active', '0', '@parent_tg']"
-      columns-help="Required: first_name, phone. Optional: last_name, school, branch (name or ID), group (name or ID), status (trial, active, debtor), balance, parent_telegram."
+      columns-help="Поддерживаются файлы Excel (.xlsx, .xls) и CSV. Обязательные данные: имя и номер телефона. Программа автоматически разделит ФИО, очистит телефон и сопоставит группы."
       @imported="loadStudents"
     />
   </div>

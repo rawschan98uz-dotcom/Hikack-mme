@@ -52,6 +52,11 @@ def teacher_import(request):
     if company is None:
         return fail('Company not found', status_code=404)
 
+    dry_run = (
+        request.data.get('dry_run') in ('true', '1', 1, True)
+        or request.query_params.get('dry_run') in ('true', '1', 1, True)
+    )
+
     rows, parse_error = parse_csv_upload(request.FILES.get('file'))
     if parse_error:
         return fail(parse_error)
@@ -59,6 +64,8 @@ def teacher_import(request):
     created = 0
     skipped = 0
     errors: list[dict] = []
+    preview_rows: list[dict] = []
+    valid_payloads: list[dict] = []
 
     for row in rows:
         row_num = int(row.get('_row', 0))
@@ -77,21 +84,92 @@ def teacher_import(request):
 
         if not first_name or not phone:
             skipped += 1
-            errors.append({'row': row_num, 'message': 'First name and phone are required'})
+            msg = 'Имя и номер телефона обязательны'
+            errors.append({'row': row_num, 'message': msg})
+            preview_rows.append({
+                'row': row_num,
+                'first_name': first_name,
+                'last_name': last_name,
+                'full_name': f"{first_name} {last_name}".strip(),
+                'phone': phone,
+                'formatted_phone': phone or '—',
+                'branch_name': '—',
+                'group_name': '—',
+                'status_label': 'Преподаватель',
+                'balance': 0,
+                'school': job_title or '—',
+                'is_valid': False,
+                'message': msg,
+            })
             continue
 
         if User.objects.filter(phone=phone).exists():
             skipped += 1
-            errors.append({'row': row_num, 'message': f'Phone {phone} already exists'})
+            msg = f'Телефон {phone} уже зарегистрирован'
+            errors.append({'row': row_num, 'message': msg})
+            preview_rows.append({
+                'row': row_num,
+                'first_name': first_name,
+                'last_name': last_name,
+                'full_name': f"{first_name} {last_name}".strip(),
+                'phone': phone,
+                'formatted_phone': phone,
+                'branch_name': '—',
+                'group_name': '—',
+                'status_label': 'Преподаватель',
+                'balance': 0,
+                'school': job_title or '—',
+                'is_valid': False,
+                'message': msg,
+            })
             continue
 
         branch_ids = _resolve_branch_ids(company, branch_raw)
         if not branch_ids:
             skipped += 1
-            errors.append({'row': row_num, 'message': 'No valid branch found'})
+            msg = 'Филиал не найден'
+            errors.append({'row': row_num, 'message': msg})
+            preview_rows.append({
+                'row': row_num,
+                'first_name': first_name,
+                'last_name': last_name,
+                'full_name': f"{first_name} {last_name}".strip(),
+                'phone': phone,
+                'formatted_phone': phone,
+                'branch_name': '—',
+                'group_name': '—',
+                'status_label': 'Преподаватель',
+                'balance': 0,
+                'school': job_title or '—',
+                'is_valid': False,
+                'message': msg,
+            })
             continue
 
-        payload = {
+        if len(phone) == 9 and phone.isdigit():
+            formatted_phone = f"+998 ({phone[:2]}) {phone[2:5]}-{phone[5:7]}-{phone[7:9]}"
+        elif len(phone) == 12 and phone.startswith('998') and phone.isdigit():
+            formatted_phone = f"+998 ({phone[3:5]}) {phone[5:8]}-{phone[8:10]}-{phone[10:12]}"
+        else:
+            formatted_phone = phone
+
+        preview_rows.append({
+            'row': row_num,
+            'first_name': first_name,
+            'last_name': last_name,
+            'full_name': f"{first_name} {last_name}".strip(),
+            'phone': phone,
+            'formatted_phone': formatted_phone,
+            'branch_name': 'Основной',
+            'group_name': '—',
+            'status_label': 'Преподаватель',
+            'balance': 0,
+            'school': job_title or '—',
+            'is_valid': True,
+            'message': '',
+        })
+
+        valid_payloads.append({
             'first_name': first_name,
             'last_name': last_name,
             'phone': phone,
@@ -99,16 +177,30 @@ def teacher_import(request):
             'honorific': honorific,
             'job_title': job_title,
             'branches': branch_ids,
-        }
+            'row_num': row_num,
+        })
+
+    if dry_run:
+        return ok({
+            'dry_run': True,
+            'total': len(preview_rows),
+            'valid': len([r for r in preview_rows if r['is_valid']]),
+            'skipped': len([r for r in preview_rows if not r['is_valid']]),
+            'errors': errors,
+            'rows': preview_rows,
+        })
+
+    for item in valid_payloads:
+        row_n = item.pop('row_num')
         class _Req:
-            data = payload
+            data = item
 
         response = teacher_create(_Req(), company)
         if response.status_code >= 400:
             skipped += 1
             body = response.data if hasattr(response, 'data') else {}
             message = body.get('message') if isinstance(body, dict) else 'Could not create teacher'
-            errors.append({'row': row_num, 'message': str(message)})
+            errors.append({'row': row_n, 'message': str(message)})
             continue
 
         created += 1
@@ -185,6 +277,11 @@ def student_import(request):
     if company is None:
         return fail('Company not found', status_code=404)
 
+    dry_run = (
+        request.data.get('dry_run') in ('true', '1', 1, True)
+        or request.query_params.get('dry_run') in ('true', '1', 1, True)
+    )
+
     rows, parse_error = parse_csv_upload(request.FILES.get('file'))
     if parse_error:
         return fail(parse_error)
@@ -192,6 +289,8 @@ def student_import(request):
     created = 0
     skipped = 0
     errors: list[dict] = []
+    preview_rows: list[dict] = []
+    valid_students_to_create: list[dict] = []
 
     default_branch = Branch.objects.filter(company=company).order_by('id').first()
 
@@ -209,6 +308,14 @@ def student_import(request):
         '6': Student.Status.DEBTOR,
         '7': Student.Status.LEFT_TRIAL,
         '8': Student.Status.LEFT_ACTIVE,
+    }
+
+    status_label_map = {
+        Student.Status.TRIAL: 'Пробный',
+        Student.Status.ACTIVE: 'Активный',
+        Student.Status.DEBTOR: 'Должник',
+        Student.Status.LEFT_TRIAL: 'Ушел (пробный)',
+        Student.Status.LEFT_ACTIVE: 'Ушел (активный)',
     }
 
     for row in rows:
@@ -297,11 +404,47 @@ def student_import(request):
             continue
 
         if not first_name:
+            skipped += 1
+            msg = 'Не указано имя ученика'
+            errors.append({'row': row_num, 'message': msg})
+            preview_rows.append({
+                'row': row_num,
+                'first_name': '',
+                'last_name': '',
+                'full_name': '—',
+                'phone': '',
+                'formatted_phone': '—',
+                'branch_name': '—',
+                'group_name': '—',
+                'status_label': '—',
+                'balance': 0,
+                'school': '',
+                'parent_telegram': '',
+                'is_valid': False,
+                'message': msg,
+            })
             continue
 
         if len(phone) < 9:
             skipped += 1
-            errors.append({'row': row_num, 'message': f'Valid phone number missing for "{first_name}"'})
+            msg = f'Не найден номер телефона для "{first_name}"'
+            errors.append({'row': row_num, 'message': msg})
+            preview_rows.append({
+                'row': row_num,
+                'first_name': first_name,
+                'last_name': last_name,
+                'full_name': f"{first_name} {last_name}".strip(),
+                'phone': phone,
+                'formatted_phone': phone or '—',
+                'branch_name': '—',
+                'group_name': '—',
+                'status_label': '—',
+                'balance': 0,
+                'school': '',
+                'parent_telegram': '',
+                'is_valid': False,
+                'message': msg,
+            })
             continue
 
         branch_raw = (
@@ -322,7 +465,24 @@ def student_import(request):
             branch = default_branch
         if not branch:
             skipped += 1
-            errors.append({'row': row_num, 'message': 'No branch available'})
+            msg = 'Филиал не найден'
+            errors.append({'row': row_num, 'message': msg})
+            preview_rows.append({
+                'row': row_num,
+                'first_name': first_name,
+                'last_name': last_name,
+                'full_name': f"{first_name} {last_name}".strip(),
+                'phone': phone,
+                'formatted_phone': phone,
+                'branch_name': '—',
+                'group_name': '—',
+                'status_label': '—',
+                'balance': 0,
+                'school': '',
+                'parent_telegram': '',
+                'is_valid': False,
+                'message': msg,
+            })
             continue
 
         group_raw = (
@@ -371,20 +531,57 @@ def student_import(request):
             or ''
         ).lower().strip() in ('true', '1', 'yes', 'да', 'ha')
 
-        Student.objects.create(
-            company=company,
-            branch=branch,
-            group=group,
-            first_name=first_name,
-            last_name=last_name,
-            phone=phone,
-            status=status,
-            balance=balance,
-            school=school,
-            telegram=telegram,
-            parent_telegram=parent_telegram,
-            paid_this_month=paid_this_month,
-        )
+        if len(phone) == 9 and phone.isdigit():
+            formatted_phone = f"+998 ({phone[:2]}) {phone[2:5]}-{phone[5:7]}-{phone[7:9]}"
+        elif len(phone) == 12 and phone.startswith('998') and phone.isdigit():
+            formatted_phone = f"+998 ({phone[3:5]}) {phone[5:8]}-{phone[8:10]}-{phone[10:12]}"
+        else:
+            formatted_phone = phone
+
+        preview_rows.append({
+            'row': row_num,
+            'first_name': first_name,
+            'last_name': last_name,
+            'full_name': f"{first_name} {last_name}".strip(),
+            'phone': phone,
+            'formatted_phone': formatted_phone,
+            'branch_name': branch.name if branch else 'Основной',
+            'group_name': group.name if group else (str(group_raw) if group_raw else '—'),
+            'status_label': status_label_map.get(status, 'Активный'),
+            'balance': balance,
+            'school': school or '—',
+            'parent_telegram': parent_telegram or '—',
+            'is_valid': True,
+            'message': '',
+        })
+
+        valid_students_to_create.append({
+            'company': company,
+            'branch': branch,
+            'group': group,
+            'first_name': first_name,
+            'last_name': last_name,
+            'phone': phone,
+            'status': status,
+            'balance': balance,
+            'school': school,
+            'telegram': telegram,
+            'parent_telegram': parent_telegram,
+            'paid_this_month': paid_this_month,
+        })
+
+    if dry_run:
+        return ok({
+            'dry_run': True,
+            'total': len(preview_rows),
+            'valid': len([r for r in preview_rows if r['is_valid']]),
+            'skipped': len([r for r in preview_rows if not r['is_valid']]),
+            'errors': errors,
+            'rows': preview_rows,
+        })
+
+    for item in valid_students_to_create:
+        Student.objects.create(**item)
         created += 1
 
     return ok(_import_result(created, skipped, errors))

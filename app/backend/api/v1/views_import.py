@@ -213,39 +213,95 @@ def student_import(request):
 
     for row in rows:
         row_num = int(row.get('_row', 0))
+
+        # Direct lookups first
         first_name = (
             row.get('first_name')
             or row.get('имя')
             or row.get('ism')
             or row.get('name', '').split(' ')[0]
             or row.get('фио', '').split(' ')[0]
+            or row.get('ф_и_о', '').split(' ')[0]
+            or row.get('fio', '').split(' ')[0]
+            or row.get('студент', '').split(' ')[0]
+            or row.get('ученик', '').split(' ')[0]
+            or row.get('student', '').split(' ')[0]
+            or row.get('учащийся', '').split(' ')[0]
+            or row.get('полное_имя', '').split(' ')[0]
         )
-        last_name = row.get('last_name') or row.get('фамилия') or row.get('familiya') or ''
-        if not last_name and (row.get('name') or row.get('фио')):
-            full = row.get('name') or row.get('фио') or ''
-            if ' ' in full:
-                parts = full.split(' ', 1)
-                first_name = first_name or parts[0]
-                last_name = parts[1] if len(parts) > 1 else ''
+        last_name = row.get('last_name') or row.get('фамилия') or row.get('familiya') or row.get('surname') or ''
+
+        # Fuzzy search for name if not found directly
+        if not first_name:
+            for k, v in row.items():
+                if k.startswith('_'):
+                    continue
+                if any(tag in k for tag in ('имя', 'фио', 'fio', 'name', 'студент', 'ученик', 'student', 'учащ')):
+                    first_name = str(v).strip()
+                    break
+
+        if not last_name:
+            for fio_key in ('name', 'фио', 'ф_и_о', 'fio', 'студент', 'ученик', 'student', 'учащийся', 'полное_имя'):
+                full = str(row.get(fio_key) or '').strip()
+                if ' ' in full:
+                    parts = full.split(' ', 1)
+                    first_name = parts[0]
+                    last_name = parts[1]
+                    break
+            if not last_name and ' ' in first_name:
+                parts = first_name.split(' ', 1)
+                first_name = parts[0]
+                last_name = parts[1]
 
         first_name = str(first_name or '').strip()
         last_name = str(last_name or '').strip()
+
         phone = normalize_phone(
             row.get('phone')
             or row.get('телефон')
             or row.get('номер')
+            or row.get('номер_телефона')
+            or row.get('тел')
+            or row.get('контакты')
+            or row.get('contact')
+            or row.get('моб')
+            or row.get('моб_тел')
             or row.get('telefon')
+            or row.get('tel')
             or ''
         )
 
+        # Fuzzy search for phone if not found directly
+        if len(phone) < 9:
+            for k, v in row.items():
+                if k.startswith('_'):
+                    continue
+                if any(tag in k for tag in ('тел', 'phone', 'номер', 'contact', 'контакт', 'моб', 'gsm')):
+                    cand = normalize_phone(str(v))
+                    if len(cand) >= 9:
+                        phone = cand
+                        break
+
+        # If still no phone, check all cell values for a 9-12 digit sequence
+        if len(phone) < 9:
+            for k, v in row.items():
+                if k.startswith('_'):
+                    continue
+                cand = normalize_phone(str(v))
+                if 9 <= len(cand) <= 13:
+                    phone = cand
+                    break
+
+        full_check = f"{first_name} {last_name}".lower()
+        if any(tag in full_check for tag in ('итого', 'всего', 'total', 'summary', 'jami')):
+            continue
+
         if not first_name:
-            skipped += 1
-            errors.append({'row': row_num, 'message': 'First name is required'})
             continue
 
         if len(phone) < 9:
             skipped += 1
-            errors.append({'row': row_num, 'message': 'Phone must contain at least 9 digits'})
+            errors.append({'row': row_num, 'message': f'Valid phone number missing for "{first_name}"'})
             continue
 
         branch_raw = (

@@ -1,4 +1,4 @@
-"""CSV parsing helpers for import endpoints."""
+"""CSV and Excel parsing helpers for import endpoints."""
 
 from __future__ import annotations
 
@@ -7,11 +7,25 @@ import io
 
 
 def normalize_header(key: str) -> str:
-    return key.strip().lower().replace(' ', '_').replace('-', '_')
+    cleaned = str(key or '').strip().lower().replace(' ', '_').replace('-', '_').replace('.', '')
+    for ch in '():;,/"\'#№':
+        cleaned = cleaned.replace(ch, '')
+    return cleaned.strip('_')
 
 
 def normalize_phone(raw: str) -> str:
-    return ''.join(ch for ch in str(raw or '') if ch.isdigit())
+    s = str(raw or '').strip()
+    for sep in ('/', ',', ';', '\n', '|'):
+        if sep in s:
+            s = s.split(sep)[0]
+    return ''.join(ch for ch in s if ch.isdigit())
+
+
+KNOWN_HEADER_MARKERS = {
+    'имя', 'first_name', 'name', 'фио', 'fio', 'телефон', 'phone', 'tel', 'тел',
+    'номер', 'номер_телефона', 'студент', 'ученик', 'student', 'фамилия', 'last_name',
+    'ism', 'familiya', 'telefon',
+}
 
 
 def parse_csv_upload(uploaded_file) -> tuple[list[dict[str, str]], str | None]:
@@ -28,6 +42,24 @@ def parse_csv_upload(uploaded_file) -> tuple[list[dict[str, str]], str | None]:
         return _parse_csv(uploaded_file)
 
 
+def _find_header_row_xlsx(sheet, max_scan: int = 15) -> tuple[int, list[str]]:
+    # First pass: search for known column names in rows with at least 2 non-empty cells
+    for row_idx, row in enumerate(sheet.iter_rows(min_row=1, max_row=max_scan, values_only=True), start=1):
+        cells = [normalize_header(str(c or '')) for c in row if c is not None and str(c).strip()]
+        if len(cells) >= 2 and any(any(m in c for m in KNOWN_HEADER_MARKERS) for c in cells):
+            headers = [normalize_header(str(c or '')) if c is not None else '' for c in row]
+            return row_idx, headers
+
+    # Fallback: first row with at least 2 non-empty columns
+    for row_idx, row in enumerate(sheet.iter_rows(min_row=1, max_row=max_scan, values_only=True), start=1):
+        non_empty = [c for c in row if c is not None and str(c).strip()]
+        if len(non_empty) >= 2:
+            headers = [normalize_header(str(c or '')) if c is not None else '' for c in row]
+            return row_idx, headers
+
+    return 1, []
+
+
 def _parse_xlsx(uploaded_file) -> tuple[list[dict[str, str]], str | None]:
     try:
         import openpyxl
@@ -36,16 +68,12 @@ def _parse_xlsx(uploaded_file) -> tuple[list[dict[str, str]], str | None]:
         if not sheet:
             return [], 'Excel sheet is empty'
 
-        headers: list[str] = []
-        for cell in sheet[1]:
-            val = str(cell.value or '').strip()
-            headers.append(normalize_header(val) if val else '')
-
+        header_row_idx, headers = _find_header_row_xlsx(sheet)
         if not any(headers):
             return [], 'Header row is missing in Excel file'
 
         rows: list[dict[str, str]] = []
-        for line_number, row_cells in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
+        for line_number, row_cells in enumerate(sheet.iter_rows(min_row=header_row_idx + 1, values_only=True), start=header_row_idx + 1):
             normalized: dict[str, str] = {}
             has_value = False
             for header, val in zip(headers, row_cells):
@@ -71,6 +99,23 @@ def _parse_xlsx(uploaded_file) -> tuple[list[dict[str, str]], str | None]:
         return [], f'Could not read Excel (.xlsx) file: {e}'
 
 
+def _find_header_row_xls(sheet, max_scan: int = 15) -> tuple[int, list[str]]:
+    limit = min(max_scan, sheet.nrows)
+    for row_idx in range(limit):
+        cells = [normalize_header(str(sheet.cell_value(row_idx, c) or '')) for c in range(sheet.ncols) if str(sheet.cell_value(row_idx, c)).strip()]
+        if len(cells) >= 2 and any(any(m in c for m in KNOWN_HEADER_MARKERS) for c in cells):
+            headers = [normalize_header(str(sheet.cell_value(row_idx, c) or '')) for c in range(sheet.ncols)]
+            return row_idx, headers
+
+    for row_idx in range(limit):
+        non_empty = [c for c in range(sheet.ncols) if str(sheet.cell_value(row_idx, c)).strip()]
+        if len(non_empty) >= 2:
+            headers = [normalize_header(str(sheet.cell_value(row_idx, c) or '')) for c in range(sheet.ncols)]
+            return row_idx, headers
+
+    return 0, []
+
+
 def _parse_xls(uploaded_file) -> tuple[list[dict[str, str]], str | None]:
     try:
         import xlrd
@@ -80,12 +125,12 @@ def _parse_xls(uploaded_file) -> tuple[list[dict[str, str]], str | None]:
         if sheet.nrows < 1:
             return [], 'Excel sheet is empty'
 
-        headers = [normalize_header(str(sheet.cell_value(0, col)).strip()) for col in range(sheet.ncols)]
+        header_row_idx, headers = _find_header_row_xls(sheet)
         if not any(headers):
             return [], 'Header row is missing in Excel file'
 
         rows: list[dict[str, str]] = []
-        for line_number in range(1, sheet.nrows):
+        for line_number in range(header_row_idx + 1, sheet.nrows):
             normalized = {}
             has_value = False
             for col, header in enumerate(headers):
@@ -130,15 +175,25 @@ def _parse_csv(uploaded_file) -> tuple[list[dict[str, str]], str | None]:
     if not content.strip():
         return [], 'CSV file is empty'
 
-    first_line = content.splitlines()[0] if content.splitlines() else ''
+    lines = content.splitlines()
+    first_line = lines[0] if lines else ''
     delimiter = ';' if ';' in first_line and first_line.count(';') > first_line.count(',') else ','
 
-    reader = csv.DictReader(io.StringIO(content), delimiter=delimiter)
+    # Find header row if title comments appear on first lines
+    header_idx = 0
+    for idx, line in enumerate(lines[:10]):
+        cleaned_line = line.lower()
+        if any(marker in cleaned_line for marker in KNOWN_HEADER_MARKERS):
+            header_idx = idx
+            break
+
+    csv_body = '\n'.join(lines[header_idx:])
+    reader = csv.DictReader(io.StringIO(csv_body), delimiter=delimiter)
     if not reader.fieldnames:
         return [], 'CSV header row is missing'
 
     rows: list[dict[str, str]] = []
-    for line_number, raw_row in enumerate(reader, start=2):
+    for line_number, raw_row in enumerate(reader, start=header_idx + 2):
         normalized: dict[str, str] = {}
         has_value = False
         for key, value in raw_row.items():

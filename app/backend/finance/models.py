@@ -9,8 +9,16 @@ class Payment(models.Model):
         TRANSFER = 'transfer', 'Transfer'
 
     company = models.ForeignKey('org.Company', on_delete=models.CASCADE, related_name='payments')
+    student = models.ForeignKey(
+        'crm.Student',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='payments',
+    )
     student_name = models.CharField(max_length=255)
     amount = models.IntegerField()
+    months_covered = models.PositiveIntegerField(default=1)
     method = models.CharField(max_length=20, choices=Method.choices, default=Method.CASH)
     teacher_name = models.CharField(max_length=255, blank=True)
     comment = models.TextField(blank=True)

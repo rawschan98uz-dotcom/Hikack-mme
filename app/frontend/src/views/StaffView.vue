@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
 
 import client, { type ApiEnvelope } from '../api/client';
@@ -29,6 +29,11 @@ const showImportModal = ref(false);
 
 const auth = useAuthStore();
 const canImportStaff = computed(() => auth.can(PERM.STAFF_WRITE));
+const canDeleteStaff = computed(() => {
+  if (!auth.isCeo) return false;
+  if (!detailStaff.value) return false;
+  return detailStaff.value.id !== auth.user?.id;
+});
 
 const form = reactive({
   first_name: '',
@@ -37,6 +42,29 @@ const form = reactive({
   job_title: '',
   password: '',
 });
+
+const searchQuery = ref('');
+
+const filteredRows = computed(() => {
+  const q = searchQuery.value.trim().toLowerCase();
+  if (!q) return rows.value;
+  const digits = q.replace(/\D/g, '');
+  return rows.value.filter((row) => {
+    const nameMatch =
+      row.name?.toLowerCase().includes(q) ||
+      row.first_name?.toLowerCase().includes(q) ||
+      row.last_name?.toLowerCase().includes(q);
+    const jobMatch =
+      (row.job_title && row.job_title.toLowerCase().includes(q)) ||
+      (row.role && row.role.toLowerCase().includes(q));
+    const phoneDigits = (row.phone || '').replace(/\D/g, '');
+    const phoneMatch = digits ? phoneDigits.includes(digits) : row.phone?.toLowerCase().includes(q);
+    return Boolean(nameMatch || jobMatch || phoneMatch);
+  });
+});
+
+const quantity = computed(() => filteredRows.value.length);
+const totalQuantity = computed(() => rows.value.length);
 
 const isReadOnly = computed(() => Boolean(detailStaff.value && !editingStaff.value));
 const panelTitle = computed(() => {
@@ -131,7 +159,7 @@ async function submitForm() {
 }
 
 async function deleteStaff() {
-  if (!detailStaff.value || !window.confirm('Delete this staff member?')) return;
+  if (!canDeleteStaff.value || !detailStaff.value || !window.confirm('Delete this staff member?')) return;
   deleting.value = true;
   try {
     await client.delete(`/user/staff/${detailStaff.value.id}`);
@@ -147,8 +175,13 @@ onMounted(loadRows);
 
 <template>
   <div class="space-y-4">
-    <div class="flex items-center justify-between">
-      <h1 class="text-xl font-semibold text-fb-text">Staff</h1>
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <div class="flex items-baseline gap-3">
+        <h1 class="text-xl font-semibold text-fb-text">Staff</h1>
+        <span v-if="!loading" class="text-sm text-fb-secondary">
+          Quantity — {{ quantity }}<span v-if="searchQuery.trim() && totalQuantity !== quantity"> (of {{ totalQuantity }})</span>
+        </span>
+      </div>
       <div class="flex gap-2">
         <button
           v-if="canImportStaff"
@@ -164,9 +197,25 @@ onMounted(loadRows);
       </div>
     </div>
 
+    <!-- Instant search bar -->
+    <div class="relative w-full max-w-md">
+      <input
+        v-model="searchQuery"
+        type="search"
+        placeholder="Search by name, phone, or job title…"
+        class="w-full h-11 pl-10 pr-4 rounded-xl border border-fb-line bg-fb-card text-[15px] focus:outline-none focus:border-fb-blue"
+      />
+      <svg class="absolute left-3.5 top-3 text-fb-secondary" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="11" cy="11" r="8" />
+        <path d="M21 21l-4.35-4.35" />
+      </svg>
+    </div>
+
     <div class="overflow-hidden rounded-xl border border-fb-line bg-fb-card">
       <div v-if="loading" class="p-8 text-center text-fb-secondary">Loading…</div>
-      <div v-else-if="!rows.length" class="p-8 text-center text-fb-icon">No staff</div>
+      <div v-else-if="!filteredRows.length" class="p-8 text-center text-fb-icon">
+        {{ rows.length ? 'No staff members match your search.' : 'No staff' }}
+      </div>
       <table v-else class="w-full text-base">
         <thead class="border-b bg-fb-canvas">
           <tr>
@@ -176,7 +225,7 @@ onMounted(loadRows);
           </tr>
         </thead>
         <tbody>
-          <tr v-for="row in rows" :key="row.id" class="cursor-pointer border-b hover:bg-fb-hover/40" @click="openDetail(row.id)">
+          <tr v-for="row in filteredRows" :key="row.id" class="cursor-pointer border-b hover:bg-fb-hover/40" @click="openDetail(row.id)">
             <td class="px-5 py-4">{{ row.name }}</td>
             <td class="px-5 py-4">{{ row.job_title }}</td>
             <td class="px-5 py-4">{{ row.phone }}</td>
@@ -220,7 +269,7 @@ onMounted(loadRows);
           <div class="flex gap-2 border-t px-6 py-4">
             <template v-if="isReadOnly && detailStaff">
               <button type="button" class="rounded-lg bg-fb-blue px-5 py-2 text-sm text-white" @click="startEdit">Edit</button>
-              <button type="button" class="rounded-lg border border-red-300 px-5 py-2 text-sm text-fb-danger" :disabled="deleting" @click="deleteStaff">Delete</button>
+              <button v-if="canDeleteStaff" type="button" class="rounded-lg border border-red-300 px-5 py-2 text-sm text-fb-danger" :disabled="deleting" @click="deleteStaff">Delete</button>
             </template>
             <button v-else type="submit" class="rounded-lg bg-fb-blue px-5 py-2 text-sm text-white" :disabled="saving">
               {{ saving ? 'Saving…' : editingStaff ? 'Save' : 'Create' }}

@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
 
 import { useAuthStore } from '../stores/auth';
@@ -120,16 +120,6 @@ onMounted(async () => {
         >
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4L16.5 3.5z" />
-          </svg>
-        </button>
-        <button
-          type="button"
-          disabled
-          title="Delete account (disabled)"
-          class="flex h-11 w-11 cursor-not-allowed items-center justify-center rounded-full bg-fb-danger text-white opacity-60"
-        >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M4 7h16M9 7V5h6v2M7 7l1 14h8l1-14" />
           </svg>
         </button>
       </div>

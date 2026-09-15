@@ -1,5 +1,5 @@
 ﻿<script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref , watch} from 'vue';
 
 import client, { type ApiEnvelope } from '../api/client';
 
@@ -206,6 +206,19 @@ onMounted(async () => {
   await loadStaff();
   await loadRows();
 });
+
+let searchDebounce: ReturnType<typeof setTimeout> | null = null;
+watch(
+  () => filters.q,
+  (newQ, oldQ) => {
+    if (newQ === oldQ) return;
+    if (searchDebounce) clearTimeout(searchDebounce);
+    searchDebounce = setTimeout(() => {
+      loadRows();
+    }, 400);
+  },
+);
+
 </script>
 
 <template>

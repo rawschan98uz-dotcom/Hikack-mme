@@ -1,5 +1,5 @@
-﻿<script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
+<script setup lang="ts">
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 
 import client, { type ApiEnvelope } from '../api/client';
 
@@ -35,6 +35,36 @@ const formError = ref('');
 const editingRow = ref<SalaryRow | null>(null);
 const detailRow = ref<SalaryRow | null>(null);
 const filters = reactive({ q: '' });
+
+const filteredRows = computed(() => {
+  const q = filters.q.trim().toLowerCase();
+  if (!q) return rows.value;
+  return rows.value.filter((r) => {
+    return (
+      r.teacher?.toLowerCase().includes(q) ||
+      r.teacher_name?.toLowerCase().includes(q) ||
+      r.course?.toLowerCase().includes(q) ||
+      r.course_name?.toLowerCase().includes(q) ||
+      r.group?.toLowerCase().includes(q) ||
+      r.group_name?.toLowerCase().includes(q) ||
+      r.salary_type?.toLowerCase().includes(q) ||
+      r.salary_type_label?.toLowerCase().includes(q) ||
+      r.calc_setting?.toLowerCase().includes(q)
+    );
+  });
+});
+
+let salarySearchDebounce: ReturnType<typeof setTimeout> | null = null;
+watch(
+  () => filters.q,
+  () => {
+    if (salarySearchDebounce) clearTimeout(salarySearchDebounce);
+    salarySearchDebounce = setTimeout(() => {
+      void loadRows();
+    }, 400);
+  },
+);
+
 const form = reactive({
   teacher_name: '',
   salary_type: 'fixed' as (typeof SALARY_TYPES)[number]['value'],
@@ -48,7 +78,7 @@ const panelTitle = computed(() =>
   editingRow.value ? 'Edit salary setting' : detailRow.value ? 'Salary details' : 'Add salary setting',
 );
 const tableRows = computed(() =>
-  rows.value.map((r) => ({
+  filteredRows.value.map((r) => ({
     id: r.id,
     calc_setting: r.calc_setting,
     salary_type: r.salary_type_label,
@@ -118,10 +148,28 @@ function closePanel() {
   resetForm();
 }
 
+interface TeacherOption {
+  id: number;
+  name: string;
+}
+
+const teachers = ref<TeacherOption[]>([]);
+
+async function loadTeachers() {
+  try {
+    const { data } = await client.get<ApiEnvelope<{ id: number; name: string }[]>>('/user', {
+      params: { user_type: 'teacher' },
+    });
+    teachers.value = data.data.map((t) => ({ id: t.id, name: t.name }));
+  } catch {
+    // fallback
+  }
+}
+
 async function submitForm() {
   formError.value = '';
-  if (!form.amount && form.salary_type === 'fixed') {
-    formError.value = 'Enter amount';
+  if (!form.teacher_name.trim()) {
+    formError.value = 'Teacher name is required';
     return;
   }
   saving.value = true;
@@ -140,8 +188,8 @@ async function submitForm() {
     }
     closePanel();
     await loadRows();
-  } catch {
-    formError.value = 'Could not save';
+  } catch (err: any) {
+    formError.value = err.response?.data?.message || err.response?.data?.error || 'Could not save';
   } finally {
     saving.value = false;
   }
@@ -159,29 +207,50 @@ async function deleteRow() {
   }
 }
 
-onMounted(loadRows);
+onMounted(async () => {
+  await Promise.all([loadRows(), loadTeachers()]);
+});
 </script>
 
 <template>
   <div class="space-y-4">
     <div class="flex flex-wrap items-center justify-between gap-3">
-      <h1 class="text-xl font-semibold text-fb-text">Salaries</h1>
+      <div class="flex items-baseline gap-3">
+        <h1 class="text-xl font-semibold text-fb-text">Salaries</h1>
+        <span v-if="!loading" class="text-sm text-fb-secondary">
+          Quantity — {{ tableRows.length }}<span v-if="filters.q.trim() && rows.length !== tableRows.length"> (of {{ rows.length }})</span>
+        </span>
+      </div>
       <button type="button" class="rounded-lg bg-fb-blue px-4 py-2 text-sm font-medium text-white" @click="openCreate">
         + Add setting
       </button>
     </div>
 
     <div class="flex flex-wrap items-end gap-3 rounded-xl border border-fb-line bg-fb-card p-4">
-      <div class="min-w-[220px] flex-1">
-        <label class="mb-1 block text-xs text-fb-secondary">Search teacher / course / group</label>
-        <input v-model="filters.q" type="search" class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm" @keydown.enter="loadRows" />
+      <div class="min-w-[240px] flex-1">
+        <label class="mb-1 block text-xs text-fb-secondary">Search</label>
+        <div class="relative">
+          <input
+            v-model="filters.q"
+            type="search"
+            placeholder="Search by teacher, course, group, or salary type…"
+            class="w-full h-10 pl-9 pr-4 rounded-lg border border-fb-line text-sm focus:outline-none focus:border-fb-blue"
+            @keydown.enter="loadRows"
+          />
+          <svg class="absolute left-3 top-2.5 text-fb-secondary" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="8" />
+            <path d="M21 21l-4.35-4.35" />
+          </svg>
+        </div>
       </div>
       <button type="button" class="rounded-lg border border-fb-line px-4 py-2 text-sm" @click="loadRows">Apply</button>
     </div>
 
     <div class="overflow-hidden rounded-xl border border-fb-line bg-fb-card">
       <div v-if="loading" class="p-8 text-center text-fb-secondary">Loading…</div>
-      <div v-else-if="!tableRows.length" class="p-8 text-center text-fb-icon">No salary settings</div>
+      <div v-else-if="!tableRows.length" class="p-8 text-center text-fb-icon">
+        {{ rows.length ? 'No salary settings match your search.' : 'No salary settings' }}
+      </div>
       <table v-else class="w-full text-base">
         <thead class="border-b bg-fb-canvas">
           <tr>
@@ -220,7 +289,21 @@ onMounted(loadRows);
           <div class="flex-1 space-y-4 overflow-y-auto p-6">
             <div>
               <label class="mb-1 block text-sm font-medium">Teacher</label>
-              <input v-model="form.teacher_name" :readonly="isReadOnly" class="w-full rounded-lg border px-3 py-2 read-only:bg-fb-canvas" />
+              <select
+                v-if="!isReadOnly && teachers.length"
+                v-model="form.teacher_name"
+                class="w-full rounded-lg border px-3 py-2"
+              >
+                <option value="">Select teacher</option>
+                <option v-for="t in teachers" :key="t.id" :value="t.name">{{ t.name }}</option>
+              </select>
+              <input
+                v-else
+                v-model="form.teacher_name"
+                :readonly="isReadOnly"
+                placeholder="Teacher name"
+                class="w-full rounded-lg border px-3 py-2 read-only:bg-fb-canvas"
+              />
             </div>
             <div>
               <label class="mb-1 block text-sm font-medium">Salary type</label>

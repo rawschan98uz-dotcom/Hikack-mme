@@ -27,7 +27,7 @@ from api.utils import (
 from crm.models import Course, Group, Lead, Student
 from finance.models import Payment
 from operations import notify as notifications
-from operations.models import Reminder, Tag
+from operations.models import ActivityLog, Reminder, Tag
 from org.models import Branch, Company, Room
 
 SCHEDULE_DAY_KEYS = {
@@ -77,11 +77,19 @@ def _normalize_phone(phone: str) -> str:
 def _serialize_lead(lead: Lead) -> dict:
     return {
         'id': lead.id,
+        'first_name': lead.first_name,
+        'last_name': lead.last_name,
         'full_name': lead.full_name,
         'phone': lead.phone,
+        'phone2': lead.phone2,
+        'address': lead.address,
+        'comment': lead.comment,
         'is_active': lead.is_active,
         'stage': lead.stage,
         'stage_label': lead.get_stage_display(),
+        'status': lead.stage,
+        'status_label': lead.get_stage_display(),
+        'trial_date': lead.trial_date.isoformat() if lead.trial_date else None,
         'created_at': lead.created_at.isoformat(),
     }
 
@@ -291,44 +299,112 @@ def _apply_group_fields(group: Group, company: Company, data: dict) -> str | Non
     return None
 
 
-def _apply_group_tags(group: Group, company: Company, data: dict) -> str | None:
-    if 'tag_ids' not in data:
-        return None
-    raw = data.get('tag_ids')
-    if raw in (None, ''):
-        group.tags.clear()
-        return None
-    ids = raw if isinstance(raw, list) else _parse_id_list(str(raw))
-    tags = list(Tag.objects.filter(pk__in=ids, company=company))
-    if len(tags) != len(set(ids)):
-        return 'Invalid tag'
-    group.tags.set(tags)
-    return None
 
 
-def _next_payment_date(student: Student):
+def _add_months(d: date, num_months: int) -> date:
     import calendar
+    year = d.year + (d.month - 1 + num_months) // 12
+    month = (d.month - 1 + num_months) % 12 + 1
+    max_day = calendar.monthrange(year, month)[1]
+    return date(year, month, min(d.day, max_day))
 
-    last = (
-        Payment.objects.filter(company=student.company, student_name=student.full_name)
-        .order_by('-created_at')
-        .first()
+
+def _get_student_payment_info(student: Student, info: dict | None = None) -> dict:
+    if info is None:
+        payments = Payment.objects.filter(
+            Q(company=student.company) &
+            (Q(student=student) | Q(student_name=student.full_name))
+        )
+        from django.db.models import Sum
+        months_covered = payments.aggregate(total=Sum('months_covered'))['total'] or 0
+        last = payments.order_by('-created_at').first()
+        first = payments.order_by('created_at').first()
+        last_date = timezone.localtime(last.created_at).date() if last else None
+        first_date = timezone.localtime(first.created_at).date() if first else None
+    else:
+        months_covered = info.get('months_covered', info.get('count', 0))
+        last_date = info.get('last_date')
+        first_date = info.get('first_date')
+
+    offset = getattr(student, 'payment_offset', 0) or 0
+    effective_count = max(0, months_covered - offset)
+    anchor_date = student.trial_date or first_date or student.created_at.date()
+    next_due = _add_months(anchor_date, effective_count)
+
+    today = timezone.localdate()
+    # A student is only a debtor if currently studying and next payment due date is in the past
+    is_debtor = (student.status == Student.Status.STUDYING) and (today > next_due)
+    overdue_days = (today - next_due).days if is_debtor else 0
+
+    return {
+        'last_payment_date': last_date,
+        'next_payment_date': next_due,
+        'is_debtor': is_debtor,
+        'overdue_days': overdue_days,
+        'paid_count': effective_count,
+    }
+
+
+def _company_payments_summary(company: Company) -> dict:
+    from django.db.models import Count, Max, Min, Sum
+    rows = (
+        Payment.objects.filter(company=company)
+        .values('student_id', 'student_name')
+        .annotate(
+            count=Count('id'),
+            total_months=Sum('months_covered'),
+            last_created=Max('created_at'),
+            first_created=Min('created_at'),
+        )
     )
-    if last is None:
-        return None, None
-    last_date = timezone.localtime(last.created_at).date()
-    year, month = (last_date.year + 1, 1) if last_date.month == 12 else (last_date.year, last_date.month + 1)
-    next_due = date(year, month, min(last_date.day, calendar.monthrange(year, month)[1]))
-    return last_date, next_due
+    summary = {}
+    for r in rows:
+        item = {
+            'count': r['count'],
+            'months_covered': r['total_months'] or r['count'],
+            'last_date': timezone.localtime(r['last_created']).date() if r['last_created'] else None,
+            'first_date': timezone.localtime(r['first_created']).date() if r['first_created'] else None,
+        }
+        if r['student_id']:
+            sid = r['student_id']
+            if sid in summary:
+                summary[sid]['count'] += item['count']
+                summary[sid]['months_covered'] += item['months_covered']
+                if item['last_date'] and (not summary[sid]['last_date'] or item['last_date'] > summary[sid]['last_date']):
+                    summary[sid]['last_date'] = item['last_date']
+                if item['first_date'] and (not summary[sid]['first_date'] or item['first_date'] < summary[sid]['first_date']):
+                    summary[sid]['first_date'] = item['first_date']
+            else:
+                summary[sid] = dict(item)
+        if r['student_name']:
+            sname = r['student_name']
+            if sname in summary:
+                summary[sname]['count'] += item['count']
+                summary[sname]['months_covered'] += item['months_covered']
+                if item['last_date'] and (not summary[sname]['last_date'] or item['last_date'] > summary[sname]['last_date']):
+                    summary[sname]['last_date'] = item['last_date']
+                if item['first_date'] and (not summary[sname]['first_date'] or item['first_date'] < summary[sname]['first_date']):
+                    summary[sname]['first_date'] = item['first_date']
+            else:
+                summary[sname] = dict(item)
+    return summary
 
 
-def _serialize_student(student: Student, *, detailed: bool = False) -> dict:
+def _serialize_student(student: Student, *, payment_info: dict | None = None, detailed: bool = False) -> dict:
+    p_info = payment_info or _get_student_payment_info(student)
+    last_payment_date = p_info['last_payment_date']
+    next_payment_date = p_info['next_payment_date']
+
     payload = {
         'id': student.id,
         'first_name': student.first_name,
         'last_name': student.last_name,
         'full_name': student.full_name,
         'phone': student.phone,
+        'phone2': student.phone2,
+        'address': student.address,
+        'comment': student.comment,
+        'lead_id': student.lead_id,
         # ✅ ИСПРАВЛЕНО: проверяем существование файла
         'photo': get_photo_url(student.photo),
         'school': student.school,
@@ -336,22 +412,29 @@ def _serialize_student(student: Student, *, detailed: bool = False) -> dict:
         'parent_telegram': student.parent_telegram,
         'status': student.status,
         'status_label': student.get_status_display(),
+        'trial_date': student.trial_date.isoformat() if student.trial_date else None,
         'balance': student.balance,
         'paid_this_month': student.paid_this_month,
+        'last_payment_date': (
+            last_payment_date.isoformat() if last_payment_date else None
+        ),
+        'next_payment_date': (
+            next_payment_date.isoformat() if next_payment_date else None
+        ),
+        'is_debtor': p_info['is_debtor'],
+        'overdue_days': p_info['overdue_days'],
+        'paid_count': p_info['paid_count'],
+        'payment_offset': student.payment_offset,
         'branch_id': student.branch_id,
         'branch': student.branch.name if student.branch_id else '—',
         'group_id': student.group_id,
         'group': student.group.name if student.group_id else None,
+        'group_teacher': student.group.teacher.display_name() if (student.group and student.group.teacher) else '',
+        'course_price': student.group.course.price if (student.group and student.group.course) else 0,
+        'course_name': student.group.course.name if (student.group and student.group.course) else '',
         'created_at': student.created_at.isoformat(),
     }
     if detailed:
-        last_payment_date, next_payment_date = _next_payment_date(student)
-        payload['last_payment_date'] = (
-            last_payment_date.isoformat() if last_payment_date else None
-        )
-        payload['next_payment_date'] = (
-            next_payment_date.isoformat() if next_payment_date else None
-        )
         payload['telegram_code'] = student.telegram_code
     return payload
 
@@ -366,6 +449,16 @@ def _apply_student_fields(student: Student, company: Company, data: dict) -> str
 
     if 'last_name' in data:
         student.last_name = str(data.get('last_name') or '').strip()
+
+    if 'phone2' in data or 'extra_phone' in data:
+        p2_raw = str(data.get('phone2') or data.get('extra_phone') or '').strip()
+        student.phone2 = normalize_phone(p2_raw) if p2_raw else ''
+
+    if 'address' in data:
+        student.address = str(data.get('address') or '').strip()
+
+    if 'comment' in data or 'notes' in data:
+        student.comment = str(data.get('comment') or data.get('notes') or '').strip()
 
     if 'school' in data:
         student.school = str(data.get('school') or '').strip()
@@ -384,12 +477,36 @@ def _apply_student_fields(student: Student, company: Company, data: dict) -> str
             return 'Phone must contain at least 9 digits'
         student.phone = phone
 
+    was_frozen = bool(student.pk and student.status == Student.Status.FROZEN)
     status = data.get('status')
     if status is not None:
         status = safe_int(status, default=None)
         if status is None or status not in VALID_STUDENT_STATUSES:
             return 'Invalid status'
+        if was_frozen and status == Student.Status.STUDYING:
+            current_payments_count = Payment.objects.filter(
+                company=company, student_name=student.full_name
+            ).count()
+            student.payment_offset = current_payments_count
+            if 'trial_date' in data:
+                student.trial_date = parse_date_safe(data.get('trial_date')) or timezone.localdate()
+            else:
+                student.trial_date = timezone.localdate()
         student.status = status
+    elif data.get('unfreeze'):
+        if was_frozen:
+            current_payments_count = Payment.objects.filter(
+                company=company, student_name=student.full_name
+            ).count()
+            student.payment_offset = current_payments_count
+            if 'trial_date' in data:
+                student.trial_date = parse_date_safe(data.get('trial_date')) or timezone.localdate()
+            else:
+                student.trial_date = timezone.localdate()
+            student.status = Student.Status.STUDYING
+
+    if 'payment_offset' in data:
+        student.payment_offset = max(0, safe_int(data.get('payment_offset'), default=0))
 
     if 'balance' in data:
         # ✅ ИСПРАВЛЕНО: safe_int с ограничениями
@@ -400,6 +517,9 @@ def _apply_student_fields(student: Student, company: Company, data: dict) -> str
 
     if 'paid_this_month' in data:
         student.paid_this_month = bool(data.get('paid_this_month'))
+
+    if 'trial_date' in data and not (was_frozen and student.status == Student.Status.STUDYING):
+        student.trial_date = parse_date_safe(data.get('trial_date'))
 
     branch_id = data.get('branch_id')
     if branch_id is not None:
@@ -637,15 +757,22 @@ def dashboard(request):
         ).select_related('assigned_to').order_by('due_date', 'id')[:8]
     ]
 
+    studying_students = students.filter(status=Student.Status.STUDYING)
+    payments_summary = _company_payments_summary(company)
+    debtors_count = sum(
+        1 for s in studying_students
+        if _get_student_payment_info(s, payments_summary.get(s.id) or payments_summary.get(s.full_name))['is_debtor']
+    )
+
     return ok({
         'active_leads': leads.count(),
-        'active_students': students.filter(status=Student.Status.ACTIVE).count(),
+        'active_students': studying_students.count(),
         'groups': groups.count(),
-        'debtors': students.filter(status=Student.Status.DEBTOR).count(),
-        'trial_students': students.filter(status=Student.Status.TRIAL).count(),
+        'debtors': debtors_count,
+        'trial_students': 0,
         'paid_during_month': students.filter(paid_this_month=True).count(),
-        'left_active_group': students.filter(status=Student.Status.LEFT_ACTIVE).count(),
-        'left_after_trial': students.filter(status=Student.Status.LEFT_TRIAL).count(),
+        'left_active_group': students.filter(status=Student.Status.LEFT).count(),
+        'left_after_trial': 0,
         'finance_chart': finance_chart,
         'schedule': schedule,
         'reminders': reminders,
@@ -708,8 +835,9 @@ def group_list(request):
 
         group = Group(company=company, branch=branch, name=name, days=days)
 
-        # Применяем остальные поля
-        error = _apply_group_fields(group, company, request.data)
+        # Применяем остальные поля (excluding name, branch_id, days — already validated above)
+        remaining_data = {k: v for k, v in request.data.items() if k not in ('name', 'branch_id', 'days')}
+        error = _apply_group_fields(group, company, remaining_data)
         if error:
             return fail(error)
 
@@ -897,8 +1025,10 @@ def student_list(request):
         if error:
             return fail(error)
         student.save()
+        # Clean up any existing lead with the same phone in this company
+        Lead.objects.filter(company=company, phone=student.phone).delete()
         student = Student.objects.select_related('group', 'branch').get(pk=student.pk)
-        return ok(_serialize_student(student), status_code=201)
+        return ok(_serialize_student(student, detailed=True), status_code=201)
 
     # GET
     qs = Student.objects.filter(company=company).select_related(
@@ -906,11 +1036,29 @@ def student_list(request):
     ).order_by('first_name', 'last_name')
     qs = filter_students_queryset(qs, request.user)
 
-    statuses = request.query_params.get('statuses')
-    if statuses:
-        status_val = safe_int(statuses, default=None)
-        if status_val is not None:
-            qs = qs.filter(status=status_val)
+    payments_summary = _company_payments_summary(company)
+
+    debtors_filter = (
+        request.query_params.get('debtors') == '1'
+        or request.query_params.get('statuses') in ('6', 'debtor', 'debtors')
+    )
+    if debtors_filter:
+        studying_students = list(qs.filter(status=Student.Status.STUDYING))
+        debtor_ids = [
+            s.id for s in studying_students
+            if _get_student_payment_info(s, payments_summary.get(s.id) or payments_summary.get(s.full_name))['is_debtor']
+        ]
+        qs = qs.filter(id__in=debtor_ids)
+    else:
+        statuses = request.query_params.get('statuses')
+        if statuses:
+            status_val = safe_int(statuses, default=None)
+            if status_val in (5, 6):
+                status_val = Student.Status.STUDYING
+            elif status_val == 7:
+                status_val = Student.Status.LEFT
+            if status_val is not None and status_val in VALID_STUDENT_STATUSES:
+                qs = qs.filter(status=status_val)
 
     branch_id = request.query_params.get('branch_id')
     if branch_id:
@@ -929,7 +1077,10 @@ def student_list(request):
         qs = qs.filter(
             Q(first_name__icontains=query)
             | Q(last_name__icontains=query)
-            | Q(phone__icontains=query),
+            | Q(phone__icontains=query)
+            | Q(phone2__icontains=query)
+            | Q(address__icontains=query)
+            | Q(comment__icontains=query),
         )
 
     # ✅ Пагинация
@@ -939,7 +1090,10 @@ def student_list(request):
         'count': page['count'],
         'has_more': page['has_more'],
         'next_offset': page['next_offset'],
-        'results': [_serialize_student(s) for s in page['results']],
+        'results': [
+            _serialize_student(s, payment_info=_get_student_payment_info(s, payments_summary.get(s.id) or payments_summary.get(s.full_name)))
+            for s in page['results']
+        ],
     })
 
 
@@ -973,7 +1127,7 @@ def student_detail(request, student_id: int):
         return fail(error)
     student.save()
     student = Student.objects.select_related('group', 'branch').get(pk=student.pk)
-    return ok(_serialize_student(student))
+    return ok(_serialize_student(student, detailed=True))
 
 
 @api_view(['GET'])
@@ -1052,25 +1206,47 @@ def lead_list(request):
         return ok([])
 
     if request.method == 'POST':
-        full_name = (request.data.get('full_name') or '').strip()
-        
+        first_name = (request.data.get('first_name') or '').strip()
+        last_name = (request.data.get('last_name') or '').strip()
+        if not first_name:
+            full_name = (request.data.get('full_name') or '').strip()
+            if full_name:
+                parts = full_name.split(None, 1)
+                first_name = parts[0]
+                last_name = parts[1] if len(parts) > 1 else ''
+            else:
+                return fail('First name is required')
+
         # ✅ ИСПРАВЛЕНО: нормализация
         phone = normalize_phone(request.data.get('phone') or '')
         
-        stage = (request.data.get('stage') or Lead.Stage.INCOMING).strip().lower()
+        stage_input = request.data.get('status') or request.data.get('stage') or Lead.Stage.TRIAL_BOOKED
+        stage = str(stage_input).strip().lower()
+        if stage in ('incoming', 'waiting', 'set'):
+            stage = Lead.Stage.TRIAL_BOOKED
 
-        if not full_name:
-            return fail('Lead name is required')
         if len(phone) < 9:
             return fail('Phone must contain at least 9 digits')
         if stage not in VALID_LEAD_STAGES:
-            return fail('Invalid lead stage')
+            return fail('Invalid lead status')
+
+        phone2_raw = str(request.data.get('phone2') or request.data.get('extra_phone') or '').strip()
+        phone2 = normalize_phone(phone2_raw) if phone2_raw else ''
+        address = str(request.data.get('address') or '').strip()
+        comment = str(request.data.get('comment') or request.data.get('notes') or '').strip()
+
+        trial_date = parse_date_safe(request.data.get('trial_date')) or timezone.localdate()
 
         lead = Lead.objects.create(
             company=company,
-            full_name=full_name,
+            first_name=first_name,
+            last_name=last_name,
             phone=phone,
+            phone2=phone2,
+            address=address,
+            comment=comment,
             stage=stage,
+            trial_date=trial_date,
             is_active=True,
         )
         return ok(_serialize_lead(lead), status_code=201)
@@ -1083,13 +1259,20 @@ def lead_list(request):
     elif archived != 'all':
         qs = qs.filter(is_active=True)
 
-    stage = request.query_params.get('stage')
+    stage = request.query_params.get('status') or request.query_params.get('stage')
     if stage and stage in VALID_LEAD_STAGES:
         qs = qs.filter(stage=stage)
 
     query = (request.query_params.get('q') or '').strip()
     if query:
-        qs = qs.filter(Q(full_name__icontains=query) | Q(phone__icontains=query))
+        qs = qs.filter(
+            Q(first_name__icontains=query)
+            | Q(last_name__icontains=query)
+            | Q(phone__icontains=query)
+            | Q(phone2__icontains=query)
+            | Q(address__icontains=query)
+            | Q(comment__icontains=query)
+        )
 
     # ✅ Пагинация
     page = paginate_queryset(qs, request, default_limit=200)
@@ -1117,16 +1300,28 @@ def lead_detail(request, lead_id: int):
     if request.method == 'GET':
         return ok(_serialize_lead(lead))
 
+    first_name = request.data.get('first_name')
+    last_name = request.data.get('last_name')
     full_name = request.data.get('full_name')
     phone = request.data.get('phone')
-    stage = request.data.get('stage')
+    stage = request.data.get('status') if 'status' in request.data else request.data.get('stage')
     is_active = request.data.get('is_active')
 
-    if full_name is not None:
+    if first_name is not None:
+        first_name = str(first_name).strip()
+        if not first_name:
+            return fail('First name is required')
+        lead.first_name = first_name
+    elif full_name is not None:
         full_name = str(full_name).strip()
         if not full_name:
-            return fail('Lead name is required')
-        lead.full_name = full_name
+            return fail('First name is required')
+        parts = full_name.split(None, 1)
+        lead.first_name = parts[0]
+        lead.last_name = parts[1] if len(parts) > 1 else ''
+
+    if last_name is not None:
+        lead.last_name = str(last_name).strip()
 
     if phone is not None:
         # ✅ Нормализация
@@ -1134,6 +1329,21 @@ def lead_detail(request, lead_id: int):
         if len(phone) < 9:
             return fail('Phone must contain at least 9 digits')
         lead.phone = phone
+
+    if 'phone2' in request.data or 'extra_phone' in request.data:
+        p2_raw = str(request.data.get('phone2') or request.data.get('extra_phone') or '').strip()
+        lead.phone2 = normalize_phone(p2_raw) if p2_raw else ''
+
+    if 'address' in request.data:
+        lead.address = str(request.data.get('address') or '').strip()
+
+    if 'comment' in request.data:
+        lead.comment = str(request.data.get('comment') or '').strip()
+    elif 'notes' in request.data:
+        lead.comment = str(request.data.get('notes') or '').strip()
+
+    if 'trial_date' in request.data:
+        lead.trial_date = parse_date_safe(request.data.get('trial_date'))
 
     if stage is not None:
         stage = str(stage).strip().lower()
@@ -1163,6 +1373,114 @@ def lead_archive(request, lead_id: int):
     lead.is_active = False
     lead.save(update_fields=['is_active'])
     return ok(_serialize_lead(lead))
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def lead_convert_to_student(request, lead_id: int):
+    company = request.user.company
+    if company is None:
+        return fail('Company not found', status_code=404)
+
+    try:
+        lead = Lead.objects.get(pk=lead_id, company=company)
+    except Lead.DoesNotExist:
+        return fail('Lead not found', status_code=404)
+
+    first_name = (request.data.get('first_name') or '').strip()
+    last_name = (request.data.get('last_name') or '').strip()
+    if not first_name:
+        first_name = lead.first_name
+        last_name = lead.last_name
+    if not first_name and lead.full_name:
+        parts = lead.full_name.strip().split(None, 1)
+        first_name = parts[0]
+        last_name = parts[1] if len(parts) > 1 else ''
+    if not first_name:
+        return fail('First name is required')
+
+    phone = normalize_phone(request.data.get('phone') or lead.phone or '')
+    if len(phone) < 9:
+        return fail('Phone must contain at least 9 digits')
+
+    phone2_raw = str(request.data.get('phone2') or lead.phone2 or '').strip()
+    phone2 = normalize_phone(phone2_raw) if phone2_raw else ''
+    address = str(request.data.get('address') or lead.address or '').strip()
+    comment = str(request.data.get('comment') or lead.comment or '').strip()
+
+    branch_id = request.data.get('branch_id')
+    if not branch_id:
+        branch = Branch.objects.filter(company=company).order_by('id').first()
+        if not branch:
+            return fail('No branch available in company')
+    else:
+        try:
+            branch = Branch.objects.get(pk=int(branch_id), company=company)
+        except (Branch.DoesNotExist, TypeError, ValueError):
+            return fail('Invalid branch')
+
+    group = None
+    group_id = request.data.get('group_id')
+    if group_id:
+        try:
+            group = Group.objects.get(pk=int(group_id), company=company)
+        except (Group.DoesNotExist, TypeError, ValueError):
+            return fail('Invalid group')
+
+    raw_status = request.data.get('status')
+    if raw_status is not None:
+        status = safe_int(raw_status, default=Student.Status.STUDYING)
+        if status in (5, 6):
+            status = Student.Status.STUDYING
+        elif status == 7:
+            status = Student.Status.LEFT
+        elif status not in VALID_STUDENT_STATUSES:
+            status = Student.Status.STUDYING
+    else:
+        status = Student.Status.STUDYING
+
+    school = str(request.data.get('school') or '').strip()
+    telegram = str(request.data.get('telegram') or '').strip()
+    parent_telegram = str(request.data.get('parent_telegram') or '').strip()
+    trial_date = parse_date_safe(request.data.get('trial_date')) or lead.trial_date
+
+    student = Student.objects.create(
+        company=company,
+        branch=branch,
+        group=group,
+        lead=None,
+        first_name=first_name,
+        last_name=last_name,
+        phone=phone,
+        phone2=phone2,
+        address=address,
+        comment=comment,
+        school=school,
+        telegram=telegram,
+        parent_telegram=parent_telegram,
+        status=status,
+        trial_date=trial_date,
+    )
+
+    lead_name = lead.full_name or f'{first_name} {last_name}'.strip()
+    lead_id_val = lead.id
+    lead.delete()
+
+    try:
+        ActivityLog.objects.create(
+            company=company,
+            action=f'Lead "{lead_name}" converted to student',
+            actor_name=request.user.display_name(),
+        )
+    except Exception:
+        pass
+
+    student = Student.objects.select_related('group', 'branch').get(pk=student.pk)
+    return ok({
+        'student': _serialize_student(student, detailed=True),
+        'lead_id': lead_id_val,
+        'converted': True,
+    }, status_code=201)
 
 
 def _serialize_course(course: Course) -> dict:

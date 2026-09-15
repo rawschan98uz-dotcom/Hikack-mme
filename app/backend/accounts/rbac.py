@@ -15,6 +15,7 @@ PERM_LEADS_WRITE = 'leads.write'
 
 PERM_TEACHERS_VIEW = 'teachers.view'
 PERM_TEACHERS_WRITE = 'teachers.write'
+PERM_TEACHERS_DELETE = 'teachers.delete'
 
 PERM_GROUPS_VIEW = 'groups.view'
 PERM_GROUPS_WRITE = 'groups.write'
@@ -47,6 +48,7 @@ PERM_SETTINGS_GRADE = 'settings.grade'
 
 PERM_STAFF_VIEW = 'staff.view'
 PERM_STAFF_WRITE = 'staff.write'
+PERM_STAFF_DELETE = 'staff.delete'
 
 PERM_COURSES_VIEW = 'courses.view'
 PERM_COURSES_WRITE = 'courses.write'
@@ -78,6 +80,7 @@ ALL_PERMISSIONS: frozenset[str] = frozenset(
         PERM_LEADS_WRITE,
         PERM_TEACHERS_VIEW,
         PERM_TEACHERS_WRITE,
+        PERM_TEACHERS_DELETE,
         PERM_GROUPS_VIEW,
         PERM_GROUPS_WRITE,
         PERM_GROUPS_EXPORT,
@@ -100,6 +103,7 @@ ALL_PERMISSIONS: frozenset[str] = frozenset(
         PERM_SETTINGS_GRADE,
         PERM_STAFF_VIEW,
         PERM_STAFF_WRITE,
+        PERM_STAFF_DELETE,
         PERM_COURSES_VIEW,
         PERM_COURSES_WRITE,
         PERM_ROOMS_VIEW,

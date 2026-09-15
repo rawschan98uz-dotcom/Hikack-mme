@@ -1,5 +1,5 @@
 ﻿<script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref , watch} from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 
 import client, { type ApiEnvelope } from '../api/client';
@@ -120,6 +120,19 @@ onMounted(async () => {
   await loadMeta();
   await loadRows();
 });
+
+let searchDebounce: ReturnType<typeof setTimeout> | null = null;
+watch(
+  () => filters.q,
+  (newQ, oldQ) => {
+    if (newQ === oldQ) return;
+    if (searchDebounce) clearTimeout(searchDebounce);
+    searchDebounce = setTimeout(() => {
+      loadRows();
+    }, 400);
+  },
+);
+
 </script>
 
 <template>

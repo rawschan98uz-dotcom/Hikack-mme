@@ -1,5 +1,5 @@
-﻿<script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
+<script setup lang="ts">
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 
 import client, { type ApiEnvelope } from '../api/client';
 import { useAuthStore } from '../stores/auth';
@@ -46,12 +46,44 @@ const filters = reactive({
   date_to: '',
 });
 
+const filteredRows = computed(() => {
+  const q = filters.q.trim().toLowerCase();
+  if (!q) return rows.value;
+  const digits = q.replace(/\D/g, '');
+  return rows.value.filter((row) => {
+    const nameMatch = row.name?.toLowerCase().includes(q);
+    const phoneDigits = (row.phone || '').replace(/\D/g, '');
+    const phoneMatch = digits ? phoneDigits.includes(digits) : row.phone?.toLowerCase().includes(q);
+    const roleMatch = row.roles?.toLowerCase().includes(q);
+    const reasonMatch = row.reason?.toLowerCase().includes(q);
+    return Boolean(nameMatch || phoneMatch || roleMatch || reasonMatch);
+  });
+});
+
+let archiveSearchDebounce: ReturnType<typeof setTimeout> | null = null;
+watch(
+  () => filters.q,
+  () => {
+    if (archiveSearchDebounce) clearTimeout(archiveSearchDebounce);
+    archiveSearchDebounce = setTimeout(() => {
+      void loadRows();
+    }, 400);
+  },
+);
+
+watch(
+  () => [filters.role, filters.reason, filters.date_from, filters.date_to] as const,
+  () => {
+    void loadRows();
+  },
+);
+
 const allSelected = computed(
-  () => rows.value.length > 0 && selectedIds.value.length === rows.value.length,
+  () => filteredRows.value.length > 0 && selectedIds.value.length === filteredRows.value.length,
 );
 
 function toggleAll() {
-  selectedIds.value = allSelected.value ? [] : rows.value.map((row) => row.id);
+  selectedIds.value = allSelected.value ? [] : filteredRows.value.map((row) => row.id);
 }
 
 function toggleRow(id: number) {
@@ -130,7 +162,9 @@ onMounted(async () => {
     <div class="flex flex-wrap items-center justify-between gap-3">
       <h1 class="text-xl font-semibold text-fb-text">
         Archive
-        <span class="ml-2 text-base font-normal text-fb-secondary">Quantity — {{ quantity }}</span>
+        <span class="ml-2 text-base font-normal text-fb-secondary">
+          Quantity — {{ filteredRows.length }}<span v-if="filters.q.trim() && rows.length !== filteredRows.length"> (of {{ quantity }})</span>
+        </span>
       </h1>
       <button
         type="button"
@@ -143,9 +177,21 @@ onMounted(async () => {
 
     <div class="space-y-3 rounded-xl border border-fb-line bg-fb-card p-4">
       <div class="flex flex-wrap items-end gap-3">
-        <div class="min-w-[180px] flex-1">
-          <label class="mb-1 block text-xs text-fb-secondary">Name or Phone</label>
-          <input v-model="filters.q" type="search" class="w-full rounded-lg border px-3 py-2 text-sm" @keydown.enter="loadRows" />
+        <div class="min-w-[220px] flex-1">
+          <label class="mb-1 block text-xs text-fb-secondary">Search</label>
+          <div class="relative">
+            <input
+              v-model="filters.q"
+              type="search"
+              placeholder="Search by name, phone, role, reason…"
+              class="w-full h-10 pl-9 pr-4 rounded-lg border px-3 py-2 text-sm focus:outline-none focus:border-fb-blue"
+              @keydown.enter="loadRows"
+            />
+            <svg class="absolute left-3 top-2.5 text-fb-secondary" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="8" />
+              <path d="M21 21l-4.35-4.35" />
+            </svg>
+          </div>
         </div>
         <div>
           <label class="mb-1 block text-xs text-fb-secondary">Filter by role</label>
@@ -202,7 +248,9 @@ onMounted(async () => {
 
     <div class="overflow-hidden rounded-xl border border-fb-line bg-fb-card">
       <div v-if="loading" class="p-8 text-center text-fb-secondary">Loading…</div>
-      <div v-else-if="!rows.length" class="p-8 text-center text-fb-icon">No Data</div>
+      <div v-else-if="!filteredRows.length" class="p-8 text-center text-fb-icon">
+        {{ rows.length ? 'No archive records match your search.' : 'No Data' }}
+      </div>
       <table v-else class="w-full text-sm">
         <thead class="border-b bg-fb-canvas">
           <tr>
@@ -219,7 +267,7 @@ onMounted(async () => {
           </tr>
         </thead>
         <tbody>
-          <tr v-for="row in rows" :key="row.id" class="border-b">
+          <tr v-for="row in filteredRows" :key="row.id" class="border-b">
             <td class="px-4 py-3">
               <input type="checkbox" :checked="selectedIds.includes(row.id)" @change="toggleRow(row.id)" />
             </td>

@@ -1,9 +1,10 @@
-﻿<script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
+<script setup lang="ts">
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 
 import client, { type ApiEnvelope } from '../api/client';
 import { groupRoute, teacherRoute } from '../utils/crossLinks';
+import { useAuthStore } from '../stores/auth';
 
 interface Branch {
   id: number;
@@ -14,6 +15,7 @@ interface GroupOption {
   id: number;
   name: string;
   branch_id: number;
+  teacher_id?: number | null;
 }
 
 interface TeacherOption {
@@ -46,6 +48,9 @@ interface AttendanceSummary {
 interface AttendancePayload {
   summary: AttendanceSummary;
   rows: TeacherAttendanceRow[];
+  total: number;
+  page: number;
+  total_pages: number;
 }
 
 const STATUS_OPTIONS = [
@@ -55,6 +60,7 @@ const STATUS_OPTIONS = [
 ] as const;
 
 const router = useRouter();
+const authStore = useAuthStore();
 
 const rows = ref<TeacherAttendanceRow[]>([]);
 const summary = ref<AttendanceSummary>({ present: 0, absent: 0, late: 0, total: 0 });
@@ -69,6 +75,9 @@ const panelLoading = ref(false);
 const formError = ref('');
 const editingRecord = ref<TeacherAttendanceRow | null>(null);
 const detailRecord = ref<TeacherAttendanceRow | null>(null);
+
+const currentPage = ref(1);
+const totalPages = ref(1);
 
 const filters = reactive({
   branch_id: '',
@@ -95,6 +104,36 @@ const panelTitle = computed(() => {
 });
 
 const isReadOnly = computed(() => Boolean(detailRecord.value && !editingRecord.value));
+const isAdmin = computed(() => authStore.isCeo || authStore.role === 'admin' || authStore.role === 'manager');
+
+const filterGroups = computed(() => {
+  if (!filters.branch_id) return groups.value;
+  return groups.value.filter((g) => String(g.branch_id) === filters.branch_id);
+});
+
+const formGroups = computed(() => {
+  if (isAdmin.value) return groups.value;
+  if (!form.teacher_id) return [];
+  const filtered = groups.value.filter((g) => g.teacher_id === Number(form.teacher_id));
+  return filtered.length ? filtered : groups.value;
+});
+
+const teacherHasNoGroups = computed(() => {
+  if (!form.teacher_id || isAdmin.value) return false;
+  return !groups.value.some((g) => g.teacher_id === Number(form.teacher_id));
+});
+
+watch(
+  () => form.teacher_id,
+  (newTeacherId) => {
+    if (newTeacherId && !editingRecord.value) {
+      const teacherGroups = groups.value.filter((g) => g.teacher_id === Number(newTeacherId));
+      if (teacherGroups.length) {
+        form.group_id = teacherGroups[0].id;
+      }
+    }
+  },
+);
 
 function statusClass(status: number) {
   if (status === 1) return 'bg-emerald-50 text-emerald-700';
@@ -104,7 +143,7 @@ function statusClass(status: number) {
 
 function resetForm() {
   form.teacher_id = '';
-  form.group_id = groups.value[0]?.id ?? '';
+  form.group_id = '';
   form.date = new Date().toISOString().slice(0, 10);
   form.status = 1;
   form.note = '';
@@ -121,10 +160,59 @@ function fillForm(record: TeacherAttendanceRow) {
   form.note = record.note;
 }
 
+function applyFilters() {
+  currentPage.value = 1;
+  loadReport();
+}
+
+function changePage(delta: number) {
+  currentPage.value += delta;
+  loadReport();
+}
+
+async function exportCsv() {
+  const params: Record<string, string> = { export: '1' };
+  if (filters.branch_id) params.branch_id = filters.branch_id;
+  if (filters.group_id) params.group_id = filters.group_id;
+  if (filters.teacher_id) params.teacher_id = filters.teacher_id;
+  if (filters.status !== '') params.status = filters.status;
+  if (filters.date_from) params.date_from = filters.date_from;
+  if (filters.date_to) params.date_to = filters.date_to;
+  if (filters.q.trim()) params.q = filters.q.trim();
+
+  try {
+    const { data } = await client.get<ApiEnvelope<AttendancePayload>>('/reports/teacher-attendance', { params });
+    const csvRows = [
+      ['Teacher', 'Group', 'Branch', 'Date', 'Status', 'Note']
+    ];
+    for (const row of data.data.rows) {
+      csvRows.push([
+        `"${row.teacher}"`,
+        `"${row.group}"`,
+        `"${row.branch}"`,
+        `"${row.date}"`,
+        `"${row.status_label}"`,
+        `"${row.note || ''}"`
+      ]);
+    }
+    const csvContent = "data:text/csv;charset=utf-8,\uFEFF" + csvRows.map(e => e.join(",")).join("\n");
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", "teacher_attendance.csv");
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  } catch (err) {
+    console.error(err);
+    alert('Export failed');
+  }
+}
+
 async function loadReport() {
   loading.value = true;
   try {
-    const params: Record<string, string> = {};
+    const params: Record<string, string> = { page: String(currentPage.value) };
     if (filters.branch_id) params.branch_id = filters.branch_id;
     if (filters.group_id) params.group_id = filters.group_id;
     if (filters.teacher_id) params.teacher_id = filters.teacher_id;
@@ -139,6 +227,7 @@ async function loadReport() {
     );
     summary.value = data.data.summary;
     rows.value = data.data.rows;
+    totalPages.value = data.data.total_pages || 1;
   } finally {
     loading.value = false;
   }
@@ -151,10 +240,11 @@ async function loadOptions() {
     client.get<ApiEnvelope<TeacherOption[]>>('/user', { params: { user_type: 'teacher' } }),
   ]);
   branches.value = branchRes.data.data;
-  groups.value = groupRes.data.data.map((group) => ({
+  groups.value = (groupRes.data.data as any[]).map((group) => ({
     id: group.id,
     name: group.name,
     branch_id: group.branch_id,
+    teacher_id: group.teacher_id ?? null,
   }));
   teachers.value = teacherRes.data.data.map((teacher) => ({
     id: teacher.id,
@@ -215,10 +305,11 @@ async function submitRecord() {
     }
     closePanel();
     await loadReport();
-  } catch {
-    formError.value = editingRecord.value
-      ? 'Could not update record'
-      : 'Could not create record';
+  } catch (err: any) {
+    formError.value =
+      err.response?.data?.message ||
+      err.response?.data?.error ||
+      (editingRecord.value ? 'Could not update record' : 'Could not create record');
   } finally {
     saving.value = false;
   }
@@ -257,19 +348,41 @@ onMounted(async () => {
     loading.value = false;
   }
 });
+
+let searchDebounce: ReturnType<typeof setTimeout> | null = null;
+watch(
+  () => filters.q,
+  (newQ, oldQ) => {
+    if (newQ === oldQ) return;
+    if (searchDebounce) clearTimeout(searchDebounce);
+    searchDebounce = setTimeout(() => {
+      applyFilters();
+    }, 400);
+  },
+);
+
 </script>
 
 <template>
   <div class="space-y-4">
     <div class="flex flex-wrap items-center justify-between gap-3">
       <h1 class="text-xl font-semibold text-fb-text">Teacher attendance reports</h1>
-      <button
-        type="button"
-        class="rounded-lg bg-fb-blue px-4 py-2 text-sm font-medium text-white hover:bg-fb-blue-dark"
-        @click="openCreatePanel"
-      >
-        + Mark attendance
-      </button>
+      <div class="flex items-center gap-2">
+        <button
+          type="button"
+          class="rounded-lg border border-fb-line px-4 py-2 text-sm text-fb-secondary hover:border-fb-blue hover:text-fb-blue"
+          @click="exportCsv"
+        >
+          Export CSV
+        </button>
+        <button
+          type="button"
+          class="rounded-lg bg-fb-blue px-4 py-2 text-sm font-medium text-white hover:bg-fb-blue-dark"
+          @click="openCreatePanel"
+        >
+          + Mark attendance
+        </button>
+      </div>
     </div>
 
     <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -291,6 +404,16 @@ onMounted(async () => {
       </div>
     </div>
 
+    <div>
+      <input
+        v-model="filters.q"
+        type="search"
+        placeholder="Search teacher by name..."
+        class="w-full rounded-xl border border-fb-line bg-fb-card px-4 py-3 text-sm focus:border-fb-blue focus:outline-none focus:ring-1 focus:ring-fb-blue"
+        @keydown.enter="applyFilters"
+      />
+    </div>
+
     <div class="flex flex-wrap items-end gap-3 rounded-xl border border-fb-line bg-fb-card p-4">
       <div>
         <label class="mb-1 block text-xs font-medium text-fb-secondary">Branch</label>
@@ -305,7 +428,7 @@ onMounted(async () => {
         <label class="mb-1 block text-xs font-medium text-fb-secondary">Group</label>
         <select v-model="filters.group_id" class="rounded-lg border border-fb-line px-3 py-2 text-sm">
           <option value="">All</option>
-          <option v-for="group in groups" :key="group.id" :value="String(group.id)">
+          <option v-for="group in filterGroups" :key="group.id" :value="String(group.id)">
             {{ group.name }}
           </option>
         </select>
@@ -336,20 +459,11 @@ onMounted(async () => {
         <label class="mb-1 block text-xs font-medium text-fb-secondary">To</label>
         <input v-model="filters.date_to" type="date" class="rounded-lg border border-fb-line px-3 py-2 text-sm" />
       </div>
-      <div class="min-w-[160px] flex-1">
-        <label class="mb-1 block text-xs font-medium text-fb-secondary">Search</label>
-        <input
-          v-model="filters.q"
-          type="search"
-          placeholder="Teacher name"
-          class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm"
-          @keydown.enter="loadReport"
-        />
-      </div>
+      <div class="flex-1"></div>
       <button
         type="button"
         class="rounded-lg border border-fb-line px-4 py-2 text-sm text-fb-secondary hover:border-fb-blue hover:text-fb-blue"
-        @click="loadReport"
+        @click="applyFilters"
       >
         Apply
       </button>
@@ -358,37 +472,61 @@ onMounted(async () => {
     <div class="overflow-hidden rounded-xl border border-fb-line bg-fb-card">
       <div v-if="loading" class="p-8 text-center text-fb-secondary">Loading…</div>
       <div v-else-if="!rows.length" class="p-8 text-center text-fb-icon">No teacher attendance records</div>
-      <table v-else class="w-full text-base">
-        <thead class="border-b border-fb-line bg-fb-canvas">
-          <tr>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Teacher</th>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Group</th>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Branch</th>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Date</th>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Status</th>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Note</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr
-            v-for="row in rows"
-            :key="row.id"
-            class="cursor-pointer border-b border-fb-line hover:bg-fb-hover/40"
-            @click="openDetailPanel(row.id)"
+      <template v-else>
+        <table class="w-full text-base">
+          <thead class="border-b border-fb-line bg-fb-canvas">
+            <tr>
+              <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Teacher</th>
+              <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Group</th>
+              <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Branch</th>
+              <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Date</th>
+              <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Status</th>
+              <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Note</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="row in rows"
+              :key="row.id"
+              class="cursor-pointer border-b border-fb-line hover:bg-fb-hover/40"
+              @click="openDetailPanel(row.id)"
+            >
+              <td class="px-5 py-4 font-medium text-fb-text">{{ row.teacher }}</td>
+              <td class="px-5 py-4 text-fb-secondary">{{ row.group }}</td>
+              <td class="px-5 py-4 text-fb-secondary">{{ row.branch }}</td>
+              <td class="px-5 py-4 text-fb-secondary">{{ row.date }}</td>
+              <td class="px-5 py-4">
+                <span class="rounded-full px-2 py-0.5 text-xs" :class="statusClass(row.status)">
+                  {{ row.status_label }}
+                </span>
+              </td>
+              <td class="px-5 py-4 text-fb-secondary">{{ row.note || '—' }}</td>
+            </tr>
+          </tbody>
+        </table>
+        
+        <div class="flex items-center justify-between border-t border-fb-line px-5 py-4">
+          <button
+            type="button"
+            class="rounded-lg border border-fb-line px-4 py-2 text-sm text-fb-secondary hover:text-fb-blue disabled:opacity-50"
+            :disabled="currentPage <= 1"
+            @click="changePage(-1)"
           >
-            <td class="px-5 py-4 font-medium text-fb-text">{{ row.teacher }}</td>
-            <td class="px-5 py-4 text-fb-secondary">{{ row.group }}</td>
-            <td class="px-5 py-4 text-fb-secondary">{{ row.branch }}</td>
-            <td class="px-5 py-4 text-fb-secondary">{{ row.date }}</td>
-            <td class="px-5 py-4">
-              <span class="rounded-full px-2 py-0.5 text-xs" :class="statusClass(row.status)">
-                {{ row.status_label }}
-              </span>
-            </td>
-            <td class="px-5 py-4 text-fb-secondary">{{ row.note || '—' }}</td>
-          </tr>
-        </tbody>
-      </table>
+            Previous
+          </button>
+          <span class="text-sm text-fb-secondary">
+            Page {{ currentPage }} of {{ totalPages }}
+          </span>
+          <button
+            type="button"
+            class="rounded-lg border border-fb-line px-4 py-2 text-sm text-fb-secondary hover:text-fb-blue disabled:opacity-50"
+            :disabled="currentPage >= totalPages"
+            @click="changePage(1)"
+          >
+            Next
+          </button>
+        </div>
+      </template>
     </div>
 
     <div v-if="showPanel" class="fixed inset-0 z-50 flex justify-end">
@@ -424,10 +562,17 @@ onMounted(async () => {
                 :disabled="isReadOnly"
                 class="w-full rounded-lg border border-fb-line px-3 py-2 disabled:bg-fb-canvas"
               >
-                <option v-for="group in groups" :key="group.id" :value="group.id">
+                <option value="">Select group</option>
+                <option v-for="group in formGroups" :key="group.id" :value="group.id">
                   {{ group.name }}
                 </option>
               </select>
+              <p v-if="teacherHasNoGroups" class="mt-1 text-xs text-amber-600">
+                Notice: This teacher has no groups assigned yet.
+              </p>
+              <p v-if="!isAdmin && !form.teacher_id" class="mt-1 text-xs text-amber-600">
+                Please select a teacher first.
+              </p>
             </div>
 
             <div>
@@ -441,7 +586,7 @@ onMounted(async () => {
               />
             </div>
 
-            <div>
+            <div v-if="isAdmin">
               <label class="mb-1 block text-sm font-medium text-fb-secondary">Status</label>
               <select
                 v-model="form.status"
@@ -452,6 +597,13 @@ onMounted(async () => {
                   {{ option.label }}
                 </option>
               </select>
+            </div>
+            
+            <div v-else>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">Status</label>
+              <div class="rounded-lg border border-fb-line bg-fb-canvas px-3 py-2 text-sm text-fb-secondary">
+                Auto-calculated (5 min threshold)
+              </div>
             </div>
 
             <div>

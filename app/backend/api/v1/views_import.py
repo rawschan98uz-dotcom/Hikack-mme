@@ -8,8 +8,8 @@ from rest_framework.permissions import IsAuthenticated
 from accounts.models import TeacherBranch, User
 from api.csv_utils import normalize_phone, parse_csv_upload
 from api.responses import fail, ok
-from api.v1.views_extended import _company, teacher_create
-from crm.models import Group, Student
+from api.v1.views_extended import _company, _generate_password, teacher_create
+from crm.models import Group, Lead, Student
 from org.models import Branch
 
 DEFAULT_IMPORT_PASSWORD = '946263200'
@@ -582,6 +582,7 @@ def student_import(request):
 
     for item in valid_students_to_create:
         Student.objects.create(**item)
+        Lead.objects.filter(company=company, phone=item['phone']).delete()
         created += 1
 
     return ok(_import_result(created, skipped, errors))

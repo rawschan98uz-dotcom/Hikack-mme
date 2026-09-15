@@ -1,6 +1,6 @@
-﻿<script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
+<script setup lang="ts">
+import { computed, onMounted, reactive, ref , watch} from 'vue';
+import { useRouter } from 'vue-router';
 
 import client, { type ApiEnvelope } from '../api/client';
 import { groupRoute, studentRoute } from '../utils/crossLinks';
@@ -33,6 +33,7 @@ interface AttendanceRow {
   date: string;
   status: number;
   status_label: string;
+  note?: string;
   created_at: string;
 }
 
@@ -46,6 +47,9 @@ interface AttendanceSummary {
 interface AttendancePayload {
   summary: AttendanceSummary;
   rows: AttendanceRow[];
+  total: number;
+  page: number;
+  total_pages: number;
 }
 
 const STATUS_OPTIONS = [
@@ -54,7 +58,6 @@ const STATUS_OPTIONS = [
   { value: 2, label: 'Late' },
 ] as const;
 
-const route = useRoute();
 const router = useRouter();
 
 const rows = ref<AttendanceRow[]>([]);
@@ -71,6 +74,9 @@ const formError = ref('');
 const editingRecord = ref<AttendanceRow | null>(null);
 const detailRecord = ref<AttendanceRow | null>(null);
 
+const currentPage = ref(1);
+const totalPages = ref(1);
+
 const filters = reactive({
   branch_id: '',
   group_id: '',
@@ -85,11 +91,8 @@ const form = reactive({
   group_id: '' as number | '',
   date: new Date().toISOString().slice(0, 10),
   status: 1,
+  note: '',
 });
-
-const pageTitle = computed(() =>
-  route.path.includes('attendance-reports') ? 'Attendance reports' : 'Attendance report',
-);
 
 const panelTitle = computed(() => {
   if (editingRecord.value) return 'Edit attendance';
@@ -99,11 +102,14 @@ const panelTitle = computed(() => {
 
 const isReadOnly = computed(() => Boolean(detailRecord.value && !editingRecord.value));
 
+const filterGroups = computed(() => {
+  if (!filters.branch_id) return groups.value;
+  return groups.value.filter((g) => String(g.branch_id) === filters.branch_id);
+});
+
 const filteredStudents = computed(() => {
-  if (!form.group_id) return students.value;
-  return students.value.filter(
-    (student) => student.group_id === form.group_id || student.group_id === null,
-  );
+  if (!form.group_id) return [];
+  return students.value.filter((student) => student.group_id === form.group_id);
 });
 
 function statusClass(status: number) {
@@ -117,6 +123,7 @@ function resetForm() {
   form.group_id = groups.value[0]?.id ?? '';
   form.date = new Date().toISOString().slice(0, 10);
   form.status = 1;
+  form.note = '';
   formError.value = '';
   editingRecord.value = null;
   detailRecord.value = null;
@@ -127,12 +134,61 @@ function fillForm(record: AttendanceRow) {
   form.group_id = record.group_id;
   form.date = record.date;
   form.status = record.status;
+  form.note = record.note || '';
+}
+
+function applyFilters() {
+  currentPage.value = 1;
+  loadReport();
+}
+
+function changePage(delta: number) {
+  currentPage.value += delta;
+  loadReport();
+}
+
+async function exportCsv() {
+  const params: Record<string, string> = { export: '1' };
+  if (filters.branch_id) params.branch_id = filters.branch_id;
+  if (filters.group_id) params.group_id = filters.group_id;
+  if (filters.status !== '') params.status = filters.status;
+  if (filters.date_from) params.date_from = filters.date_from;
+  if (filters.date_to) params.date_to = filters.date_to;
+  if (filters.q.trim()) params.q = filters.q.trim();
+
+  try {
+    const { data } = await client.get<ApiEnvelope<AttendancePayload>>('/reports/attendance', { params });
+    const csvRows = [
+      ['Student', 'Group', 'Branch', 'Date', 'Status', 'Note']
+    ];
+    for (const row of data.data.rows) {
+      csvRows.push([
+        `"${row.student}"`,
+        `"${row.group}"`,
+        `"${row.branch}"`,
+        `"${row.date}"`,
+        `"${row.status_label}"`,
+        `"${row.note || ''}"`
+      ]);
+    }
+    const csvContent = "data:text/csv;charset=utf-8,\uFEFF" + csvRows.map(e => e.join(",")).join("\n");
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", "student_attendance.csv");
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  } catch (err) {
+    console.error(err);
+    alert('Export failed');
+  }
 }
 
 async function loadReport() {
   loading.value = true;
   try {
-    const params: Record<string, string> = {};
+    const params: Record<string, string> = { page: String(currentPage.value) };
     if (filters.branch_id) params.branch_id = filters.branch_id;
     if (filters.group_id) params.group_id = filters.group_id;
     if (filters.status !== '') params.status = filters.status;
@@ -143,6 +199,7 @@ async function loadReport() {
     const { data } = await client.get<ApiEnvelope<AttendancePayload>>('/reports/attendance', { params });
     summary.value = data.data.summary;
     rows.value = data.data.rows;
+    totalPages.value = data.data.total_pages || 1;
   } finally {
     loading.value = false;
   }
@@ -211,6 +268,7 @@ async function submitRecord() {
       group_id: form.group_id,
       date: form.date,
       status: form.status,
+      note: form.note.trim(),
     };
     if (editingRecord.value) {
       await client.patch(`/reports/attendance/${editingRecord.value.id}`, payload);
@@ -259,19 +317,41 @@ onMounted(async () => {
     loading.value = false;
   }
 });
+
+let searchDebounce: ReturnType<typeof setTimeout> | null = null;
+watch(
+  () => filters.q,
+  (newQ, oldQ) => {
+    if (newQ === oldQ) return;
+    if (searchDebounce) clearTimeout(searchDebounce);
+    searchDebounce = setTimeout(() => {
+      applyFilters();
+    }, 400);
+  },
+);
+
 </script>
 
 <template>
   <div class="space-y-4">
     <div class="flex flex-wrap items-center justify-between gap-3">
-      <h1 class="text-xl font-semibold text-fb-text">{{ pageTitle }}</h1>
-      <button
-        type="button"
-        class="rounded-lg bg-fb-blue px-4 py-2 text-sm font-medium text-white hover:bg-fb-blue-dark"
-        @click="openCreatePanel"
-      >
-        + Mark attendance
-      </button>
+      <h1 class="text-xl font-semibold text-fb-text">Attendance reports</h1>
+      <div class="flex items-center gap-2">
+        <button
+          type="button"
+          class="rounded-lg border border-fb-line px-4 py-2 text-sm text-fb-secondary hover:border-fb-blue hover:text-fb-blue"
+          @click="exportCsv"
+        >
+          Export CSV
+        </button>
+        <button
+          type="button"
+          class="rounded-lg bg-fb-blue px-4 py-2 text-sm font-medium text-white hover:bg-fb-blue-dark"
+          @click="openCreatePanel"
+        >
+          + Mark attendance
+        </button>
+      </div>
     </div>
 
     <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -293,6 +373,16 @@ onMounted(async () => {
       </div>
     </div>
 
+    <div>
+      <input
+        v-model="filters.q"
+        type="search"
+        placeholder="Search student by name..."
+        class="w-full rounded-xl border border-fb-line bg-fb-card px-4 py-3 text-sm focus:border-fb-blue focus:outline-none focus:ring-1 focus:ring-fb-blue"
+        @keydown.enter="applyFilters"
+      />
+    </div>
+
     <div class="flex flex-wrap items-end gap-3 rounded-xl border border-fb-line bg-fb-card p-4">
       <div>
         <label class="mb-1 block text-xs font-medium text-fb-secondary">Branch</label>
@@ -307,7 +397,7 @@ onMounted(async () => {
         <label class="mb-1 block text-xs font-medium text-fb-secondary">Group</label>
         <select v-model="filters.group_id" class="rounded-lg border border-fb-line px-3 py-2 text-sm">
           <option value="">All</option>
-          <option v-for="group in groups" :key="group.id" :value="String(group.id)">
+          <option v-for="group in filterGroups" :key="group.id" :value="String(group.id)">
             {{ group.name }}
           </option>
         </select>
@@ -329,20 +419,11 @@ onMounted(async () => {
         <label class="mb-1 block text-xs font-medium text-fb-secondary">To</label>
         <input v-model="filters.date_to" type="date" class="rounded-lg border border-fb-line px-3 py-2 text-sm" />
       </div>
-      <div class="min-w-[180px] flex-1">
-        <label class="mb-1 block text-xs font-medium text-fb-secondary">Student</label>
-        <input
-          v-model="filters.q"
-          type="search"
-          placeholder="Name"
-          class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm"
-          @keydown.enter="loadReport"
-        />
-      </div>
+      <div class="flex-1"></div>
       <button
         type="button"
         class="rounded-lg border border-fb-line px-4 py-2 text-sm text-fb-secondary hover:border-fb-blue hover:text-fb-blue"
-        @click="loadReport"
+        @click="applyFilters"
       >
         Apply
       </button>
@@ -351,35 +432,61 @@ onMounted(async () => {
     <div class="overflow-hidden rounded-xl border border-fb-line bg-fb-card">
       <div v-if="loading" class="p-8 text-center text-fb-secondary">Loading…</div>
       <div v-else-if="!rows.length" class="p-8 text-center text-fb-icon">No attendance records</div>
-      <table v-else class="w-full text-base">
-        <thead class="border-b border-fb-line bg-fb-canvas">
-          <tr>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Student</th>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Group</th>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Branch</th>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Date</th>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr
-            v-for="row in rows"
-            :key="row.id"
-            class="cursor-pointer border-b border-fb-line hover:bg-fb-hover/40"
-            @click="openDetailPanel(row.id)"
+      <template v-else>
+        <table class="w-full text-base">
+          <thead class="border-b border-fb-line bg-fb-canvas">
+            <tr>
+              <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Student</th>
+              <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Group</th>
+              <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Branch</th>
+              <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Date</th>
+              <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Status</th>
+              <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Note</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="row in rows"
+              :key="row.id"
+              class="cursor-pointer border-b border-fb-line hover:bg-fb-hover/40"
+              @click="openDetailPanel(row.id)"
+            >
+              <td class="px-5 py-4 font-medium text-fb-text">{{ row.student }}</td>
+              <td class="px-5 py-4 text-fb-secondary">{{ row.group }}</td>
+              <td class="px-5 py-4 text-fb-secondary">{{ row.branch }}</td>
+              <td class="px-5 py-4 text-fb-secondary">{{ row.date }}</td>
+              <td class="px-5 py-4">
+                <span class="rounded-full px-2 py-0.5 text-xs" :class="statusClass(row.status)">
+                  {{ row.status_label }}
+                </span>
+              </td>
+              <td class="px-5 py-4 text-fb-secondary">{{ row.note || '—' }}</td>
+            </tr>
+          </tbody>
+        </table>
+        
+        <div class="flex items-center justify-between border-t border-fb-line px-5 py-4">
+          <button
+            type="button"
+            class="rounded-lg border border-fb-line px-4 py-2 text-sm text-fb-secondary hover:text-fb-blue disabled:opacity-50"
+            :disabled="currentPage <= 1"
+            @click="changePage(-1)"
           >
-            <td class="px-5 py-4 font-medium text-fb-text">{{ row.student }}</td>
-            <td class="px-5 py-4 text-fb-secondary">{{ row.group }}</td>
-            <td class="px-5 py-4 text-fb-secondary">{{ row.branch }}</td>
-            <td class="px-5 py-4 text-fb-secondary">{{ row.date }}</td>
-            <td class="px-5 py-4">
-              <span class="rounded-full px-2 py-0.5 text-xs" :class="statusClass(row.status)">
-                {{ row.status_label }}
-              </span>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+            Previous
+          </button>
+          <span class="text-sm text-fb-secondary">
+            Page {{ currentPage }} of {{ totalPages }}
+          </span>
+          <button
+            type="button"
+            class="rounded-lg border border-fb-line px-4 py-2 text-sm text-fb-secondary hover:text-fb-blue disabled:opacity-50"
+            :disabled="currentPage >= totalPages"
+            @click="changePage(1)"
+          >
+            Next
+          </button>
+        </div>
+      </template>
     </div>
 
     <div v-if="showPanel" class="fixed inset-0 z-50 flex justify-end">
@@ -419,6 +526,9 @@ onMounted(async () => {
                   {{ student.full_name }}
                 </option>
               </select>
+              <p v-if="!form.group_id" class="mt-1 text-xs text-amber-600">
+                Please select a group first.
+              </p>
             </div>
 
             <div>
@@ -443,6 +553,16 @@ onMounted(async () => {
                   {{ option.label }}
                 </option>
               </select>
+            </div>
+
+            <div>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">Note</label>
+              <textarea
+                v-model="form.note"
+                rows="3"
+                :readonly="isReadOnly"
+                class="w-full rounded-lg border border-fb-line px-3 py-2 read-only:bg-fb-canvas"
+              />
             </div>
 
             <div

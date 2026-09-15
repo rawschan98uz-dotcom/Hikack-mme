@@ -25,6 +25,9 @@ notifications.json
 
 # Local portable staging, backups and temporary files
 portable/
+runtime/
+*.exe
+*.zip
 *.demo_backup
 .openclaw-tmp/
 HiJack-LMS-SourceCode.zip

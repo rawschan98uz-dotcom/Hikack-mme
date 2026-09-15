@@ -1,5 +1,5 @@
-﻿<script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
+<script setup lang="ts">
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 
 import client, { type ApiEnvelope } from '../api/client';
 
@@ -7,14 +7,25 @@ interface PaymentRow {
   id: number;
   date: string;
   name: string;
+  student_id: number | null;
   student_name: string;
   sum: number;
+  months_covered?: number;
   method: string;
   method_pay: string;
   teacher: string;
   teacher_name: string;
   comment: string;
   creator: string;
+}
+
+interface StudentOption {
+  id: number;
+  full_name: string;
+  phone: string;
+  group?: string | null;
+  group_teacher?: string;
+  course_price?: number;
 }
 
 const METHODS = [
@@ -24,6 +35,11 @@ const METHODS = [
 ] as const;
 
 const rows = ref<PaymentRow[]>([]);
+const studentsList = ref<StudentOption[]>([]);
+const studentSearchQuery = ref('');
+const showStudentDropdown = ref(false);
+const selectedStudent = ref<StudentOption | null>(null);
+
 const loading = ref(true);
 const saving = ref(false);
 const deleting = ref(false);
@@ -35,8 +51,10 @@ const detailRow = ref<PaymentRow | null>(null);
 
 const filters = reactive({ date_from: '', date_to: '', method: '', q: '' });
 const form = reactive({
+  student_id: null as number | null,
   student_name: '',
   amount: 0,
+  months_covered: 1,
   method: 'cash' as (typeof METHODS)[number]['value'],
   teacher_name: '',
   comment: '',
@@ -52,6 +70,7 @@ const tableRows = computed(() =>
     date: r.date,
     name: r.name,
     sum: r.sum.toLocaleString(),
+    months_covered: r.months_covered || 1,
     method_pay: r.method_pay,
     teacher: r.teacher,
     comment: r.comment || '—',
@@ -59,23 +78,78 @@ const tableRows = computed(() =>
   })),
 );
 
+const filteredStudents = computed(() => {
+  const q = studentSearchQuery.value.trim().toLowerCase();
+  if (!q) return studentsList.value.slice(0, 20);
+  return studentsList.value
+    .filter((s) => s.full_name.toLowerCase().includes(q) || s.phone.includes(q))
+    .slice(0, 20);
+});
+
+function selectStudent(student: StudentOption) {
+  selectedStudent.value = student;
+  form.student_id = student.id;
+  form.student_name = student.full_name;
+  studentSearchQuery.value = student.full_name;
+  if (student.group_teacher) {
+    form.teacher_name = student.group_teacher;
+  }
+  if (student.course_price) {
+    form.amount = student.course_price * form.months_covered;
+  }
+  showStudentDropdown.value = false;
+}
+
+function onMonthsChange() {
+  if (form.months_covered < 1) form.months_covered = 1;
+  if (selectedStudent.value?.course_price) {
+    form.amount = selectedStudent.value.course_price * form.months_covered;
+  }
+}
+
 function resetForm() {
+  form.student_id = null;
   form.student_name = '';
   form.amount = 0;
+  form.months_covered = 1;
   form.method = 'cash';
   form.teacher_name = '';
   form.comment = '';
+  studentSearchQuery.value = '';
+  selectedStudent.value = null;
+  showStudentDropdown.value = false;
   formError.value = '';
   editingRow.value = null;
   detailRow.value = null;
 }
 
 function fillForm(row: PaymentRow) {
+  form.student_id = row.student_id ?? null;
   form.student_name = row.student_name;
   form.amount = row.sum;
+  form.months_covered = row.months_covered || 1;
   form.method = row.method as (typeof METHODS)[number]['value'];
   form.teacher_name = row.teacher_name;
   form.comment = row.comment;
+  studentSearchQuery.value = row.student_name;
+  selectedStudent.value = studentsList.value.find((s) => s.id === row.student_id) || null;
+}
+
+async function loadStudentsList() {
+  try {
+    const { data } = await client.get('/students?statuses=1&limit=500');
+    const list = Array.isArray(data.data) ? data.data : (data.data?.results || []);
+    studentsList.value = list.map((s: any) => ({
+      id: s.id,
+      full_name: s.full_name || `${s.first_name || ''} ${s.last_name || ''}`.trim(),
+      phone: s.phone || '',
+      group: s.group || null,
+      group_teacher: s.group_teacher || '',
+      course_price: s.course_price || 0,
+    }));
+  } catch {
+    studentsList.value = [];
+  }
 }
 
 async function loadRows() {
@@ -96,12 +170,18 @@ async function loadRows() {
 function openCreate() {
   resetForm();
   showPanel.value = true;
+  if (!studentsList.value.length) {
+    loadStudentsList();
+  }
 }
 
 async function openDetail(id: number) {
   resetForm();
   showPanel.value = true;
   panelLoading.value = true;
+  if (!studentsList.value.length) {
+    loadStudentsList();
+  }
   try {
     const { data } = await client.get<ApiEnvelope<PaymentRow>>(`/replenishments/${id}`);
     detailRow.value = data.data;
@@ -133,8 +213,10 @@ async function submitForm() {
   saving.value = true;
   try {
     const payload = {
+      student_id: form.student_id,
       student_name: form.student_name.trim(),
       amount: form.amount,
+      months_covered: form.months_covered || 1,
       method: form.method,
       teacher_name: form.teacher_name.trim(),
       comment: form.comment.trim(),
@@ -165,7 +247,23 @@ async function deleteRow() {
   }
 }
 
-onMounted(loadRows);
+onMounted(() => {
+  loadRows();
+  loadStudentsList();
+});
+
+let searchDebounce: ReturnType<typeof setTimeout> | null = null;
+watch(
+  () => filters.q,
+  (newQ, oldQ) => {
+    if (newQ === oldQ) return;
+    if (searchDebounce) clearTimeout(searchDebounce);
+    searchDebounce = setTimeout(() => {
+      loadRows();
+    }, 400);
+  },
+);
+
 </script>
 
 <template>
@@ -209,6 +307,7 @@ onMounted(loadRows);
             <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Date</th>
             <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Name</th>
             <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Sum</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Period</th>
             <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Method</th>
             <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Teacher</th>
             <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Comment</th>
@@ -220,6 +319,11 @@ onMounted(loadRows);
             <td class="px-5 py-4">{{ row.date }}</td>
             <td class="px-5 py-4 font-medium">{{ row.name }}</td>
             <td class="px-5 py-4 font-semibold text-fb-blue">{{ row.sum }}</td>
+            <td class="px-5 py-4">
+              <span class="inline-flex items-center rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-fb-blue">
+                {{ row.months_covered }} mo
+              </span>
+            </td>
             <td class="px-5 py-4">{{ row.method_pay }}</td>
             <td class="px-5 py-4">{{ row.teacher }}</td>
             <td class="px-5 py-4">{{ row.comment }}</td>
@@ -240,26 +344,80 @@ onMounted(loadRows);
         <form v-else class="flex flex-1 flex-col overflow-hidden" @submit.prevent="submitForm">
           <div class="flex-1 space-y-4 overflow-y-auto p-6">
             <div>
-              <label class="mb-1 block text-sm font-medium">Student name</label>
-              <input v-model="form.student_name" :readonly="isReadOnly" required class="w-full rounded-lg border px-3 py-2 read-only:bg-fb-canvas" />
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">Student</label>
+              <div v-if="!isReadOnly" class="relative">
+                <input
+                  v-model="studentSearchQuery"
+                  type="text"
+                  required
+                  placeholder="Type to search or enter name…"
+                  class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none"
+                  @focus="showStudentDropdown = true"
+                  @input="showStudentDropdown = true; form.student_name = studentSearchQuery; form.student_id = null"
+                />
+                <div
+                  v-if="showStudentDropdown && filteredStudents.length"
+                  class="absolute left-0 right-0 top-full z-20 mt-1 max-h-48 overflow-y-auto rounded-lg border border-fb-line bg-white shadow-lg"
+                >
+                  <button
+                    v-for="s in filteredStudents"
+                    :key="s.id"
+                    type="button"
+                    class="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-fb-canvas"
+                    @mousedown.prevent="selectStudent(s)"
+                  >
+                    <div>
+                      <span class="font-medium text-fb-text">{{ s.full_name }}</span>
+                      <span v-if="s.group" class="ml-2 text-xs text-fb-secondary">({{ s.group }})</span>
+                    </div>
+                    <span v-if="s.course_price" class="text-xs font-semibold text-fb-blue">
+                      {{ s.course_price.toLocaleString() }} UZS/mo
+                    </span>
+                  </button>
+                </div>
+              </div>
+              <input
+                v-else
+                :value="form.student_name"
+                readonly
+                class="w-full rounded-lg border px-3 py-2 text-sm read-only:bg-fb-canvas"
+              />
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium">Amount</label>
-              <input v-model.number="form.amount" type="number" :readonly="isReadOnly" required class="w-full rounded-lg border px-3 py-2 read-only:bg-fb-canvas" />
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">Months paid (Количество месяцев)</label>
+              <input
+                v-model.number="form.months_covered"
+                type="number"
+                min="1"
+                :readonly="isReadOnly"
+                required
+                class="w-full rounded-lg border px-3 py-2 text-sm read-only:bg-fb-canvas focus:border-fb-blue focus:outline-none"
+                @input="onMonthsChange"
+              />
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium">Method</label>
-              <select v-model="form.method" :disabled="isReadOnly" class="w-full rounded-lg border px-3 py-2">
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">Amount (Сумма)</label>
+              <input
+                v-model.number="form.amount"
+                type="number"
+                :readonly="isReadOnly"
+                required
+                class="w-full rounded-lg border px-3 py-2 text-sm read-only:bg-fb-canvas focus:border-fb-blue focus:outline-none"
+              />
+            </div>
+            <div>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">Method</label>
+              <select v-model="form.method" :disabled="isReadOnly" class="w-full rounded-lg border px-3 py-2 text-sm">
                 <option v-for="m in METHODS" :key="m.value" :value="m.value">{{ m.label }}</option>
               </select>
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium">Teacher</label>
-              <input v-model="form.teacher_name" :readonly="isReadOnly" class="w-full rounded-lg border px-3 py-2 read-only:bg-fb-canvas" />
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">Teacher</label>
+              <input v-model="form.teacher_name" :readonly="isReadOnly" class="w-full rounded-lg border px-3 py-2 text-sm read-only:bg-fb-canvas focus:border-fb-blue focus:outline-none" />
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium">Comment</label>
-              <textarea v-model="form.comment" :readonly="isReadOnly" rows="3" class="w-full rounded-lg border px-3 py-2 read-only:bg-fb-canvas" />
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">Comment</label>
+              <textarea v-model="form.comment" :readonly="isReadOnly" rows="3" class="w-full rounded-lg border px-3 py-2 text-sm read-only:bg-fb-canvas focus:border-fb-blue focus:outline-none" />
             </div>
             <p v-if="formError" class="text-sm text-fb-danger">{{ formError }}</p>
           </div>

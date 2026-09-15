@@ -1,5 +1,5 @@
-﻿<script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
+<script setup lang="ts">
+import { computed, onMounted, reactive, ref , watch} from 'vue';
 
 import client, { type ApiEnvelope } from '../api/client';
 
@@ -10,11 +10,10 @@ interface ConversionRow {
   stage: string;
   stage_label: string;
   created_at: string;
-  incoming: boolean;
-  waiting: boolean;
-  set: boolean;
-  attended: boolean;
-  paid: boolean;
+  trial_booked?: boolean;
+  attended?: boolean;
+  rejected?: boolean;
+  [key: string]: unknown;
 }
 
 interface ConversionData {
@@ -23,11 +22,9 @@ interface ConversionData {
 }
 
 const STAGES = [
-  { key: 'incoming', label: 'Incoming' },
-  { key: 'waiting', label: 'Waiting' },
-  { key: 'set', label: 'Set' },
-  { key: 'attended', label: 'Attended' },
-  { key: 'paid', label: 'Paid' },
+  { key: 'trial_booked', label: 'Записан на пробный' },
+  { key: 'attended', label: 'Был на уроке (Думает)' },
+  { key: 'rejected', label: 'Отказ / Архив' },
 ] as const;
 
 const data = ref<ConversionData | null>(null);
@@ -55,6 +52,19 @@ async function loadData() {
 }
 
 onMounted(loadData);
+
+let searchDebounce: ReturnType<typeof setTimeout> | null = null;
+watch(
+  () => filters.q,
+  (newQ, oldQ) => {
+    if (newQ === oldQ) return;
+    if (searchDebounce) clearTimeout(searchDebounce);
+    searchDebounce = setTimeout(() => {
+      loadData();
+    }, 400);
+  },
+);
+
 </script>
 
 <template>

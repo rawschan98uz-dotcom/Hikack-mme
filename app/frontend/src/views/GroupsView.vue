@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 
@@ -157,6 +157,7 @@ const showFiltersPanel = ref(false);
 const showColumnsPanel = ref(false);
 const sortKey = ref<SortKey>('name');
 const sortDir = ref<'asc' | 'desc'>('asc');
+const showTagsDropdown = ref(false);
 
 const filters = reactive({
   status: 2 as number,
@@ -232,6 +233,19 @@ const hasActiveFilters = computed(
 );
 
 const canExportGroups = computed(() => auth.can(PERM.GROUPS_EXPORT));
+const canWriteGroups = computed(() => auth.can(PERM.GROUPS_WRITE));
+
+// Custom confirm/alert modal state (replaces window.confirm / window.alert)
+const confirmModal = reactive({
+  show: false,
+  title: '',
+  message: '',
+  onConfirm: null as (() => void) | null,
+});
+const alertModal = reactive({
+  show: false,
+  message: '',
+});
 
 const panelTitle = computed(() =>
   editingGroup.value ? 'Edit group' : detailGroup.value ? 'Group details' : 'New group',
@@ -324,6 +338,7 @@ function resetForm() {
   formError.value = '';
   editingGroup.value = null;
   detailGroup.value = null;
+  showTagsDropdown.value = false;
 }
 
 function fillForm(group: GroupRow) {
@@ -474,24 +489,39 @@ async function submitGroup() {
     }
     closePanel();
     await loadGroups();
-  } catch {
-    formError.value = editingGroup.value ? 'Could not update group' : 'Could not create group';
+  } catch (err: any) {
+    formError.value =
+      err.response?.data?.message ||
+      err.response?.data?.error ||
+      (editingGroup.value ? 'Could not update group' : 'Could not create group');
   } finally {
     saving.value = false;
   }
 }
 
-async function deleteGroup() {
+function requestDeleteGroup() {
   if (!detailGroup.value) return;
-  if (!window.confirm(`Delete group "${detailGroup.value.name}"?`)) return;
+  confirmModal.title = 'Delete group';
+  confirmModal.message = `Are you sure you want to delete group "${detailGroup.value.name}"?`;
+  confirmModal.onConfirm = executeDeleteGroup;
+  confirmModal.show = true;
+}
+
+async function executeDeleteGroup() {
+  if (!detailGroup.value) return;
+  confirmModal.show = false;
 
   deleting.value = true;
   try {
     await client.delete(`/groups/${detailGroup.value.id}`);
     closePanel();
     await loadGroups();
-  } catch {
-    window.alert('Could not delete group');
+  } catch (err: any) {
+    alertModal.message =
+      err.response?.data?.message ||
+      err.response?.data?.error ||
+      'Could not delete group';
+    alertModal.show = true;
   } finally {
     deleting.value = false;
   }
@@ -587,7 +617,7 @@ onMounted(async () => {
         <h1>Groups</h1>
         <span class="text-sm text-fb-secondary">Quantity — {{ quantity }}</span>
       </div>
-      <button type="button" class="btn-fb-primary uppercase tracking-wide" @click="openCreatePanel">
+      <button v-if="canWriteGroups" type="button" class="btn-fb-primary uppercase tracking-wide" @click="openCreatePanel">
         Add new
       </button>
     </div>
@@ -859,21 +889,44 @@ onMounted(async () => {
 
             <div>
               <label class="mb-1 block text-sm font-medium text-fb-secondary">Tags</label>
-              <div class="flex flex-wrap gap-2 rounded-lg border border-fb-line p-3">
-                <label
-                  v-for="tag in tags"
-                  :key="tag.id"
-                  class="inline-flex items-center gap-2 rounded-md bg-fb-canvas px-2 py-1 text-sm"
+              <div v-if="isReadOnly" class="rounded-lg border border-fb-line bg-fb-canvas px-3 py-2 text-sm min-h-[40px]">
+                {{ form.tag_ids.length
+                  ? tags.filter(t => form.tag_ids.includes(t.id)).map(t => t.name).join(', ')
+                  : '— No tags —' }}
+              </div>
+              <div v-else class="relative">
+                <button
+                  type="button"
+                  class="w-full rounded-lg border border-fb-line px-3 py-2 text-left text-sm focus:border-fb-blue focus:outline-none flex items-center justify-between"
+                  @click="showTagsDropdown = !showTagsDropdown"
                 >
-                  <input
-                    v-model="form.tag_ids"
-                    type="checkbox"
-                    :value="tag.id"
-                    :disabled="isReadOnly"
-                    class="rounded border-fb-line text-fb-blue"
-                  />
-                  {{ tag.name }}
-                </label>
+                  <span v-if="form.tag_ids.length" class="truncate">
+                    {{ tags.filter(t => form.tag_ids.includes(t.id)).map(t => t.name).join(', ') }}
+                  </span>
+                  <span v-else class="text-fb-icon">Select tags…</span>
+                  <svg class="h-4 w-4 shrink-0 text-fb-icon" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
+                  </svg>
+                </button>
+                <div
+                  v-if="showTagsDropdown"
+                  class="absolute z-20 mt-1 w-full max-h-48 overflow-y-auto rounded-lg border border-fb-line bg-fb-card shadow-lg"
+                >
+                  <label
+                    v-for="tag in tags"
+                    :key="tag.id"
+                    class="flex items-center gap-2 px-3 py-2 text-sm hover:bg-fb-hover cursor-pointer"
+                  >
+                    <input
+                      v-model="form.tag_ids"
+                      type="checkbox"
+                      :value="tag.id"
+                      class="rounded border-fb-line text-fb-blue"
+                    />
+                    {{ tag.name }}
+                  </label>
+                  <div v-if="!tags.length" class="px-3 py-2 text-sm text-fb-icon">No tags available</div>
+                </div>
               </div>
             </div>
 
@@ -991,6 +1044,7 @@ onMounted(async () => {
           <div class="flex flex-wrap gap-2 border-t border-fb-line px-6 py-4">
             <template v-if="isReadOnly">
               <button
+                v-if="canWriteGroups"
                 type="button"
                 class="rounded-lg bg-fb-blue px-5 py-2 text-sm font-medium text-white hover:opacity-90"
                 @click="startEdit"
@@ -998,10 +1052,11 @@ onMounted(async () => {
                 Edit
               </button>
               <button
+                v-if="canWriteGroups"
                 type="button"
                 class="rounded-lg border border-red-300 px-5 py-2 text-sm font-medium text-fb-danger hover:bg-red-50 disabled:opacity-50"
                 :disabled="deleting"
-                @click="deleteGroup"
+                @click="requestDeleteGroup"
               >
                 Delete
               </button>
@@ -1024,6 +1079,55 @@ onMounted(async () => {
             </button>
           </div>
         </form>
+      </div>
+    </div>
+
+    <!-- Confirm modal -->
+    <div v-if="confirmModal.show" class="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
+      <div class="bg-fb-card rounded-2xl shadow-2xl max-w-sm w-full overflow-hidden">
+        <div class="px-6 py-4 border-b border-fb-line">
+          <h2 class="text-lg font-semibold text-fb-text">{{ confirmModal.title }}</h2>
+        </div>
+        <div class="px-6 py-5">
+          <p class="text-[15px] text-fb-secondary">{{ confirmModal.message }}</p>
+        </div>
+        <div class="px-6 py-4 border-t border-fb-line flex justify-end gap-3">
+          <button
+            type="button"
+            class="rounded-lg border border-fb-line px-5 py-2 text-sm font-medium text-fb-secondary hover:bg-fb-hover"
+            @click="confirmModal.show = false"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            class="rounded-lg bg-fb-danger px-5 py-2 text-sm font-medium text-white hover:opacity-90"
+            @click="confirmModal.onConfirm?.()"
+          >
+            Delete
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Alert modal -->
+    <div v-if="alertModal.show" class="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
+      <div class="bg-fb-card rounded-2xl shadow-2xl max-w-sm w-full overflow-hidden">
+        <div class="px-6 py-4 border-b border-fb-line">
+          <h2 class="text-lg font-semibold text-fb-danger">Error</h2>
+        </div>
+        <div class="px-6 py-5">
+          <p class="text-[15px] text-fb-secondary">{{ alertModal.message }}</p>
+        </div>
+        <div class="px-6 py-4 border-t border-fb-line flex justify-end">
+          <button
+            type="button"
+            class="rounded-lg bg-fb-blue px-6 py-2 text-sm font-medium text-white hover:opacity-90"
+            @click="alertModal.show = false"
+          >
+            OK
+          </button>
+        </div>
       </div>
     </div>
   </div>

@@ -1,10 +1,11 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 
 import client, { type ApiEnvelope } from '../api/client';
 import { hasCreateFlag, routeWithoutCreate } from '../utils/crossLinks';
 import { useAuthStore } from '../stores/auth';
+import { PERM } from '../utils/rbac';
 
 interface Assignee {
   id: number;
@@ -53,12 +54,32 @@ const tabs: { key: ReminderTab; label: string }[] = [
   { key: 'future', label: 'Future' },
 ];
 
+function getLocalDateStr() {
+  const d = new Date();
+  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+  return d.toISOString().slice(0, 10);
+}
+
 const form = reactive({
   title: '',
   details: '',
-  due_date: new Date().toISOString().slice(0, 10),
+  due_date: getLocalDateStr(),
   assigned_to_id: '' as number | '',
 });
+
+const confirmModal = reactive({
+  show: false,
+  title: '',
+  message: '',
+  onConfirm: null as (() => void) | null,
+});
+
+const alertModal = reactive({
+  show: false,
+  message: '',
+});
+
+const canWriteReminders = computed(() => auth.can(PERM.REMINDERS_WRITE));
 
 const panelTitle = computed(() => {
   if (editingReminder.value) return 'Edit reminder';
@@ -72,7 +93,7 @@ const rows = computed(() => buckets.value[activeTab.value] ?? []);
 function resetForm() {
   form.title = '';
   form.details = '';
-  form.due_date = new Date().toISOString().slice(0, 10);
+  form.due_date = getLocalDateStr();
   form.assigned_to_id = auth.user?.id ?? '';
   formError.value = '';
   editingReminder.value = null;
@@ -170,10 +191,11 @@ async function submitReminder() {
     }
     closePanel();
     await loadReminders();
-  } catch {
-    formError.value = editingReminder.value
-      ? 'Could not update reminder'
-      : 'Could not create reminder';
+  } catch (err: any) {
+    formError.value =
+      err.response?.data?.message ||
+      err.response?.data?.error ||
+      (editingReminder.value ? 'Could not update reminder' : 'Could not create reminder');
   } finally {
     saving.value = false;
   }
@@ -185,24 +207,40 @@ async function completeReminder(reminder: ReminderRow) {
     await client.post(`/reminders/${reminder.id}/complete`);
     closePanel();
     await loadReminders();
-  } catch {
-    window.alert('Could not complete reminder');
+  } catch (err: any) {
+    alertModal.message =
+      err.response?.data?.message ||
+      err.response?.data?.error ||
+      'Could not complete reminder';
+    alertModal.show = true;
   } finally {
     completing.value = false;
   }
 }
 
-async function deleteReminder() {
+function requestDeleteReminder() {
   if (!detailReminder.value) return;
-  if (!window.confirm(`Delete "${detailReminder.value.title}"?`)) return;
+  confirmModal.title = 'Delete reminder';
+  confirmModal.message = `Are you sure you want to delete "${detailReminder.value.title}"?`;
+  confirmModal.onConfirm = executeDeleteReminder;
+  confirmModal.show = true;
+}
+
+async function executeDeleteReminder() {
+  if (!detailReminder.value) return;
+  confirmModal.show = false;
 
   deleting.value = true;
   try {
     await client.delete(`/reminders/${detailReminder.value.id}`);
     closePanel();
     await loadReminders();
-  } catch {
-    window.alert('Could not delete reminder');
+  } catch (err: any) {
+    alertModal.message =
+      err.response?.data?.message ||
+      err.response?.data?.error ||
+      'Could not delete reminder';
+    alertModal.show = true;
   } finally {
     deleting.value = false;
   }
@@ -242,6 +280,7 @@ onMounted(async () => {
     <div class="flex flex-wrap items-center justify-between gap-3">
       <h1 class="text-xl font-semibold text-fb-text">Reminders</h1>
       <button
+        v-if="canWriteReminders"
         type="button"
         class="rounded-lg bg-fb-blue px-4 py-2 text-sm font-medium text-white hover:bg-fb-blue-dark"
         @click="openCreatePanel"
@@ -378,6 +417,7 @@ onMounted(async () => {
           <div class="flex flex-wrap gap-2 border-t border-fb-line px-6 py-4">
             <template v-if="isReadOnly && detailReminder">
               <button
+                v-if="canWriteReminders"
                 type="button"
                 class="rounded-lg bg-fb-blue px-5 py-2 text-sm font-medium text-white hover:opacity-90"
                 @click="startEdit"
@@ -385,6 +425,7 @@ onMounted(async () => {
                 Edit
               </button>
               <button
+                v-if="canWriteReminders"
                 type="button"
                 class="rounded-lg border border-emerald-300 px-5 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
                 :disabled="completing"
@@ -393,16 +434,18 @@ onMounted(async () => {
                 Task done
               </button>
               <button
+                v-if="canWriteReminders"
                 type="button"
                 class="rounded-lg border border-red-300 px-5 py-2 text-sm font-medium text-fb-danger hover:bg-red-50 disabled:opacity-50"
                 :disabled="deleting"
-                @click="deleteReminder"
+                @click="requestDeleteReminder"
               >
                 Delete
               </button>
             </template>
             <template v-else>
               <button
+                v-if="canWriteReminders"
                 type="submit"
                 class="rounded-lg bg-fb-blue px-5 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
                 :disabled="saving"
@@ -419,6 +462,55 @@ onMounted(async () => {
             </button>
           </div>
         </form>
+      </div>
+    </div>
+
+    <!-- Confirm modal -->
+    <div v-if="confirmModal.show" class="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
+      <div class="bg-fb-card rounded-2xl shadow-2xl max-w-sm w-full overflow-hidden">
+        <div class="px-6 py-4 border-b border-fb-line">
+          <h2 class="text-lg font-semibold text-fb-text">{{ confirmModal.title }}</h2>
+        </div>
+        <div class="px-6 py-5">
+          <p class="text-[15px] text-fb-secondary">{{ confirmModal.message }}</p>
+        </div>
+        <div class="px-6 py-4 border-t border-fb-line flex justify-end gap-3">
+          <button
+            type="button"
+            class="rounded-lg border border-fb-line px-5 py-2 text-sm font-medium text-fb-secondary hover:bg-fb-hover"
+            @click="confirmModal.show = false"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            class="rounded-lg bg-fb-danger px-5 py-2 text-sm font-medium text-white hover:opacity-90"
+            @click="confirmModal.onConfirm?.()"
+          >
+            Delete
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Alert modal -->
+    <div v-if="alertModal.show" class="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
+      <div class="bg-fb-card rounded-2xl shadow-2xl max-w-sm w-full overflow-hidden">
+        <div class="px-6 py-4 border-b border-fb-line">
+          <h2 class="text-lg font-semibold text-fb-danger">Error</h2>
+        </div>
+        <div class="px-6 py-5">
+          <p class="text-[15px] text-fb-secondary">{{ alertModal.message }}</p>
+        </div>
+        <div class="px-6 py-4 border-t border-fb-line flex justify-end">
+          <button
+            type="button"
+            class="rounded-lg bg-fb-blue px-6 py-2 text-sm font-medium text-white hover:opacity-90"
+            @click="alertModal.show = false"
+          >
+            OK
+          </button>
+        </div>
       </div>
     </div>
   </div>

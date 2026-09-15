@@ -1,11 +1,14 @@
 from datetime import date as date_cls, datetime, time
 
 from django.db.models import Count, Q
+from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 
 from accounts.models import TeacherBranch, User
+from accounts.rbac import ROLE_CEO, get_effective_role
 from api.responses import fail, ok
+from api.utils import normalize_phone
 from crm.models import AttendanceRecord, Group, Lead, Student
 from operations.models import TeacherAttendanceRecord, WorklyRecord
 from org.models import Branch
@@ -33,12 +36,15 @@ def _format_phone(phone: str) -> str:
     return phone
 
 
-def _serialize_teacher(user: User) -> dict:
+def _serialize_teacher(user: User, *, groups_count: int | None = None) -> dict:
     branches = [
         {'id': link.branch_id, 'name': link.branch.name}
         for link in user.teacher_branches.select_related('branch')
     ]
-    groups_count = Group.objects.filter(teacher=user).count()
+    if groups_count is None:
+        groups_count = getattr(user, '_groups_count', None)
+        if groups_count is None:
+            groups_count = Group.objects.filter(teacher=user).count()
     return {
         'id': user.id,
         'name': user.display_name(),
@@ -103,9 +109,16 @@ def teacher_detail_view(request, teacher_id: int):
         return ok(payload)
 
     if request.method == 'DELETE':
+        if not (get_effective_role(request.user) == ROLE_CEO or request.user.is_superuser):
+            return fail('Only CEO/owner can delete users', status_code=403)
+        if request.user.pk == teacher.pk:
+            return fail('Cannot delete your own account', status_code=400)
+
         Group.objects.filter(teacher=teacher).update(teacher=None)
         teacher.delete()
         return ok({'deleted': True})
+
+    is_ceo = (get_effective_role(request.user) == ROLE_CEO or request.user.is_superuser)
 
     first_name = request.data.get('first_name')
     last_name = request.data.get('last_name')
@@ -125,9 +138,9 @@ def teacher_detail_view(request, teacher_id: int):
         teacher.last_name = str(last_name).strip()
 
     if phone is not None:
-        phone = ''.join(ch for ch in str(phone) if ch.isdigit())
-        if not phone:
-            return fail('Valid phone is required')
+        phone = normalize_phone(str(phone))
+        if not phone or len(phone) != 9:
+            return fail('Valid 9-digit phone is required (e.g. 901234567)')
         if User.objects.filter(phone=phone).exclude(pk=teacher.pk).exists():
             return fail('Phone already exists')
         teacher.phone = phone
@@ -138,12 +151,23 @@ def teacher_detail_view(request, teacher_id: int):
     if job_title is not None:
         teacher.job_title = str(job_title).strip()
 
+    # Password changes restricted to CEO / superuser
     if password:
+        if not is_ceo:
+            return fail('Only CEO can change teacher passwords', status_code=403)
         teacher.set_password(str(password))
+
+    # Deactivation support (used by archive flow)
+    if 'is_active' in request.data:
+        if not is_ceo:
+            return fail('Only CEO can deactivate teachers', status_code=403)
+        teacher.is_active = bool(request.data.get('is_active'))
 
     teacher.save()
 
     if branch_ids is not None:
+        if not is_ceo:
+            return fail('Only CEO can assign branches', status_code=403)
         valid_branch_ids = list(
             Branch.objects.filter(company=company, id__in=branch_ids).values_list('id', flat=True),
         )
@@ -169,7 +193,10 @@ def user_list(request):
         qs = qs.filter(user_type=user_type)
 
     if user_type == 'teacher':
-        data = [_serialize_teacher(u) for u in qs.order_by('id')]
+        teachers_qs = qs.filter(is_active=True).annotate(
+            _groups_count=Count('teaching_groups')
+        ).order_by('id')
+        data = [_serialize_teacher(u) for u in teachers_qs]
         return ok(data)
 
     data = [
@@ -258,6 +285,11 @@ def staff_detail_view(request, staff_id: int):
         return ok(_serialize_staff(staff))
 
     if request.method == 'DELETE':
+        if not (get_effective_role(request.user) == ROLE_CEO or request.user.is_superuser):
+            return fail('Only CEO/owner can delete users', status_code=403)
+        if request.user.pk == staff.pk:
+            return fail('Cannot delete your own account', status_code=400)
+
         staff.delete()
         return ok({'deleted': True})
 
@@ -291,20 +323,40 @@ def staff_detail_view(request, staff_id: int):
     return ok(_serialize_staff(staff))
 
 
+def _generate_password(length: int = 8) -> str:
+    import secrets
+    import string
+    alphabet = string.ascii_letters + string.digits
+    return ''.join(secrets.choice(alphabet) for _ in range(length))
+
+
 def teacher_create(request, company: Company):
     first_name = (request.data.get('first_name') or '').strip()
     last_name = (request.data.get('last_name') or '').strip()
-    phone = ''.join(ch for ch in str(request.data.get('phone') or '') if ch.isdigit())
+    phone = normalize_phone(request.data.get('phone') or '')
     password = request.data.get('password')
     honorific = (request.data.get('honorific') or 'Mr').strip()
     job_title = (request.data.get('job_title') or '').strip()
     branch_ids = request.data.get('branches') or []
 
-    if not first_name or not phone or not password:
-        return fail('First name, phone and password are required')
+    # Auto-generate password if not provided
+    generated = False
+    if not password:
+        password = _generate_password()
+        generated = True
+
+    if not first_name or not phone:
+        return fail('First name and phone are required')
+
+    if len(phone) != 9:
+        return fail('Valid 9-digit phone is required (e.g. 901234567)')
 
     if User.objects.filter(phone=phone).exists():
         return fail('Phone already exists')
+
+    is_ceo = (get_effective_role(request.user) == ROLE_CEO or request.user.is_superuser)
+    if not is_ceo and len(branch_ids) > 1:
+        return fail('Only CEO can assign multiple branches to a teacher', status_code=403)
 
     valid_branch_ids = list(
         Branch.objects.filter(company=company, id__in=branch_ids).values_list('id', flat=True),
@@ -327,7 +379,9 @@ def teacher_create(request, company: Company):
     for branch_id in valid_branch_ids:
         TeacherBranch.objects.create(teacher=user, branch_id=branch_id)
 
-    return ok(_serialize_teacher(user), status_code=201)
+    payload = _serialize_teacher(user)
+    payload['generated_password'] = password if generated else None
+    return ok(payload, status_code=201)
 
 
 def _finance_date_filter(qs, params, field='created_at'):
@@ -344,9 +398,12 @@ def _serialize_payment(payment: Payment) -> dict:
     return {
         'id': payment.id,
         'date': payment.created_at.strftime('%Y-%m-%d'),
+        'student_id': payment.student_id,
         'name': payment.student_name,
         'student_name': payment.student_name,
         'sum': payment.amount,
+        'amount': payment.amount,
+        'months_covered': getattr(payment, 'months_covered', 1) or 1,
         'method': payment.method,
         'method_pay': payment.get_method_display(),
         'teacher': payment.teacher_name or '—',
@@ -365,33 +422,78 @@ def replenishments(request):
         return ok([])
 
     if request.method == 'POST':
+        student = None
+        student_id = request.data.get('student_id')
+        if student_id:
+            try:
+                student = Student.objects.get(pk=int(student_id), company=company)
+            except (Student.DoesNotExist, TypeError, ValueError):
+                pass
+
         student_name = str(request.data.get('student_name') or request.data.get('name') or '').strip()
+        if student and not student_name:
+            student_name = student.full_name
+        elif not student and student_name:
+            student = Student.objects.filter(company=company).filter(
+                Q(first_name=student_name) | Q(last_name=student_name)
+            ).first()
+            if not student:
+                for s in Student.objects.filter(company=company):
+                    if f"{s.first_name} {s.last_name}".strip().lower() == student_name.lower():
+                        student = s
+                        break
+
         if not student_name:
             return fail('Student name is required')
         try:
             amount = int(request.data.get('amount') or request.data.get('sum'))
         except (TypeError, ValueError):
             return fail('Valid amount is required')
+        try:
+            months_covered = max(1, int(request.data.get('months_covered') or 1))
+        except (TypeError, ValueError):
+            months_covered = 1
         method = str(request.data.get('method') or Payment.Method.CASH).strip().lower()
         if method not in {choice[0] for choice in Payment.Method.choices}:
             return fail('Invalid payment method')
 
+        teacher_name = str(request.data.get('teacher_name') or request.data.get('teacher') or '').strip()
+        if not teacher_name and student and student.group and student.group.teacher:
+            teacher_name = student.group.teacher.display_name()
+
         payment = Payment.objects.create(
             company=company,
+            student=student,
             student_name=student_name,
             amount=amount,
+            months_covered=months_covered,
             method=method,
-            teacher_name=str(request.data.get('teacher_name') or request.data.get('teacher') or '').strip(),
+            teacher_name=teacher_name,
             comment=str(request.data.get('comment') or '').strip(),
             created_by=request.user,
         )
+
+        if student:
+            now = timezone.localtime(payment.created_at)
+            today = timezone.localdate()
+            if now.year == today.year and now.month == today.month:
+                if not student.paid_this_month:
+                    student.paid_this_month = True
+                    student.save(update_fields=['paid_this_month'])
+
         return ok(_serialize_payment(payment), status_code=201)
 
-    qs = Payment.objects.filter(company=company).select_related('created_by').order_by('-created_at')
+    qs = Payment.objects.filter(company=company).select_related('created_by', 'student').order_by('-created_at')
     qs = _finance_date_filter(qs, request.query_params)
     method = request.query_params.get('method')
     if method:
         qs = qs.filter(method=method)
+    student_id = request.query_params.get('student_id')
+    if student_id:
+        try:
+            qs = qs.filter(student_id=int(student_id))
+        except ValueError:
+            pass
     query = (request.query_params.get('q') or '').strip()
     if query:
         qs = qs.filter(Q(student_name__icontains=query) | Q(comment__icontains=query))
@@ -407,7 +509,7 @@ def payment_detail(request, payment_id: int):
         return fail('Company not found', status_code=404)
 
     try:
-        payment = Payment.objects.select_related('created_by').get(pk=payment_id, company=company)
+        payment = Payment.objects.select_related('created_by', 'student').get(pk=payment_id, company=company)
     except Payment.DoesNotExist:
         return fail('Payment not found', status_code=404)
 
@@ -417,6 +519,18 @@ def payment_detail(request, payment_id: int):
     if request.method == 'DELETE':
         payment.delete()
         return ok({'deleted': True})
+
+    if 'student_id' in request.data:
+        sid = request.data.get('student_id')
+        if sid in (None, '', 0):
+            payment.student = None
+        else:
+            try:
+                payment.student = Student.objects.get(pk=int(sid), company=company)
+                if not request.data.get('student_name'):
+                    payment.student_name = payment.student.full_name
+            except (Student.DoesNotExist, TypeError, ValueError):
+                pass
 
     if 'student_name' in request.data or 'name' in request.data:
         student_name = str(request.data.get('student_name') or request.data.get('name') or '').strip()
@@ -428,6 +542,11 @@ def payment_detail(request, payment_id: int):
             payment.amount = int(request.data.get('amount') or request.data.get('sum'))
         except (TypeError, ValueError):
             return fail('Valid amount is required')
+    if 'months_covered' in request.data:
+        try:
+            payment.months_covered = max(1, int(request.data.get('months_covered') or 1))
+        except (TypeError, ValueError):
+            pass
     if 'method' in request.data:
         method = str(request.data.get('method')).strip().lower()
         if method not in {choice[0] for choice in Payment.Method.choices}:
@@ -441,6 +560,26 @@ def payment_detail(request, payment_id: int):
     payment.save()
     payment.refresh_from_db()
     return ok(_serialize_payment(payment))
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def student_payments(request, student_id: int):
+    company = _company(request)
+    if company is None:
+        return fail('Company not found', status_code=404)
+
+    try:
+        student = Student.objects.get(pk=student_id, company=company)
+    except Student.DoesNotExist:
+        return fail('Student not found', status_code=404)
+
+    qs = Payment.objects.filter(
+        Q(company=company) &
+        (Q(student=student) | Q(student_name=student.full_name))
+    ).select_related('created_by').order_by('-created_at')
+
+    return ok([_serialize_payment(p) for p in qs[:100]])
 
 
 def _serialize_withdrawal(withdrawal: Withdrawal) -> dict:
@@ -642,15 +781,47 @@ def expense_detail(request, expense_id: int):
     return ok(_serialize_expense(expense))
 
 
-@api_view(['GET'])
+@api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
 def expense_types(request):
     company = _company(request)
     if company is None:
         return ok([])
 
-    data = [{'id': c.id, 'name': c.name} for c in ExpenseCategory.objects.filter(company=company)]
+    if request.method == 'POST':
+        name = str(request.data.get('name') or '').strip()
+        if not name:
+            return fail('Category name is required')
+        cat = ExpenseCategory.objects.create(company=company, name=name)
+        return ok({'id': cat.id, 'name': cat.name}, status_code=201)
+
+    data = [{'id': c.id, 'name': c.name} for c in ExpenseCategory.objects.filter(company=company).order_by('name')]
     return ok(data)
+
+
+@api_view(['PATCH', 'DELETE'])
+@permission_classes([IsAuthenticated])
+def expense_type_detail(request, category_id: int):
+    company = _company(request)
+    if company is None:
+        return fail('Company not found', status_code=404)
+
+    try:
+        cat = ExpenseCategory.objects.get(pk=category_id, company=company)
+    except ExpenseCategory.DoesNotExist:
+        return fail('Category not found', status_code=404)
+
+    if request.method == 'DELETE':
+        cat.delete()
+        return ok({'deleted': True})
+
+    name = str(request.data.get('name') or '').strip()
+    if not name:
+        return fail('Category name is required')
+    cat.name = name
+    cat.save()
+    return ok({'id': cat.id, 'name': cat.name})
+
 
 
 def _serialize_salary(setting: SalarySetting) -> dict:
@@ -780,7 +951,11 @@ def report_conversion(request):
 
     query = (params.get('q') or '').strip()
     if query:
-        leads = leads.filter(Q(full_name__icontains=query) | Q(phone__icontains=query))
+        leads = leads.filter(
+            Q(first_name__icontains=query)
+            | Q(last_name__icontains=query)
+            | Q(phone__icontains=query)
+        )
 
     stage_order = [choice[0] for choice in Lead.Stage.choices]
     stages = {stage: leads.filter(stage=stage).count() for stage in stage_order}
@@ -816,6 +991,7 @@ def _serialize_attendance(record: AttendanceRecord) -> dict:
         'date': record.attend_date.isoformat(),
         'status': record.status,
         'status_label': record.get_status_display(),
+        'note': record.note,
         'created_at': record.created_at.isoformat(),
     }
 
@@ -913,12 +1089,14 @@ def report_attendance(request):
         except Group.DoesNotExist:
             return fail('Group not found')
 
+        note = str(request.data.get('note') or '').strip()
+
         record, _created = AttendanceRecord.objects.update_or_create(
             company=company,
             student=student,
             group=group,
             attend_date=attend_date,
-            defaults={'status': status},
+            defaults={'status': status, 'note': note},
         )
         record = AttendanceRecord.objects.select_related(
             'student',
@@ -929,8 +1107,31 @@ def report_attendance(request):
 
     qs = _attendance_queryset(company, request.query_params)
     summary = _attendance_summary(qs)
-    rows = [_serialize_attendance(record) for record in qs[:200]]
-    return ok({'summary': summary, 'rows': rows})
+
+    export = request.query_params.get('export', '0') == '1'
+    if export:
+        rows = [_serialize_attendance(record) for record in qs]
+        return ok({'summary': summary, 'rows': rows})
+
+    try:
+        page = int(request.query_params.get('page', 1))
+    except ValueError:
+        page = 1
+    
+    page_size = 50
+    total = qs.count()
+    total_pages = (total + page_size - 1) // page_size
+    
+    offset = (page - 1) * page_size
+    rows = [_serialize_attendance(record) for record in qs[offset:offset + page_size]]
+
+    return ok({
+        'summary': summary,
+        'rows': rows,
+        'total': total,
+        'page': page,
+        'total_pages': total_pages
+    })
 
 
 @api_view(['GET', 'PATCH', 'DELETE'])
@@ -989,6 +1190,9 @@ def attendance_detail(request, record_id: int):
             record.student = Student.objects.get(pk=int(student_id), company=company)
         except (Student.DoesNotExist, TypeError, ValueError):
             return fail('Student not found')
+
+    if 'note' in request.data:
+        record.note = str(request.data['note']).strip()
 
     record.save()
     record = AttendanceRecord.objects.select_related(
@@ -1087,12 +1291,11 @@ def report_teacher_attendance(request):
         try:
             teacher_id = int(request.data.get('teacher_id'))
             group_id = int(request.data.get('group_id'))
-            status = int(request.data.get('status', TeacherAttendanceRecord.Status.PRESENT))
+            status = request.data.get('status')
+            if status is not None:
+                status = int(status)
         except (TypeError, ValueError):
             return fail('Teacher, group and status are required')
-
-        if status not in VALID_TEACHER_ATTENDANCE_STATUSES:
-            return fail('Invalid status')
 
         attend_date_raw = request.data.get('date') or request.data.get('attend_date')
         if not attend_date_raw:
@@ -1116,6 +1319,34 @@ def report_teacher_attendance(request):
         except Group.DoesNotExist:
             return fail('Group not found')
 
+        # Auto-calculate status for today if the user is a teacher marking themselves
+        is_self_teacher = request.user.user_type == User.UserType.TEACHER and request.user.id == teacher_id
+        
+        from django.utils import timezone
+        import datetime
+        
+        if is_self_teacher:
+            local_now = timezone.localtime(timezone.now())
+            if attend_date == local_now.date():
+                if group.lesson_start_time:
+                    lesson_dt = timezone.make_aware(datetime.datetime.combine(local_now.date(), group.lesson_start_time))
+                    threshold_dt = lesson_dt + datetime.timedelta(minutes=5)
+                    if local_now > threshold_dt:
+                        status = TeacherAttendanceRecord.Status.LATE
+                    else:
+                        status = TeacherAttendanceRecord.Status.PRESENT
+                else:
+                    status = TeacherAttendanceRecord.Status.PRESENT
+            else:
+                if status is None:
+                    status = TeacherAttendanceRecord.Status.PRESENT
+        else:
+            if status is None:
+                status = TeacherAttendanceRecord.Status.PRESENT
+
+        if status not in VALID_TEACHER_ATTENDANCE_STATUSES:
+            return fail('Invalid status')
+
         note = str(request.data.get('note') or '').strip()
         record, _created = TeacherAttendanceRecord.objects.update_or_create(
             company=company,
@@ -1133,8 +1364,31 @@ def report_teacher_attendance(request):
 
     qs = _teacher_attendance_queryset(company, request.query_params)
     summary = _teacher_attendance_summary(qs)
-    rows = [_serialize_teacher_attendance(record) for record in qs[:200]]
-    return ok({'summary': summary, 'rows': rows})
+
+    export = request.query_params.get('export', '0') == '1'
+    if export:
+        rows = [_serialize_teacher_attendance(record) for record in qs]
+        return ok({'summary': summary, 'rows': rows})
+
+    try:
+        page = int(request.query_params.get('page', 1))
+    except ValueError:
+        page = 1
+    
+    page_size = 50
+    total = qs.count()
+    total_pages = (total + page_size - 1) // page_size
+    
+    offset = (page - 1) * page_size
+    rows = [_serialize_teacher_attendance(record) for record in qs[offset:offset + page_size]]
+
+    return ok({
+        'summary': summary,
+        'rows': rows,
+        'total': total,
+        'page': page,
+        'total_pages': total_pages
+    })
 
 
 @api_view(['GET', 'PATCH', 'DELETE'])
@@ -1237,7 +1491,11 @@ def report_leads(request):
 
     query = (params.get('q') or '').strip()
     if query:
-        leads = leads.filter(Q(full_name__icontains=query) | Q(phone__icontains=query))
+        leads = leads.filter(
+            Q(first_name__icontains=query)
+            | Q(last_name__icontains=query)
+            | Q(phone__icontains=query)
+        )
 
     by_stage = {stage: leads.filter(stage=stage).count() for stage, _ in Lead.Stage.choices}
     rows = [

@@ -66,11 +66,17 @@ class Group(models.Model):
 
 class Student(models.Model):
     class Status(models.IntegerChoices):
-        TRIAL = 1, 'Trial'
-        ACTIVE = 5, 'Active'
-        DEBTOR = 6, 'Debtor'
-        LEFT_TRIAL = 7, 'Left after trial'
-        LEFT_ACTIVE = 8, 'Left active group'
+        STUDYING = 1, 'Обучается'
+        FROZEN = 2, 'Заморозка (Frozen)'
+        LEFT = 8, 'Отчислен / Ушел'
+        GRADUATED = 9, 'Завершил курс (Graduated)'
+
+    # Backward-compatible aliases
+    Status.ACTIVE = Status.STUDYING  # type: ignore[attr-defined]
+    Status.TRIAL = Status.STUDYING  # type: ignore[attr-defined]
+    Status.DEBTOR = Status.STUDYING  # type: ignore[attr-defined]
+    Status.LEFT_ACTIVE = Status.LEFT  # type: ignore[attr-defined]
+    Status.LEFT_TRIAL = Status.LEFT  # type: ignore[attr-defined]
 
     company = models.ForeignKey('org.Company', on_delete=models.CASCADE, related_name='students')
     branch = models.ForeignKey('org.Branch', on_delete=models.CASCADE, related_name='students')
@@ -78,6 +84,10 @@ class Student(models.Model):
     first_name = models.CharField(max_length=150)
     last_name = models.CharField(max_length=150, blank=True)
     phone = models.CharField(max_length=15)
+    phone2 = models.CharField(max_length=15, blank=True, default='')
+    address = models.CharField(max_length=255, blank=True, default='')
+    comment = models.TextField(blank=True, default='')
+    lead = models.ForeignKey('crm.Lead', on_delete=models.SET_NULL, null=True, blank=True, related_name='converted_students')
     photo = models.ImageField(upload_to='students/photos/', null=True, blank=True)
     school = models.CharField(max_length=255, blank=True)
     telegram = models.CharField(max_length=64, blank=True)
@@ -86,6 +96,8 @@ class Student(models.Model):
     status = models.IntegerField(choices=Status.choices, default=Status.TRIAL)
     balance = models.IntegerField(default=0)
     paid_this_month = models.BooleanField(default=False)
+    trial_date = models.DateField(null=True, blank=True)
+    payment_offset = models.IntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
 
     @property
@@ -108,18 +120,37 @@ class Student(models.Model):
 
 class Lead(models.Model):
     class Stage(models.TextChoices):
+        TRIAL_BOOKED = 'trial_booked', 'Записан на пробный'
+        ATTENDED = 'attended', 'Был на уроке (Думает)'
+        REJECTED = 'rejected', 'Отказ / Архив'
         INCOMING = 'incoming', 'Incoming'
         WAITING = 'waiting', 'Waiting'
         SET = 'set', 'Set'
-        ATTENDED = 'attended', 'Attended'
         PAID = 'paid', 'Paid'
 
     company = models.ForeignKey('org.Company', on_delete=models.CASCADE, related_name='leads')
-    full_name = models.CharField(max_length=255)
+    first_name = models.CharField(max_length=150, default='')
+    last_name = models.CharField(max_length=150, blank=True, default='')
     phone = models.CharField(max_length=15)
-    stage = models.CharField(max_length=20, choices=Stage.choices, default=Stage.INCOMING)
+    phone2 = models.CharField(max_length=15, blank=True, default='')
+    address = models.CharField(max_length=255, blank=True, default='')
+    comment = models.TextField(blank=True, default='')
+    stage = models.CharField(max_length=20, choices=Stage.choices, default=Stage.TRIAL_BOOKED)
+    trial_date = models.DateField(null=True, blank=True)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    @property
+    def full_name(self) -> str:
+        return f'{self.first_name} {self.last_name}'.strip()
+
+    @property
+    def status(self) -> str:
+        return self.stage
+
+    @status.setter
+    def status(self, value: str):
+        self.stage = value
 
     def __str__(self) -> str:
         return self.full_name
@@ -136,6 +167,7 @@ class AttendanceRecord(models.Model):
     student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name='attendance_records')
     attend_date = models.DateField()
     status = models.IntegerField(choices=Status.choices, default=Status.PRESENT)
+    note = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self) -> str:

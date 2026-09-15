@@ -38,8 +38,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from django.conf import settings
-from django.db import close_old_connections
-from django.db.models import Max
+from django.db.models import Count, Max, Min, Sum
 from django.utils import timezone
 
 from crm.models import AttendanceRecord, Student
@@ -194,25 +193,68 @@ def _send(config: dict, student, rule: dict, trigger_date: date, ctx: dict) -> b
     return ok
 
 
-def _add_month(d: date) -> date:
-    year, month = (d.year + 1, 1) if d.month == 12 else (d.year, d.month + 1)
-    return date(year, month, min(d.day, calendar.monthrange(year, month)[1]))
+def _add_months(d: date, num_months: int) -> date:
+    year = d.year + (d.month - 1 + num_months) // 12
+    month = (d.month - 1 + num_months) % 12 + 1
+    max_day = calendar.monthrange(year, month)[1]
+    return date(year, month, min(d.day, max_day))
 
 
-def _last_payment_dates(company) -> dict:
+def _payments_summary(company) -> dict:
     rows = (
         Payment.objects.filter(company=company)
-        .values('student_name')
-        .annotate(last=Max('created_at'))
+        .values('student_id', 'student_name')
+        .annotate(
+            count=Count('id'),
+            total_months=Sum('months_covered'),
+            last_created=Max('created_at'),
+            first_created=Min('created_at'),
+        )
     )
-    return {row['student_name']: timezone.localtime(row['last']).date() for row in rows if row['last']}
+    summary = {}
+    for r in rows:
+        item = {
+            'count': r['count'],
+            'months_covered': r['total_months'] or r['count'],
+            'last_date': timezone.localtime(r['last_created']).date() if r['last_created'] else None,
+            'first_date': timezone.localtime(r['first_created']).date() if r['first_created'] else None,
+        }
+        if r['student_id']:
+            sid = r['student_id']
+            if sid in summary:
+                summary[sid]['count'] += item['count']
+                summary[sid]['months_covered'] += item['months_covered']
+                if item['last_date'] and (not summary[sid]['last_date'] or item['last_date'] > summary[sid]['last_date']):
+                    summary[sid]['last_date'] = item['last_date']
+                if item['first_date'] and (not summary[sid]['first_date'] or item['first_date'] < summary[sid]['first_date']):
+                    summary[sid]['first_date'] = item['first_date']
+            else:
+                summary[sid] = dict(item)
+        if r['student_name']:
+            sname = r['student_name']
+            if sname in summary:
+                summary[sname]['count'] += item['count']
+                summary[sname]['months_covered'] += item['months_covered']
+                if item['last_date'] and (not summary[sname]['last_date'] or item['last_date'] > summary[sname]['last_date']):
+                    summary[sname]['last_date'] = item['last_date']
+                if item['first_date'] and (not summary[sname]['first_date'] or item['first_date'] < summary[sname]['first_date']):
+                    summary[sname]['first_date'] = item['first_date']
+            else:
+                summary[sname] = dict(item)
+    return summary
 
 
 def _student_due(student, payments: dict):
-    last = payments.get(student.full_name)
-    if last is None:
-        return None
-    return last, _add_month(last)
+    info = payments.get(student.id) or payments.get(student.full_name) or {}
+    months_covered = info.get('months_covered', info.get('count', 0))
+    last_date = info.get('last_date')
+    first_date = info.get('first_date')
+
+    offset = getattr(student, 'payment_offset', 0) or 0
+    effective_count = max(0, months_covered - offset)
+    anchor_date = student.trial_date or first_date or student.created_at.date()
+    next_due = _add_months(anchor_date, effective_count)
+    return last_date, next_due
 
 
 PAYING_STATUSES = None  # filled lazily to avoid import-time surprises
@@ -222,7 +264,7 @@ def _paying_students(company):
     return (
         Student.objects.filter(
             company=company,
-            status__in=[Student.Status.ACTIVE, Student.Status.DEBTOR],
+            status=Student.Status.STUDYING,
         )
         .select_related('group', 'branch')
         .order_by('first_name', 'last_name')
@@ -259,7 +301,7 @@ def _rule_payment_due(config: dict, rule: dict) -> dict:
     days_before = int(rule.get('days_before', 0) or 0)
     sent = 0
     for company in Company.objects.all():
-        payments = _last_payment_dates(company)
+        payments = _payments_summary(company)
         for student in _paying_students(company):
             due = _student_due(student, payments)
             if due is None:
@@ -283,7 +325,7 @@ def _rule_payment_overdue(config: dict, rule: dict) -> dict:
     every_days = max(int(rule.get('every_days', 1) or 1), 1)
     sent = 0
     for company in Company.objects.all():
-        payments = _last_payment_dates(company)
+        payments = _payments_summary(company)
         for student in _paying_students(company):
             due = _student_due(student, payments)
             if due is None:

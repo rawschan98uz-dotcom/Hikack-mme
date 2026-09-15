@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import { useRouter, type RouteLocationRaw } from 'vue-router';
 
@@ -19,16 +19,6 @@ interface DashboardStats {
   left_after_trial: number;
   finance_chart: { label: string; value: number }[];
   schedule: ScheduleRow[];
-  reminders: ReminderRow[];
-}
-
-interface ReminderRow {
-  id: number;
-  title: string;
-  details: string;
-  due_date: string;
-  status: string;
-  assigned_to: string;
 }
 
 const router = useRouter();
@@ -37,7 +27,7 @@ const loading = ref(true);
 
 const cardsRowPrimary = [
   { key: 'active_leads', label: 'Active leads', icon: 'leads', to: '/leads' },
-  { key: 'active_students', label: 'Active students', icon: 'students', to: '/students?statuses=5' },
+  { key: 'active_students', label: 'Active students', icon: 'students', to: '/students?statuses=1' },
   { key: 'groups', label: 'Groups', icon: 'groups', to: '/groups' },
   { key: 'debtors', label: 'Debtors', icon: 'debtors', to: '/students/debtors' },
 ] as const;

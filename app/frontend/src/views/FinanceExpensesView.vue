@@ -1,5 +1,5 @@
-﻿<script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
+<script setup lang="ts">
+import { computed, onMounted, reactive, ref , watch} from 'vue';
 
 import client, { type ApiEnvelope } from '../api/client';
 
@@ -38,6 +38,14 @@ const panelLoading = ref(false);
 const formError = ref('');
 const editingRow = ref<ExpenseRow | null>(null);
 const detailRow = ref<ExpenseRow | null>(null);
+
+const showCategoriesModal = ref(false);
+const newCategoryName = ref('');
+const editingCategoryId = ref<number | null>(null);
+const editingCategoryName = ref('');
+const categoryError = ref('');
+const categorySaving = ref(false);
+
 const filters = reactive({ date_from: '', date_to: '', category_id: '', q: '' });
 const form = reactive({
   category_id: '' as number | '',
@@ -86,6 +94,57 @@ function fillForm(row: ExpenseRow) {
 async function loadCategories() {
   const { data } = await client.get<ApiEnvelope<Category[]>>('/expense_types');
   categories.value = data.data;
+}
+
+async function addCategory() {
+  const name = newCategoryName.value.trim();
+  if (!name) return;
+  categorySaving.value = true;
+  categoryError.value = '';
+  try {
+    await client.post('/expense_types', { name });
+    newCategoryName.value = '';
+    await loadCategories();
+  } catch {
+    categoryError.value = 'Failed to create category';
+  } finally {
+    categorySaving.value = false;
+  }
+}
+
+function startEditCategory(c: Category) {
+  editingCategoryId.value = c.id;
+  editingCategoryName.value = c.name;
+}
+
+async function saveEditCategory(c: Category) {
+  const name = editingCategoryName.value.trim();
+  if (!name) return;
+  categorySaving.value = true;
+  categoryError.value = '';
+  try {
+    await client.patch(`/expense_types/${c.id}`, { name });
+    editingCategoryId.value = null;
+    await loadCategories();
+  } catch {
+    categoryError.value = 'Failed to update category';
+  } finally {
+    categorySaving.value = false;
+  }
+}
+
+async function deleteCategory(id: number) {
+  if (!window.confirm('Delete this expense category?')) return;
+  categorySaving.value = true;
+  categoryError.value = '';
+  try {
+    await client.delete(`/expense_types/${id}`);
+    await loadCategories();
+  } catch {
+    categoryError.value = 'Failed to delete category';
+  } finally {
+    categorySaving.value = false;
+  }
 }
 
 async function loadRows() {
@@ -175,15 +234,37 @@ onMounted(async () => {
   await loadCategories();
   await loadRows();
 });
+
+let searchDebounce: ReturnType<typeof setTimeout> | null = null;
+watch(
+  () => filters.q,
+  (newQ, oldQ) => {
+    if (newQ === oldQ) return;
+    if (searchDebounce) clearTimeout(searchDebounce);
+    searchDebounce = setTimeout(() => {
+      loadRows();
+    }, 400);
+  },
+);
+
 </script>
 
 <template>
   <div class="space-y-4">
     <div class="flex flex-wrap items-center justify-between gap-3">
       <h1 class="text-xl font-semibold text-fb-text">Total Expenses</h1>
-      <button type="button" class="rounded-lg bg-fb-blue px-4 py-2 text-sm font-medium text-white" @click="openCreate">
-        New expense
-      </button>
+      <div class="flex items-center gap-2">
+        <button
+          type="button"
+          class="rounded-lg border border-fb-line px-4 py-2 text-sm font-medium text-fb-secondary hover:border-fb-blue hover:text-fb-blue"
+          @click="showCategoriesModal = true"
+        >
+          Manage categories
+        </button>
+        <button type="button" class="rounded-lg bg-fb-blue px-4 py-2 text-sm font-medium text-white" @click="openCreate">
+          New expense
+        </button>
+      </div>
     </div>
 
     <div class="flex flex-wrap items-end gap-3 rounded-xl border border-fb-line bg-fb-card p-4">
@@ -286,6 +367,104 @@ onMounted(async () => {
             <button type="button" class="rounded-lg border px-5 py-2 text-sm" @click="closePanel">Cancel</button>
           </div>
         </form>
+      </div>
+    </div>
+
+    <!-- Category Management Modal -->
+    <div v-if="showCategoriesModal" class="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div class="absolute inset-0 bg-black/40" @click="showCategoriesModal = false" />
+      <div class="relative w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+        <div class="flex items-center justify-between border-b pb-4">
+          <h3 class="text-lg font-semibold text-fb-text">Expense categories</h3>
+          <button type="button" class="text-fb-secondary hover:text-fb-text" @click="showCategoriesModal = false">✕</button>
+        </div>
+
+        <div class="mt-4 space-y-3">
+          <!-- Add new category -->
+          <form class="flex gap-2" @submit.prevent="addCategory">
+            <input
+              v-model="newCategoryName"
+              type="text"
+              placeholder="New category name…"
+              class="flex-1 rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none"
+              :disabled="categorySaving"
+            />
+            <button
+              type="submit"
+              class="rounded-lg bg-fb-blue px-4 py-2 text-sm font-medium text-white hover:bg-fb-blue-dark disabled:opacity-50"
+              :disabled="categorySaving || !newCategoryName.trim()"
+            >
+              Add
+            </button>
+          </form>
+
+          <p v-if="categoryError" class="text-xs text-fb-danger">{{ categoryError }}</p>
+
+          <!-- List of categories -->
+          <div class="max-h-64 space-y-2 overflow-y-auto pt-2">
+            <div
+              v-for="c in categories"
+              :key="c.id"
+              class="flex items-center justify-between rounded-lg border border-fb-line px-3 py-2 text-sm"
+            >
+              <div v-if="editingCategoryId === c.id" class="flex flex-1 items-center gap-2">
+                <input
+                  v-model="editingCategoryName"
+                  type="text"
+                  class="flex-1 rounded border border-fb-blue px-2 py-1 text-sm focus:outline-none"
+                  @keydown.enter.prevent="saveEditCategory(c)"
+                  @keydown.esc="editingCategoryId = null"
+                />
+                <button
+                  type="button"
+                  class="text-xs font-semibold text-fb-blue hover:underline"
+                  @click="saveEditCategory(c)"
+                >
+                  Save
+                </button>
+                <button
+                  type="button"
+                  class="text-xs text-fb-secondary hover:underline"
+                  @click="editingCategoryId = null"
+                >
+                  Cancel
+                </button>
+              </div>
+              <template v-else>
+                <span class="font-medium text-fb-text">{{ c.name }}</span>
+                <div class="flex items-center gap-2">
+                  <button
+                    type="button"
+                    class="text-xs text-fb-blue hover:underline"
+                    @click="startEditCategory(c)"
+                  >
+                    Edit
+                  </button>
+                  <button
+                    type="button"
+                    class="text-xs text-fb-danger hover:underline"
+                    @click="deleteCategory(c.id)"
+                  >
+                    Delete
+                  </button>
+                </div>
+              </template>
+            </div>
+            <div v-if="!categories.length" class="py-4 text-center text-xs text-fb-secondary">
+              No categories yet
+            </div>
+          </div>
+        </div>
+
+        <div class="mt-6 flex justify-end border-t pt-4">
+          <button
+            type="button"
+            class="rounded-lg border border-fb-line px-4 py-2 text-sm font-medium text-fb-secondary hover:text-fb-text"
+            @click="showCategoriesModal = false"
+          >
+            Close
+          </button>
+        </div>
       </div>
     </div>
   </div>

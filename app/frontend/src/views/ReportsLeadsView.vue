@@ -1,5 +1,5 @@
-﻿<script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
+<script setup lang="ts">
+import { computed, onMounted, reactive, ref , watch} from 'vue';
 import { useRouter } from 'vue-router';
 
 import client, { type ApiEnvelope } from '../api/client';
@@ -22,12 +22,10 @@ interface LeadsReport {
 }
 
 const STAGES = [
-  { value: '', label: 'All stages' },
-  { value: 'incoming', label: 'Incoming' },
-  { value: 'waiting', label: 'Waiting' },
-  { value: 'set', label: 'Set' },
-  { value: 'attended', label: 'Attended' },
-  { value: 'paid', label: 'Paid' },
+  { value: '', label: 'Все статусы (All)' },
+  { value: 'trial_booked', label: 'Записан на пробный' },
+  { value: 'attended', label: 'Был на уроке (Думает)' },
+  { value: 'rejected', label: 'Отказ / Архив' },
 ] as const;
 
 const router = useRouter();
@@ -66,6 +64,19 @@ function openLeads() {
 }
 
 onMounted(loadReport);
+
+let searchDebounce: ReturnType<typeof setTimeout> | null = null;
+watch(
+  () => filters.q,
+  (newQ, oldQ) => {
+    if (newQ === oldQ) return;
+    if (searchDebounce) clearTimeout(searchDebounce);
+    searchDebounce = setTimeout(() => {
+      loadReport();
+    }, 400);
+  },
+);
+
 </script>
 
 <template>
@@ -77,7 +88,7 @@ onMounted(loadReport);
 
     <div class="flex flex-wrap items-end gap-3 rounded-xl border border-fb-line bg-fb-card p-4">
       <div>
-        <label class="mb-1 block text-xs text-fb-secondary">Stage</label>
+        <label class="mb-1 block text-xs text-fb-secondary">Status</label>
         <select v-model="filters.stage" class="rounded-lg border border-fb-line px-3 py-2 text-sm">
           <option v-for="s in STAGES" :key="s.value || 'all'" :value="s.value">{{ s.label }}</option>
         </select>
@@ -109,7 +120,7 @@ onMounted(loadReport);
           <div class="mt-2 text-3xl font-bold text-fb-blue">{{ report.active }}</div>
         </div>
         <div class="rounded-xl border bg-fb-card p-6">
-          <div class="mb-3 text-sm text-fb-secondary">By stage</div>
+          <div class="mb-3 text-sm text-fb-secondary">By status</div>
           <div v-for="card in stageCards" :key="card.key" class="flex justify-between py-1 text-sm">
             <span class="text-fb-secondary">{{ card.label }}</span>
             <span class="font-medium">{{ card.count }}</span>
@@ -124,7 +135,7 @@ onMounted(loadReport);
             <tr>
               <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Full name</th>
               <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Phone</th>
-              <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Stage</th>
+              <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Status</th>
               <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Date</th>
             </tr>
           </thead>

@@ -1,6 +1,6 @@
 from datetime import date
 
-from django.db.models import Q
+from django.db.models import Avg, Q
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -201,18 +201,42 @@ def reminder_complete(request, reminder_id: int):
     return ok({'id': reminder.id, 'status': reminder.status})
 
 
-def _serialize_score(score: StudentScore, rank: int) -> dict:
+def _serialize_score(score: StudentScore, rank: int, company=None) -> dict:
+    pass_score = company.grade_pass_score if company else 70
+    max_scale = company.grade_scale_max if company else 100
+    grade_val = float(score.grade)
+
+    teacher_name = ''
+    if score.group and score.group.teacher:
+        teacher_name = (
+            score.group.teacher.display_name()
+            if hasattr(score.group.teacher, 'display_name')
+            else (score.group.teacher.get_full_name() or score.group.teacher.phone)
+        )
+
+    course_name = ''
+    if score.group and score.group.course:
+        course_name = score.group.course.name
+
     return {
         'id': score.id,
         'no': rank,
+        'rank_in_group': score.rank,
         'student_id': score.student_id,
         'name': score.student.full_name,
         'group_id': score.group_id,
-        'group': score.group.name,
-        'branch_id': score.group.branch_id,
-        'branch': score.group.branch.name,
-        'grade': float(score.grade),
+        'group': score.group.name if score.group else '',
+        'course_id': score.group.course_id if score.group else None,
+        'course': course_name,
+        'teacher_id': score.group.teacher_id if score.group else None,
+        'teacher': teacher_name,
+        'branch_id': score.group.branch_id if score.group else None,
+        'branch': score.group.branch.name if (score.group and score.group.branch) else '',
+        'grade': grade_val,
         'rank': score.rank,
+        'is_passed': grade_val >= pass_score,
+        'pass_score': pass_score,
+        'max_scale': max_scale,
         'updated_at': score.updated_at.isoformat(),
     }
 
@@ -237,6 +261,8 @@ def _score_queryset(company, params):
         'student',
         'group',
         'group__branch',
+        'group__course',
+        'group__teacher',
     ).order_by('-grade', 'student__first_name', 'student__last_name')
 
     branch_id = params.get('branch_id')
@@ -246,6 +272,21 @@ def _score_queryset(company, params):
     group_id = params.get('group_id')
     if group_id:
         qs = qs.filter(group_id=group_id)
+
+    teacher_id = params.get('teacher_id')
+    if teacher_id:
+        qs = qs.filter(group__teacher_id=teacher_id)
+
+    course_id = params.get('course_id')
+    if course_id:
+        qs = qs.filter(group__course_id=course_id)
+
+    pass_score = company.grade_pass_score if company else 70
+    status = params.get('status')
+    if status == 'passed':
+        qs = qs.filter(grade__gte=pass_score)
+    elif status == 'failed':
+        qs = qs.filter(grade__lt=pass_score)
 
     query = (params.get('q') or '').strip()
     if query:
@@ -261,7 +302,10 @@ def _score_queryset(company, params):
 def scores_branch(request):
     company = _company(request)
     if company is None:
-        return ok([])
+        return ok({'summary': {'total': 0, 'avg_grade': 0, 'passed_count': 0, 'failed_count': 0, 'pass_rate': 0, 'pass_score': 70, 'max_scale': 100}, 'rows': []})
+
+    max_scale = company.grade_scale_max or 100
+    pass_score = company.grade_pass_score or 70
 
     if request.method == 'POST':
         try:
@@ -271,8 +315,8 @@ def scores_branch(request):
         except (TypeError, ValueError):
             return fail('Student, group and grade are required')
 
-        if grade < 0 or grade > 100:
-            return fail('Grade must be between 0 and 100')
+        if grade < 0 or grade > max_scale:
+            return fail(f'Grade must be between 0 and {max_scale}')
 
         try:
             student = Student.objects.get(pk=student_id, company=company)
@@ -280,7 +324,7 @@ def scores_branch(request):
             return fail('Student not found')
 
         try:
-            group = Group.objects.select_related('branch').get(pk=group_id, company=company)
+            group = Group.objects.select_related('branch', 'course', 'teacher').get(pk=group_id, company=company)
         except Group.DoesNotExist:
             return fail('Group not found')
 
@@ -292,17 +336,170 @@ def scores_branch(request):
         )
         _recalculate_ranks(company, group.id)
         score.refresh_from_db()
-        score = StudentScore.objects.select_related('student', 'group', 'group__branch').get(pk=score.pk)
+        score = StudentScore.objects.select_related('student', 'group', 'group__branch', 'group__course', 'group__teacher').get(pk=score.pk)
         rank = StudentScore.objects.filter(
             company=company,
             group=group,
             grade__gt=score.grade,
         ).count() + 1
-        return ok(_serialize_score(score, rank), status_code=201)
+        return ok(_serialize_score(score, rank, company), status_code=201)
 
-    scores = list(_score_queryset(company, request.query_params)[:200])
-    rows = [_serialize_score(score, idx) for idx, score in enumerate(scores, start=1)]
-    return ok(rows)
+    qs = _score_queryset(company, request.query_params)
+    total = qs.count()
+    avg_grade = qs.aggregate(avg=Avg('grade'))['avg'] or 0
+    passed_count = qs.filter(grade__gte=pass_score).count()
+    failed_count = total - passed_count
+    pass_rate = round((passed_count / total * 100), 1) if total > 0 else 0
+
+    status = request.query_params.get('status')
+    if status == 'top10':
+        qs = qs[:10]
+    else:
+        limit = int(request.query_params.get('limit') or 500)
+        qs = qs[:limit]
+
+    scores = list(qs)
+    rows = [_serialize_score(score, idx, company) for idx, score in enumerate(scores, start=1)]
+
+    summary = {
+        'total': total,
+        'avg_grade': round(float(avg_grade), 1),
+        'passed_count': passed_count,
+        'failed_count': failed_count,
+        'pass_rate': pass_rate,
+        'pass_score': pass_score,
+        'max_scale': max_scale,
+    }
+
+    return ok({'summary': summary, 'rows': rows})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def scores_bulk(request):
+    """Bulk grading for a whole group at once."""
+    company = _company(request)
+    if company is None:
+        return fail('Company not found', status_code=404)
+
+    group_id = request.data.get('group_id')
+    items = request.data.get('items')
+    if not group_id or not isinstance(items, list):
+        return fail('group_id and items list are required')
+
+    try:
+        group = Group.objects.select_related('branch', 'course', 'teacher').get(pk=int(group_id), company=company)
+    except (Group.DoesNotExist, TypeError, ValueError):
+        return fail('Group not found', status_code=404)
+
+    max_scale = company.grade_scale_max or 100
+
+    student_ids = [item.get('student_id') for item in items if item.get('student_id')]
+    students_map = {
+        s.id: s for s in Student.objects.filter(pk__in=student_ids, company=company)
+    }
+
+    saved_count = 0
+    for item in items:
+        s_id = item.get('student_id')
+        if not s_id or s_id not in students_map:
+            continue
+        try:
+            grade_val = float(item.get('grade', 0))
+        except (TypeError, ValueError):
+            continue
+        if grade_val < 0 or grade_val > max_scale:
+            continue
+
+        StudentScore.objects.update_or_create(
+            company=company,
+            student=students_map[s_id],
+            group=group,
+            defaults={'grade': grade_val},
+        )
+        saved_count += 1
+
+    _recalculate_ranks(company, group.id)
+
+    updated_scores = list(
+        StudentScore.objects.filter(company=company, group=group)
+        .select_related('student', 'group', 'group__branch', 'group__course', 'group__teacher')
+        .order_by('-grade', 'student__first_name', 'student__last_name')
+    )
+    rows = [_serialize_score(sc, idx, company) for idx, sc in enumerate(updated_scores, start=1)]
+    return ok({'saved_count': saved_count, 'rows': rows})
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def scores_groups(request):
+    """Returns group leaderboard: average grade per group, course, teacher, student counts, pass rate."""
+    company = _company(request)
+    if company is None:
+        return ok([])
+
+    branch_id = request.query_params.get('branch_id')
+    course_id = request.query_params.get('course_id')
+    teacher_id = request.query_params.get('teacher_id')
+
+    groups_qs = Group.objects.filter(company=company, status=Group.Status.ACTIVE).select_related(
+        'branch', 'course', 'teacher'
+    )
+    if branch_id:
+        groups_qs = groups_qs.filter(branch_id=branch_id)
+    if course_id:
+        groups_qs = groups_qs.filter(course_id=course_id)
+    if teacher_id:
+        groups_qs = groups_qs.filter(teacher_id=teacher_id)
+
+    pass_score = company.grade_pass_score or 70
+    max_scale = company.grade_scale_max or 100
+
+    group_stats = []
+    for g in groups_qs:
+        scores = StudentScore.objects.filter(company=company, group=g)
+        graded_count = scores.count()
+        enrolled_count = g.students.filter(status=Student.Status.STUDYING).count()
+        if graded_count == 0:
+            avg_grade = 0.0
+            pass_rate = 0.0
+            passed_count = 0
+        else:
+            avg_grade = float(scores.aggregate(avg=Avg('grade'))['avg'] or 0)
+            passed_count = scores.filter(grade__gte=pass_score).count()
+            pass_rate = round((passed_count / graded_count) * 100, 1)
+
+        teacher_name = ''
+        if g.teacher:
+            teacher_name = (
+                g.teacher.display_name()
+                if hasattr(g.teacher, 'display_name')
+                else (g.teacher.get_full_name() or g.teacher.phone)
+            )
+
+        group_stats.append({
+            'group_id': g.id,
+            'group_name': g.name,
+            'branch_id': g.branch_id,
+            'branch_name': g.branch.name if g.branch else '',
+            'course_id': g.course_id,
+            'course_name': g.course.name if g.course else '—',
+            'teacher_id': g.teacher_id,
+            'teacher_name': teacher_name or '—',
+            'enrolled_count': max(enrolled_count, graded_count),
+            'graded_count': graded_count,
+            'passed_count': passed_count,
+            'avg_grade': round(avg_grade, 1),
+            'pass_rate': pass_rate,
+            'pass_score': pass_score,
+            'max_scale': max_scale,
+        })
+
+    group_stats.sort(key=lambda x: (x['avg_grade'], x['graded_count']), reverse=True)
+    for idx, item in enumerate(group_stats, start=1):
+        item['rank'] = idx
+
+    return ok(group_stats)
 
 
 @api_view(['GET', 'PATCH', 'DELETE'])
@@ -313,7 +510,9 @@ def score_detail(request, score_id: int):
         return fail('Company not found', status_code=404)
 
     try:
-        score = StudentScore.objects.select_related('student', 'group', 'group__branch').get(
+        score = StudentScore.objects.select_related(
+            'student', 'group', 'group__branch', 'group__course', 'group__teacher'
+        ).get(
             pk=score_id,
             company=company,
         )
@@ -326,9 +525,10 @@ def score_detail(request, score_id: int):
             group=score.group,
             grade__gt=score.grade,
         ).count() + 1
-        return ok(_serialize_score(score, rank))
+        return ok(_serialize_score(score, rank, company))
 
     group_id = score.group_id
+    max_scale = company.grade_scale_max or 100
 
     if request.method == 'DELETE':
         score.delete()
@@ -340,8 +540,8 @@ def score_detail(request, score_id: int):
             grade = float(request.data.get('grade'))
         except (TypeError, ValueError):
             return fail('Invalid grade')
-        if grade < 0 or grade > 100:
-            return fail('Grade must be between 0 and 100')
+        if grade < 0 or grade > max_scale:
+            return fail(f'Grade must be between 0 and {max_scale}')
         score.grade = grade
 
     student_id = request.data.get('student_id')
@@ -367,7 +567,7 @@ def score_detail(request, score_id: int):
         group=score.group,
         grade__gt=score.grade,
     ).count() + 1
-    return ok(_serialize_score(score, rank))
+    return ok(_serialize_score(score, rank, company))
 
 
 @api_view(['GET', 'POST'])
@@ -619,14 +819,21 @@ def archive_list(request):
         if not name or not phone:
             return fail('Name and phone are required')
 
+        roles = str(request.data.get('roles') or request.data.get('role') or '').strip()
         person = ArchivedPerson.objects.create(
             company=company,
             name=name,
             phone=phone,
-            roles=str(request.data.get('roles') or request.data.get('role') or '').strip(),
+            roles=roles,
             reason=str(request.data.get('reason') or '').strip(),
             comment=str(request.data.get('comment') or '').strip(),
         )
+        if 'teacher' in roles.lower():
+            teacher = User.objects.filter(company=company, phone=phone, user_type=User.UserType.TEACHER).first()
+            if teacher:
+                teacher.is_active = False
+                teacher.save(update_fields=['is_active'])
+                Group.objects.filter(teacher=teacher).update(teacher=None)
         return ok(_serialize_archived(person), status_code=201)
 
     qs = _archive_queryset(company, request.query_params)
@@ -664,6 +871,8 @@ def archive_restore(request, person_id: int):
         return fail('Archived record not found', status_code=404)
 
     payload = _serialize_archived(person)
+    if 'teacher' in (person.roles or '').lower():
+        User.objects.filter(company=company, phone=person.phone, user_type=User.UserType.TEACHER).update(is_active=True)
     person.delete()
     return ok({'restored': True, 'person': payload})
 
@@ -687,6 +896,10 @@ def archive_bulk(request):
 
     people = list(ArchivedPerson.objects.filter(company=company, pk__in=ids))
     count = len(people)
+    if action == 'restore':
+        teacher_phones = [p.phone for p in people if 'teacher' in (p.roles or '').lower()]
+        if teacher_phones:
+            User.objects.filter(company=company, phone__in=teacher_phones, user_type=User.UserType.TEACHER).update(is_active=True)
     for person in people:
         person.delete()
 

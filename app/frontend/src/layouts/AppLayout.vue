@@ -395,6 +395,7 @@ function logout() {
           </button>
 
           <button
+            v-if="auth.can(PERM.REMINDERS_VIEW)"
             type="button"
             class="icon-btn-fb"
             title="Reminders"
@@ -403,18 +404,6 @@ function logout() {
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
               <circle cx="12" cy="12" r="9" />
               <path d="M12 7v5l3 2" />
-            </svg>
-          </button>
-
-          <button
-            type="button"
-            class="icon-btn-fb"
-            title="Notifications"
-            @click="goReminders"
-          >
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
-              <path d="M15 17h5l-1.4-1.4A2 2 0 0118 14.2V11a6 6 0 00-5-5.9V4a1 1 0 00-2 0v1.1A6 6 0 006 11v3.2c0 .5-.2 1-.6 1.4L4 17h5" />
-              <path d="M10 20a2 2 0 004 0" />
             </svg>
           </button>
 

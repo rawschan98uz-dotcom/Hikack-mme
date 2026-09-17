@@ -1,6 +1,6 @@
 from datetime import date as date_cls, datetime, time
 
-from django.db.models import Count, Q
+from django.db.models import Count, F, Q, Sum
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -481,6 +481,13 @@ def replenishments(request):
                     student.paid_this_month = True
                     student.save(update_fields=['paid_this_month'])
 
+        # Send instant payment receipt to Telegram
+        try:
+            from operations.notify import send_payment_receipt_telegram
+            send_payment_receipt_telegram(payment)
+        except Exception:
+            pass
+
         return ok(_serialize_payment(payment), status_code=201)
 
     qs = Payment.objects.filter(company=company).select_related('created_by', 'student').order_by('-created_at')
@@ -936,7 +943,7 @@ def salary_setting_detail(request, setting_id: int):
 def report_conversion(request):
     company = _company(request)
     if company is None:
-        return ok({'pipeline': {}, 'rows': []})
+        return ok({'pipeline': {}, 'rows': [], 'total': 0, 'page': 1, 'total_pages': 1})
 
     leads = Lead.objects.filter(company=company, is_active=True).order_by('-created_at')
     params = request.query_params
@@ -959,21 +966,43 @@ def report_conversion(request):
 
     stage_order = [choice[0] for choice in Lead.Stage.choices]
     stages = {stage: leads.filter(stage=stage).count() for stage in stage_order}
-    rows = []
-    for lead in leads[:200]:
-        stage_idx = stage_order.index(lead.stage) if lead.stage in stage_order else -1
-        row = {
+    total = leads.count()
+
+    def _serialize_conversion_lead(lead: Lead) -> dict:
+        return {
             'id': lead.id,
             'full_name': lead.full_name,
             'phone': lead.phone,
             'stage': lead.stage,
             'stage_label': lead.get_stage_display(),
             'created_at': lead.created_at.date().isoformat(),
+            'trial_booked': True,
+            'attended': lead.stage == Lead.Stage.ATTENDED,
+            'rejected': lead.stage == Lead.Stage.REJECTED,
         }
-        for idx, stage in enumerate(stage_order):
-            row[stage] = idx <= stage_idx
-        rows.append(row)
-    return ok({'pipeline': stages, 'rows': rows})
+
+    export = params.get('export', '0') == '1'
+    if export:
+        rows = [_serialize_conversion_lead(lead) for lead in leads]
+        return ok({'pipeline': stages, 'rows': rows, 'total': total})
+
+    try:
+        page = int(params.get('page', 1))
+    except ValueError:
+        page = 1
+
+    page_size = 50
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    offset = (page - 1) * page_size
+
+    rows = [_serialize_conversion_lead(lead) for lead in leads[offset:offset + page_size]]
+    return ok({
+        'pipeline': stages,
+        'rows': rows,
+        'total': total,
+        'page': page,
+        'total_pages': total_pages,
+    })
 
 
 VALID_ATTENDANCE_STATUSES = {choice[0] for choice in AttendanceRecord.Status.choices}
@@ -1061,6 +1090,51 @@ def report_attendance(request):
         return ok({'summary': {'present': 0, 'absent': 0, 'late': 0, 'total': 0}, 'rows': []})
 
     if request.method == 'POST':
+        attend_date_raw = request.data.get('date') or request.data.get('attend_date')
+        if not attend_date_raw:
+            return fail('Date is required')
+        try:
+            attend_date = date_cls.fromisoformat(str(attend_date_raw)[:10])
+        except ValueError:
+            return fail('Invalid date')
+
+        records_data = request.data.get('records')
+        if isinstance(records_data, list):
+            try:
+                group_id = int(request.data.get('group_id'))
+                group = Group.objects.select_related('branch').get(pk=group_id, company=company)
+            except (TypeError, ValueError, Group.DoesNotExist):
+                return fail('Valid group is required')
+
+            saved_count = 0
+            for item in records_data:
+                try:
+                    s_id = int(item.get('student_id'))
+                    st = int(item.get('status', AttendanceRecord.Status.PRESENT))
+                except (TypeError, ValueError):
+                    continue
+                if st not in VALID_ATTENDANCE_STATUSES:
+                    continue
+                note = str(item.get('note') or '').strip()
+                try:
+                    student = Student.objects.get(pk=s_id, company=company)
+                except Student.DoesNotExist:
+                    continue
+
+                AttendanceRecord.objects.update_or_create(
+                    company=company,
+                    student=student,
+                    group=group,
+                    attend_date=attend_date,
+                    defaults={'status': st, 'note': note},
+                )
+                saved_count += 1
+            return ok({
+                'saved': saved_count,
+                'group_id': group.id,
+                'date': attend_date.isoformat(),
+            }, status_code=200)
+
         try:
             student_id = int(request.data.get('student_id'))
             group_id = int(request.data.get('group_id'))
@@ -1070,14 +1144,6 @@ def report_attendance(request):
 
         if status not in VALID_ATTENDANCE_STATUSES:
             return fail('Invalid status')
-
-        attend_date_raw = request.data.get('date') or request.data.get('attend_date')
-        if not attend_date_raw:
-            return fail('Date is required')
-        try:
-            attend_date = date_cls.fromisoformat(str(attend_date_raw)[:10])
-        except ValueError:
-            return fail('Invalid date')
 
         try:
             student = Student.objects.get(pk=student_id, company=company)
@@ -1469,7 +1535,7 @@ def teacher_attendance_detail(request, record_id: int):
 def report_leads(request):
     company = _company(request)
     if company is None:
-        return ok({'total': 0, 'active': 0, 'by_stage': {}, 'rows': []})
+        return ok({'total': 0, 'active': 0, 'by_stage': {}, 'rows': [], 'page': 1, 'total_pages': 1})
 
     leads = Lead.objects.filter(company=company).order_by('-created_at')
     params = request.query_params
@@ -1498,6 +1564,39 @@ def report_leads(request):
         )
 
     by_stage = {stage: leads.filter(stage=stage).count() for stage, _ in Lead.Stage.choices}
+    total = leads.count()
+    active_count = leads.filter(is_active=True).count()
+
+    export = params.get('export', '0') == '1'
+    if export:
+        rows = [
+            {
+                'id': lead.id,
+                'full_name': lead.full_name,
+                'phone': lead.phone,
+                'stage': lead.stage,
+                'stage_label': lead.get_stage_display(),
+                'is_active': lead.is_active,
+                'created_at': lead.created_at.date().isoformat(),
+            }
+            for lead in leads
+        ]
+        return ok({
+            'total': total,
+            'active': active_count,
+            'by_stage': by_stage,
+            'rows': rows,
+        })
+
+    try:
+        page = int(params.get('page', 1))
+    except ValueError:
+        page = 1
+
+    page_size = 50
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    offset = (page - 1) * page_size
+
     rows = [
         {
             'id': lead.id,
@@ -1508,20 +1607,23 @@ def report_leads(request):
             'is_active': lead.is_active,
             'created_at': lead.created_at.date().isoformat(),
         }
-        for lead in leads[:200]
+        for lead in leads[offset:offset + page_size]
     ]
     return ok({
-        'total': leads.count(),
-        'active': leads.filter(is_active=True).count(),
+        'total': total,
+        'active': active_count,
         'by_stage': by_stage,
         'rows': rows,
+        'page': page,
+        'total_pages': total_pages,
     })
 
 
-LEFT_STUDENT_STATUSES = {Student.Status.LEFT_TRIAL, Student.Status.LEFT_ACTIVE}
+LEFT_STUDENT_STATUSES = {Student.Status.LEFT_TRIAL, Student.Status.LEFT}
 
 
 def _serialize_left_student(student: Student) -> dict:
+    left_dt = student.left_at or student.created_at
     return {
         'id': student.id,
         'full_name': student.full_name,
@@ -1533,7 +1635,8 @@ def _serialize_left_student(student: Student) -> dict:
         'group_id': student.group_id,
         'group': student.group.name if student.group_id else '—',
         'balance': student.balance,
-        'left_at': student.created_at.date().isoformat(),
+        'comment': student.comment or '—',
+        'left_at': left_dt.date().isoformat() if left_dt else '',
     }
 
 
@@ -1541,7 +1644,7 @@ def _left_students_queryset(company, params):
     qs = Student.objects.filter(
         company=company,
         status__in=LEFT_STUDENT_STATUSES,
-    ).select_related('branch', 'group').order_by('-created_at')
+    ).select_related('branch', 'group').order_by(F('left_at').desc(nulls_last=True), '-created_at')
 
     status = params.get('status')
     if status:
@@ -1551,7 +1654,7 @@ def _left_students_queryset(company, params):
                 qs = qs.filter(status=status_val)
         except ValueError:
             if status == 'left_active_group':
-                qs = qs.filter(status=Student.Status.LEFT_ACTIVE)
+                qs = qs.filter(status=Student.Status.LEFT)
             elif status == 'left_after_trial':
                 qs = qs.filter(status=Student.Status.LEFT_TRIAL)
 
@@ -1565,18 +1668,23 @@ def _left_students_queryset(company, params):
 
     date_from = params.get('date_from')
     if date_from:
-        qs = qs.filter(created_at__date__gte=date_from)
+        qs = qs.filter(
+            Q(left_at__date__gte=date_from) | Q(left_at__isnull=True, created_at__date__gte=date_from)
+        )
 
     date_to = params.get('date_to')
     if date_to:
-        qs = qs.filter(created_at__lte=date_to)
+        qs = qs.filter(
+            Q(left_at__date__lte=date_to) | Q(left_at__isnull=True, created_at__date__lte=date_to)
+        )
 
     query = (params.get('q') or '').strip()
     if query:
         qs = qs.filter(
             Q(first_name__icontains=query)
             | Q(last_name__icontains=query)
-            | Q(phone__icontains=query),
+            | Q(phone__icontains=query)
+            | Q(comment__icontains=query),
         )
 
     return qs
@@ -1584,7 +1692,7 @@ def _left_students_queryset(company, params):
 
 def _left_students_summary(qs) -> dict:
     return {
-        'left_active': qs.filter(status=Student.Status.LEFT_ACTIVE).count(),
+        'left_active': qs.filter(status=Student.Status.LEFT).count(),
         'left_trial': qs.filter(status=Student.Status.LEFT_TRIAL).count(),
         'total': qs.count(),
     }
@@ -1595,12 +1703,35 @@ def _left_students_summary(qs) -> dict:
 def report_left_students(request):
     company = _company(request)
     if company is None:
-        return ok({'summary': {'left_active': 0, 'left_trial': 0, 'total': 0}, 'rows': []})
+        return ok({'summary': {'left_active': 0, 'left_trial': 0, 'total': 0}, 'rows': [], 'page': 1, 'total_pages': 1, 'total': 0})
 
     qs = _left_students_queryset(company, request.query_params)
+    total = qs.count()
+    summary = _left_students_summary(qs)
+
+    export = request.query_params.get('export', '0') == '1'
+    if export:
+        return ok({
+            'summary': summary,
+            'rows': [_serialize_left_student(student) for student in qs],
+            'total': total,
+        })
+
+    try:
+        page = int(request.query_params.get('page', 1))
+    except ValueError:
+        page = 1
+
+    page_size = 50
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    offset = (page - 1) * page_size
+
     return ok({
-        'summary': _left_students_summary(qs),
-        'rows': [_serialize_left_student(student) for student in qs[:200]],
+        'summary': summary,
+        'rows': [_serialize_left_student(student) for student in qs[offset:offset + page_size]],
+        'total': total,
+        'page': page,
+        'total_pages': total_pages,
     })
 
 
@@ -1729,9 +1860,32 @@ def report_workly(request):
         return ok(_serialize_workly(record), status_code=201 if created else 200)
 
     qs = _workly_queryset(company, request.query_params)
+    total = qs.count()
+    summary = _workly_summary(qs)
+
+    export = request.query_params.get('export', '0') == '1'
+    if export:
+        return ok({
+            'summary': summary,
+            'rows': [_serialize_workly(record) for record in qs],
+            'total': total,
+        })
+
+    try:
+        page = int(request.query_params.get('page', 1))
+    except ValueError:
+        page = 1
+
+    page_size = 50
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    offset = (page - 1) * page_size
+
     return ok({
-        'summary': _workly_summary(qs),
-        'rows': [_serialize_workly(record) for record in qs[:200]],
+        'summary': summary,
+        'rows': [_serialize_workly(record) for record in qs[offset:offset + page_size]],
+        'total': total,
+        'page': page,
+        'total_pages': total_pages,
     })
 
 
@@ -1800,6 +1954,9 @@ def company_settings(request):
             company.grade_pass_score = max(0, int(request.data['grade_pass_score']))
         if 'grade_scale_max' in request.data:
             company.grade_scale_max = max(1, int(request.data['grade_scale_max']))
+        for gw_field in ('click_service_id', 'click_merchant_id', 'click_secret_key', 'payme_merchant_id', 'payme_secret_key', 'uzum_merchant_id'):
+            if gw_field in request.data:
+                setattr(company, gw_field, str(request.data[gw_field] or '').strip())
         company.save()
 
     return ok({
@@ -1820,9 +1977,286 @@ def company_settings(request):
         'voip_caller_id': company.voip_caller_id,
         'grade_pass_score': company.grade_pass_score,
         'grade_scale_max': company.grade_scale_max,
+        'click_service_id': company.click_service_id,
+        'click_merchant_id': company.click_merchant_id,
+        'click_secret_key': company.click_secret_key,
+        'payme_merchant_id': company.payme_merchant_id,
+        'payme_secret_key': company.payme_secret_key,
+        'uzum_merchant_id': company.uzum_merchant_id,
         'tabs': [
-            'General settings', 'Sign in', 'Lead form', 'Payment methods',
+            'General settings', 'Payment methods', 'Sign in', 'Lead form',
             'Communication', 'Integrations', 'Exams', 'Invoice',
             'Accrual and payment', 'Landing page',
         ],
     })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def report_pnl(request):
+    company = _company(request)
+    if company is None:
+        return fail('Company not found', status_code=404)
+
+    date_from = request.query_params.get('date_from')
+    date_to = request.query_params.get('date_to')
+    branch_id = request.query_params.get('branch_id')
+
+    payments_qs = Payment.objects.filter(company=company)
+    expenses_qs = Expense.objects.filter(company=company)
+    withdrawals_qs = Withdrawal.objects.filter(company=company)
+
+    if date_from:
+        payments_qs = payments_qs.filter(created_at__date__gte=date_from)
+        expenses_qs = expenses_qs.filter(created_at__date__gte=date_from)
+        withdrawals_qs = withdrawals_qs.filter(created_at__date__gte=date_from)
+    if date_to:
+        payments_qs = payments_qs.filter(created_at__date__lte=date_to)
+        expenses_qs = expenses_qs.filter(created_at__date__lte=date_to)
+        withdrawals_qs = withdrawals_qs.filter(created_at__date__lte=date_to)
+
+    if branch_id:
+        try:
+            b_id = int(branch_id)
+            payments_qs = payments_qs.filter(student__branch_id=b_id)
+        except (ValueError, TypeError):
+            pass
+
+    total_revenue = payments_qs.aggregate(total=Sum('amount'))['total'] or 0
+    total_expenses = expenses_qs.aggregate(total=Sum('amount'))['total'] or 0
+    total_withdrawals = withdrawals_qs.aggregate(total=Sum('amount'))['total'] or 0
+    net_profit = total_revenue - total_expenses
+    profit_margin = round((net_profit / total_revenue * 100), 1) if total_revenue > 0 else 0
+
+    revenue_by_method = []
+    for method_code, method_name in Payment.Method.choices:
+        amount = payments_qs.filter(method=method_code).aggregate(total=Sum('amount'))['total'] or 0
+        revenue_by_method.append({
+            'method': method_code,
+            'label': method_name,
+            'amount': amount,
+            'percent': round((amount / total_revenue * 100), 1) if total_revenue > 0 else 0,
+        })
+
+    expense_by_category = []
+    uncat_amount = expenses_qs.filter(category__isnull=True).aggregate(total=Sum('amount'))['total'] or 0
+    if uncat_amount > 0:
+        expense_by_category.append({
+            'id': None,
+            'name': 'Без категории',
+            'amount': uncat_amount,
+            'percent': round((uncat_amount / total_expenses * 100), 1) if total_expenses > 0 else 0,
+        })
+    for cat in ExpenseCategory.objects.filter(company=company):
+        cat_amount = expenses_qs.filter(category=cat).aggregate(total=Sum('amount'))['total'] or 0
+        if cat_amount > 0:
+            expense_by_category.append({
+                'id': cat.id,
+                'name': cat.name,
+                'amount': cat_amount,
+                'percent': round((cat_amount / total_expenses * 100), 1) if total_expenses > 0 else 0,
+            })
+    expense_by_category.sort(key=lambda x: x['amount'], reverse=True)
+
+    return ok({
+        'summary': {
+            'total_revenue': total_revenue,
+            'total_expenses': total_expenses,
+            'total_withdrawals': total_withdrawals,
+            'net_profit': net_profit,
+            'profit_margin': profit_margin,
+            'date_from': date_from,
+            'date_to': date_to,
+        },
+        'revenue_by_method': revenue_by_method,
+        'expense_by_category': expense_by_category,
+    })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def payroll_summary(request):
+    import calendar
+    company = _company(request)
+    if company is None:
+        return fail('Company not found', status_code=404)
+
+    month_str = request.query_params.get('month') or timezone.localdate().strftime('%Y-%m')
+    try:
+        parts = month_str.strip().split('-')
+        year, month = int(parts[0]), int(parts[1])
+        num_days = calendar.monthrange(year, month)[1]
+        start_date = date_cls(year, month, 1)
+        end_date = date_cls(year, month, num_days)
+    except (ValueError, IndexError):
+        today = timezone.localdate()
+        year, month = today.year, today.month
+        num_days = calendar.monthrange(year, month)[1]
+        start_date = date_cls(year, month, 1)
+        end_date = date_cls(year, month, num_days)
+        month_str = today.strftime('%Y-%m')
+
+    teachers = User.objects.filter(
+        company=company,
+        user_type=User.UserType.TEACHER,
+        is_active=True,
+    ).order_by('first_name', 'last_name')
+
+    total_accrued = 0
+    total_paid = 0
+    items = []
+
+    for t in teachers:
+        t_name = t.display_name()
+        groups = Group.objects.filter(company=company, teacher=t)
+        group_names = [g.name for g in groups]
+
+        # Lessons held in month
+        lessons_count = TeacherAttendanceRecord.objects.filter(
+            company=company,
+            teacher=t,
+            attend_date__gte=start_date,
+            attend_date__lte=end_date,
+            status__in=[TeacherAttendanceRecord.Status.PRESENT, TeacherAttendanceRecord.Status.LATE],
+        ).count()
+        if lessons_count == 0 and groups.exists():
+            lessons_count = AttendanceRecord.objects.filter(
+                company=company,
+                group__in=groups,
+                attend_date__gte=start_date,
+                attend_date__lte=end_date,
+            ).values('attend_date').distinct().count()
+
+        # Active students across groups
+        students_count = Student.objects.filter(
+            company=company,
+            group__in=groups,
+            status=Student.Status.STUDYING,
+        ).count()
+
+        # Payments received from these students in month
+        group_payments = Payment.objects.filter(
+            company=company,
+            student__group__in=groups,
+            created_at__date__gte=start_date,
+            created_at__date__lte=end_date,
+        ).aggregate(total=Sum('amount'))['total'] or 0
+
+        # Setting
+        setting = SalarySetting.objects.filter(
+            company=company,
+            teacher_name=t_name,
+        ).first()
+        if not setting:
+            for s in SalarySetting.objects.filter(company=company):
+                if s.teacher_name.strip().lower() == t_name.lower():
+                    setting = s
+                    break
+
+        accrued = 0
+        salary_type_label = 'Не настроена'
+        rate_amount = 0
+        if setting:
+            rate_amount = setting.amount
+            salary_type_label = setting.get_salary_type_display()
+            if setting.salary_type == SalarySetting.SalaryType.FIXED:
+                accrued = setting.amount
+            elif setting.salary_type == SalarySetting.SalaryType.PERCENT:
+                accrued = int(group_payments * (setting.amount / 100.0))
+            elif setting.salary_type == SalarySetting.SalaryType.PER_STUDENT:
+                accrued = setting.amount * students_count
+
+        # Paid in month
+        paid = Expense.objects.filter(
+            company=company,
+            payee=t_name,
+            category__name__icontains='Зарплата',
+            created_at__date__gte=start_date,
+            created_at__date__lte=end_date,
+        ).aggregate(total=Sum('amount'))['total'] or 0
+
+        balance = max(0, accrued - paid)
+        total_accrued += accrued
+        total_paid += paid
+
+        status = 'paid' if accrued > 0 and balance <= 0 else ('partial' if paid > 0 else ('unpaid' if accrued > 0 else 'none'))
+
+        items.append({
+            'teacher_id': t.id,
+            'teacher_name': t_name,
+            'phone': t.phone,
+            'groups_count': groups.count(),
+            'groups_names': ', '.join(group_names) if group_names else '—',
+            'lessons_count': lessons_count,
+            'students_count': students_count,
+            'group_payments': group_payments,
+            'salary_type': setting.salary_type if setting else 'none',
+            'salary_type_label': salary_type_label,
+            'rate_amount': rate_amount,
+            'accrued': accrued,
+            'paid': paid,
+            'balance': balance,
+            'status': status,
+        })
+
+    return ok({
+        'month': month_str,
+        'summary': {
+            'total_accrued': total_accrued,
+            'total_paid': total_paid,
+            'total_balance': max(0, total_accrued - total_paid),
+            'teachers_count': len(teachers),
+        },
+        'rows': items,
+    })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def payroll_pay(request):
+    company = _company(request)
+    if company is None:
+        return fail('Company not found', status_code=404)
+
+    teacher_id = request.data.get('teacher_id')
+    try:
+        teacher = User.objects.get(pk=teacher_id, company=company)
+    except (User.DoesNotExist, TypeError, ValueError):
+        return fail('Teacher not found', status_code=404)
+
+    try:
+        amount = int(request.data.get('amount') or 0)
+        if amount <= 0:
+            raise ValueError()
+    except (ValueError, TypeError):
+        return fail('Valid positive amount is required', status_code=400)
+
+    method = str(request.data.get('method') or 'cash').strip().lower()
+    month = str(request.data.get('month') or timezone.localdate().strftime('%Y-%m')).strip()
+    comment = str(request.data.get('comment') or f'Зарплата за {month}: {teacher.display_name()}').strip()
+
+    salary_cat, _ = ExpenseCategory.objects.get_or_create(
+        company=company,
+        name='Зарплата',
+    )
+
+    expense = Expense.objects.create(
+        company=company,
+        category=salary_cat,
+        description=comment,
+        payee=teacher.display_name(),
+        method=method if method in {c[0] for c in Expense.Method.choices} else Expense.Method.CASH,
+        amount=amount,
+        created_by=request.user,
+    )
+
+    return ok({
+        'expense_id': expense.id,
+        'teacher_id': teacher.id,
+        'teacher_name': teacher.display_name(),
+        'amount': amount,
+        'method': expense.method,
+        'comment': expense.description,
+        'date': expense.created_at.date().isoformat(),
+    }, status_code=201)
+

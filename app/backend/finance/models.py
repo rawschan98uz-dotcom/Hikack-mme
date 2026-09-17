@@ -100,3 +100,34 @@ class SalarySetting(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+
+class PaymentTransaction(models.Model):
+    class Provider(models.TextChoices):
+        CLICK = 'click', 'Click'
+        PAYME = 'payme', 'Payme'
+        UZUM = 'uzum', 'Uzum'
+
+    class Status(models.TextChoices):
+        PENDING = 'pending', 'Pending'
+        COMPLETED = 'completed', 'Completed'
+        CANCELLED = 'cancelled', 'Cancelled'
+
+    company = models.ForeignKey('org.Company', on_delete=models.CASCADE, related_name='payment_transactions')
+    student = models.ForeignKey('crm.Student', on_delete=models.CASCADE, related_name='payment_transactions')
+    provider = models.CharField(max_length=20, choices=Provider.choices)
+    trans_id = models.CharField(max_length=255)
+    amount = models.IntegerField()
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    payment = models.ForeignKey(Payment, null=True, blank=True, on_delete=models.SET_NULL, related_name='transactions')
+    data = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['company', 'provider', 'trans_id']),
+        ]
+
+    def __str__(self) -> str:
+        return f'{self.provider} #{self.trans_id} ({self.status}) - {self.amount}'

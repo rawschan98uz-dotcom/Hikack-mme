@@ -2,6 +2,8 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 
 import client, { type ApiEnvelope } from '../api/client';
+import ReceiptModal, { type ReceiptPayment } from '../components/ReceiptModal.vue';
+import PaymentLinkModal, { type StudentPaymentLinkTarget } from '../components/PaymentLinkModal.vue';
 
 interface PaymentRow {
   id: number;
@@ -48,6 +50,56 @@ const panelLoading = ref(false);
 const formError = ref('');
 const editingRow = ref<PaymentRow | null>(null);
 const detailRow = ref<PaymentRow | null>(null);
+
+const showReceiptModal = ref(false);
+const receiptPayment = ref<ReceiptPayment | null>(null);
+
+function printPayment(row: PaymentRow) {
+  receiptPayment.value = {
+    id: row.id,
+    date: row.date,
+    student_name: row.student_name || row.name,
+    amount: row.sum,
+    months_covered: row.months_covered || 1,
+    method: row.method,
+    method_pay: row.method_pay,
+    teacher: row.teacher,
+    teacher_name: row.teacher_name,
+    comment: row.comment,
+    creator: row.creator,
+  };
+  showReceiptModal.value = true;
+}
+
+function printRowById(id: number) {
+  const row = rows.value.find((r) => r.id === id);
+  if (row) printPayment(row);
+}
+
+const showPaymentLinkModal = ref(false);
+const paymentLinkStudent = ref<StudentPaymentLinkTarget | null>(null);
+
+function openPaymentLink(studentOrRow?: StudentOption | PaymentRow | null) {
+  const target = studentOrRow || selectedStudent.value;
+  if (!target) return;
+  if ('student_id' in target && target.student_id) {
+    paymentLinkStudent.value = {
+      id: target.student_id,
+      full_name: target.student_name || target.name,
+      phone: '',
+      course_price: target.sum,
+    };
+  } else if ('full_name' in target) {
+    paymentLinkStudent.value = {
+      id: target.id,
+      full_name: target.full_name,
+      phone: target.phone,
+      group: target.group,
+      course_price: target.course_price,
+    };
+  }
+  showPaymentLinkModal.value = true;
+}
 
 const filters = reactive({ date_from: '', date_to: '', method: '', q: '' });
 const form = reactive({
@@ -312,6 +364,7 @@ watch(
             <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Teacher</th>
             <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Comment</th>
             <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Creator</th>
+            <th class="px-5 py-4 text-right font-semibold text-fb-secondary">Чек</th>
           </tr>
         </thead>
         <tbody>
@@ -328,6 +381,17 @@ watch(
             <td class="px-5 py-4">{{ row.teacher }}</td>
             <td class="px-5 py-4">{{ row.comment }}</td>
             <td class="px-5 py-4">{{ row.creator }}</td>
+            <td class="px-5 py-4 text-right" @click.stop>
+              <button
+                type="button"
+                title="Печать квитанции"
+                class="inline-flex items-center gap-1 rounded-lg border border-fb-line bg-white px-2.5 py-1 text-xs font-medium text-fb-secondary shadow-sm hover:border-fb-blue hover:text-fb-blue transition-colors"
+                @click="printRowById(row.id)"
+              >
+                <span>🖨️</span>
+                <span>Чек</span>
+              </button>
+            </td>
           </tr>
         </tbody>
       </table>
@@ -423,16 +487,56 @@ watch(
           </div>
           <div class="flex gap-2 border-t px-6 py-4">
             <template v-if="isReadOnly && detailRow">
+              <button
+                type="button"
+                class="inline-flex items-center gap-1.5 rounded-lg border border-fb-line bg-white px-4 py-2 text-sm font-medium text-fb-text hover:border-fb-blue hover:text-fb-blue transition-colors"
+                @click="printPayment(detailRow)"
+              >
+                <span>🖨️</span>
+                <span>Печать чека</span>
+              </button>
+              <button
+                v-if="detailRow.student_id"
+                type="button"
+                class="inline-flex items-center gap-1.5 rounded-lg border border-fb-line bg-white px-3 py-2 text-sm font-medium text-fb-text hover:border-fb-blue hover:text-fb-blue transition-colors"
+                @click="openPaymentLink(detailRow)"
+              >
+                <span>💳</span>
+                <span>Ссылка</span>
+              </button>
               <button type="button" class="rounded-lg bg-fb-blue px-5 py-2 text-sm text-white" @click="startEdit">Edit</button>
               <button type="button" class="rounded-lg border border-red-300 px-5 py-2 text-sm text-fb-danger" :disabled="deleting" @click="deleteRow">Delete</button>
             </template>
-            <button v-else type="submit" class="rounded-lg bg-fb-blue px-5 py-2 text-sm text-white" :disabled="saving">
-              {{ saving ? 'Saving…' : editingRow ? 'Save' : 'Create' }}
-            </button>
+            <template v-else>
+              <button
+                v-if="selectedStudent"
+                type="button"
+                class="inline-flex items-center gap-1.5 rounded-lg border border-fb-line bg-white px-3 py-2 text-sm font-medium text-fb-text hover:border-fb-blue hover:text-fb-blue transition-colors"
+                @click="openPaymentLink(selectedStudent)"
+              >
+                <span>💳</span>
+                <span>Ссылка</span>
+              </button>
+              <button type="submit" class="rounded-lg bg-fb-blue px-5 py-2 text-sm text-white" :disabled="saving">
+                {{ saving ? 'Saving…' : editingRow ? 'Save' : 'Create' }}
+              </button>
+            </template>
             <button type="button" class="rounded-lg border px-5 py-2 text-sm" @click="closePanel">Cancel</button>
           </div>
         </form>
       </div>
     </div>
+
+    <!-- Receipt Modal -->
+    <ReceiptModal
+      v-model:open="showReceiptModal"
+      :payment="receiptPayment"
+    />
+
+    <!-- Payment Link Modal -->
+    <PaymentLinkModal
+      v-model:open="showPaymentLinkModal"
+      :student="paymentLinkStudent"
+    />
   </div>
 </template>

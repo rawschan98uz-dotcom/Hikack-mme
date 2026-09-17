@@ -2,6 +2,7 @@ import secrets
 
 from django.conf import settings
 from django.db import models
+from django.utils import timezone
 
 
 class Course(models.Model):
@@ -68,6 +69,7 @@ class Student(models.Model):
     class Status(models.IntegerChoices):
         STUDYING = 1, 'Обучается'
         FROZEN = 2, 'Заморозка (Frozen)'
+        LEFT_TRIAL = 7, 'Ушел после пробного'
         LEFT = 8, 'Отчислен / Ушел'
         GRADUATED = 9, 'Завершил курс (Graduated)'
 
@@ -76,7 +78,6 @@ class Student(models.Model):
     Status.TRIAL = Status.STUDYING  # type: ignore[attr-defined]
     Status.DEBTOR = Status.STUDYING  # type: ignore[attr-defined]
     Status.LEFT_ACTIVE = Status.LEFT  # type: ignore[attr-defined]
-    Status.LEFT_TRIAL = Status.LEFT  # type: ignore[attr-defined]
 
     company = models.ForeignKey('org.Company', on_delete=models.CASCADE, related_name='students')
     branch = models.ForeignKey('org.Branch', on_delete=models.CASCADE, related_name='students')
@@ -98,6 +99,7 @@ class Student(models.Model):
     paid_this_month = models.BooleanField(default=False)
     trial_date = models.DateField(null=True, blank=True)
     payment_offset = models.IntegerField(default=0)
+    left_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     @property
@@ -105,6 +107,18 @@ class Student(models.Model):
         return f'{self.first_name} {self.last_name}'.strip()
 
     def save(self, *args, **kwargs):
+        left_statuses = {self.Status.LEFT, self.Status.LEFT_TRIAL}
+        if self.pk:
+            old_status = Student.objects.filter(pk=self.pk).values_list('status', flat=True).first()
+            if self.status in left_statuses and old_status not in left_statuses:
+                if not self.left_at:
+                    self.left_at = timezone.now()
+            elif self.status not in left_statuses:
+                self.left_at = None
+        else:
+            if self.status in left_statuses and not self.left_at:
+                self.left_at = timezone.now()
+
         if not self.telegram_code:
             alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
             for _ in range(20):
@@ -123,10 +137,6 @@ class Lead(models.Model):
         TRIAL_BOOKED = 'trial_booked', 'Записан на пробный'
         ATTENDED = 'attended', 'Был на уроке (Думает)'
         REJECTED = 'rejected', 'Отказ / Архив'
-        INCOMING = 'incoming', 'Incoming'
-        WAITING = 'waiting', 'Waiting'
-        SET = 'set', 'Set'
-        PAID = 'paid', 'Paid'
 
     company = models.ForeignKey('org.Company', on_delete=models.CASCADE, related_name='leads')
     first_name = models.CharField(max_length=150, default='')

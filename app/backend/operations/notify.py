@@ -160,7 +160,7 @@ def _student_ctx(student, extra: dict | None = None) -> dict:
     return ctx
 
 
-def _send(config: dict, student, rule: dict, trigger_date: date, ctx: dict) -> bool:
+def _send(config: dict, student, rule: dict, trigger_date: date, ctx: dict, reply_markup: dict | None = None) -> bool:
     target = _resolve_target(student.parent_telegram)
     if target is None:
         return False  # parents' telegram is not filled in yet for this student
@@ -173,11 +173,14 @@ def _send(config: dict, student, rule: dict, trigger_date: date, ctx: dict) -> b
     if already:
         return True
     message = _fmt(rule.get('message', ''), ctx)
-    ok, result = telegram_call(config.get('bot_token', ''), 'sendMessage', {
+    payload = {
         'chat_id': target,
         'text': message,
         'disable_web_page_preview': True,
-    })
+    }
+    if reply_markup:
+        payload['reply_markup'] = reply_markup
+    ok, result = telegram_call(config.get('bot_token', ''), 'sendMessage', payload)
     NotificationLog.objects.create(
         company=student.company,
         student=student,
@@ -191,6 +194,134 @@ def _send(config: dict, student, rule: dict, trigger_date: date, ctx: dict) -> b
     if not ok:
         print(f'[notifications] {rule.get("name")} -> {target}: {result}', flush=True)
     return ok
+
+
+def send_payment_receipt_telegram(payment) -> bool:
+    """Send an instant payment receipt to the student's parent via Telegram."""
+    try:
+        config = load_config()
+        if not config.get('enabled') or not config.get('bot_token'):
+            return False
+
+        student = payment.student
+        if not student and payment.student_name:
+            from django.db.models import Q
+            student = Student.objects.filter(company=payment.company).filter(
+                Q(first_name=payment.student_name) | Q(last_name=payment.student_name)
+            ).first()
+            if not student:
+                for s in Student.objects.filter(company=payment.company):
+                    if s.full_name.strip().lower() == payment.student_name.strip().lower():
+                        student = s
+                        break
+        if not student:
+            return False
+
+        target = _resolve_target(student.parent_telegram or student.telegram)
+        if not target:
+            return False
+
+        payments_map = _payments_summary(student.company)
+        _, next_due = _student_due(student, payments_map)
+        due_str = _fmt_date(next_due)
+        amount_str = f"{payment.amount:,}".replace(',', ' ')
+        months_str = f"{payment.months_covered} мес." if payment.months_covered > 1 else "1 мес."
+        course_name = student.group.course.name if (student.group and student.group.course) else (student.group.name if student.group else "")
+
+        lines = [
+            "🧾 Чек об оплате принят!",
+            "",
+            f"Ученик: {student.full_name}",
+        ]
+        if course_name:
+            lines.append(f"Курс: {course_name}")
+        lines.extend([
+            f"Сумма: {amount_str} UZS ({payment.get_method_display()})",
+            f"Период: {months_str}",
+            f"📅 Обучение продлено до: {due_str}",
+            "",
+            "Спасибо за своевременную оплату!",
+        ])
+        text = "\n".join(lines)
+
+        ok, result = telegram_call(config.get('bot_token', ''), 'sendMessage', {
+            'chat_id': target,
+            'text': text,
+            'disable_web_page_preview': True,
+        })
+
+        NotificationLog.objects.create(
+            company=student.company,
+            student=student,
+            rule='payment_receipt',
+            trigger_date=timezone.localdate(),
+            target=target,
+            message=text,
+            ok=ok,
+            error='' if ok else str(result),
+        )
+        return ok
+    except Exception as exc:
+        print(f"[notifications] send_payment_receipt_telegram failed: {exc}", flush=True)
+        return False
+
+
+def send_telegram_payment_link(student, amount: int | None = None, message_intro: str = '') -> tuple[bool, str]:
+    """Send Click/Payme/Uzum payment link to student's parent via Telegram."""
+    config = load_config()
+    if not config.get('enabled') or not config.get('bot_token'):
+        return False, 'Telegram bot is not enabled in notifications configuration'
+
+    target = _resolve_target(student.parent_telegram or student.telegram)
+    if not target:
+        return False, 'Родительский Telegram не указан в профиле ученика'
+
+    from finance.gateways import get_student_payment_links
+    links = get_student_payment_links(student, amount)
+    pay_amount = links['amount']
+    amount_str = f"{pay_amount:,}".replace(',', ' ')
+
+    intro = message_intro.strip() or f"Здравствуйте! Ссылка для онлайн-оплаты обучения ученика {student.full_name}."
+    text = (
+        f"💳 {intro}\n\n"
+        f"Сумма к оплате: {amount_str} UZS\n\n"
+        f"Выберите удобную платежную систему ниже:"
+    )
+
+    buttons = []
+    row = []
+    if links['click']['url']:
+        row.append({'text': '🔹 Оплатить через Click', 'url': links['click']['url']})
+    if links['payme']['url']:
+        row.append({'text': '🔹 Оплатить через Payme', 'url': links['payme']['url']})
+    if row:
+        buttons.append(row)
+    if links['uzum']['url']:
+        buttons.append([{'text': '🔹 Uzum Bank', 'url': links['uzum']['url']}])
+
+    payload = {
+        'chat_id': target,
+        'text': text,
+        'disable_web_page_preview': True,
+    }
+    if buttons:
+        payload['reply_markup'] = {'inline_keyboard': buttons}
+
+    ok, result = telegram_call(config.get('bot_token', ''), 'sendMessage', payload)
+
+    NotificationLog.objects.create(
+        company=student.company,
+        student=student,
+        rule='payment_link',
+        trigger_date=timezone.localdate(),
+        target=target,
+        message=text,
+        ok=ok,
+        error='' if ok else str(result),
+    )
+    if not ok:
+        return False, str(result)
+    return True, 'Ссылка на оплату успешно отправлена'
 
 
 def _add_months(d: date, num_months: int) -> date:
@@ -309,12 +440,28 @@ def _rule_payment_due(config: dict, rule: dict) -> dict:
             last_date, next_due = due
             if next_due < today or (next_due - today).days > days_before:
                 continue
+            from finance.gateways import get_student_payment_links
+            plinks = get_student_payment_links(student)
+            click_url = plinks['click']['url']
+            payme_url = plinks['payme']['url']
             ctx = _student_ctx(student, {
                 'date': _fmt_date(today),
                 'due_date': _fmt_date(next_due),
                 'last_payment_date': _fmt_date(last_date),
+                'click_link': click_url,
+                'payme_link': payme_url,
+                'payment_links': f"\nClick: {click_url}\nPayme: {payme_url}",
             })
-            if _send(config, student, rule, next_due, ctx):
+            buttons = []
+            row = []
+            if plinks['click']['configured'] and click_url:
+                row.append({'text': '🔹 Оплатить через Click', 'url': click_url})
+            if plinks['payme']['configured'] and payme_url:
+                row.append({'text': '🔹 Оплатить через Payme', 'url': payme_url})
+            if row:
+                buttons.append(row)
+            reply_markup = {'inline_keyboard': buttons} if buttons else None
+            if _send(config, student, rule, next_due, ctx, reply_markup=reply_markup):
                 sent += 1
     return {'sent': sent}
 
@@ -334,13 +481,29 @@ def _rule_payment_overdue(config: dict, rule: dict) -> dict:
             days_over = (today - next_due).days
             if days_over < days_after or (days_over - days_after) % every_days != 0:
                 continue
+            from finance.gateways import get_student_payment_links
+            plinks = get_student_payment_links(student)
+            click_url = plinks['click']['url']
+            payme_url = plinks['payme']['url']
             ctx = _student_ctx(student, {
                 'date': _fmt_date(today),
                 'due_date': _fmt_date(next_due),
                 'days': days_over,
                 'last_payment_date': _fmt_date(last_date),
+                'click_link': click_url,
+                'payme_link': payme_url,
+                'payment_links': f"\nClick: {click_url}\nPayme: {payme_url}",
             })
-            if _send(config, student, rule, today, ctx):
+            buttons = []
+            row = []
+            if plinks['click']['configured'] and click_url:
+                row.append({'text': '🔹 Оплатить через Click', 'url': click_url})
+            if plinks['payme']['configured'] and payme_url:
+                row.append({'text': '🔹 Оплатить через Payme', 'url': payme_url})
+            if row:
+                buttons.append(row)
+            reply_markup = {'inline_keyboard': buttons} if buttons else None
+            if _send(config, student, rule, today, ctx, reply_markup=reply_markup):
                 sent += 1
     return {'sent': sent}
 

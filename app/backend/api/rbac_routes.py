@@ -12,6 +12,8 @@ ROUTE_RULES: list[tuple[tuple[str, ...], str, str | None]] = [
     (('GET',), r'^company/subdomain/', None),
     (('GET', 'POST'), r'^auth/me$', None),
     (('PATCH',), r'^auth/me$', P.PERM_PROFILE_EDIT),
+    (('POST',), r'^payments/click/webhook$', None),
+    (('POST',), r'^payments/payme/webhook$', None),
 
     (('GET',), r'^branch$', P.PERM_BRANCH_VIEW),
     (('GET',), r'^dashboard$', P.PERM_DASHBOARD_VIEW),
@@ -28,6 +30,8 @@ ROUTE_RULES: list[tuple[tuple[str, ...], str, str | None]] = [
     (('POST',), r'^students/import$', P.PERM_STUDENTS_WRITE),
     (('GET',), r'^students/\d+$', P.PERM_STUDENTS_VIEW),
     (('GET',), r'^students/\d+/payments$', P.PERM_STUDENTS_VIEW),
+    (('GET',), r'^students/\d+/payment-links$', P.PERM_STUDENTS_VIEW),
+    (('POST',), r'^students/\d+/send-payment-link$', P.PERM_STUDENTS_WRITE),
     (('PATCH', 'POST'), r'^students/\d+$', P.PERM_STUDENTS_WRITE),
     (('DELETE',), r'^students/\d+$', P.PERM_STUDENTS_WRITE),
     (('POST', 'DELETE'), r'^students/\d+/photo$', P.PERM_STUDENTS_WRITE),
@@ -77,7 +81,10 @@ ROUTE_RULES: list[tuple[tuple[str, ...], str, str | None]] = [
     (('GET',), r'^salary-settings$', P.PERM_FINANCE_VIEW),
     (('POST',), r'^salary-settings$', P.PERM_FINANCE_WRITE),
     (('GET', 'PATCH', 'DELETE'), r'^salary-settings/\d+$', P.PERM_FINANCE_WRITE),
+    (('GET',), r'^finance/payroll$', P.PERM_FINANCE_VIEW),
+    (('POST',), r'^finance/payroll/pay$', P.PERM_FINANCE_WRITE),
 
+    (('GET',), r'^reports/pnl$', P.PERM_FINANCE_VIEW),
     (('GET',), r'^reports/conversion$', P.PERM_REPORTS_VIEW),
     (('GET',), r'^reports/leads$', P.PERM_REPORTS_VIEW),
     (('GET',), r'^reports/left-students$', P.PERM_REPORTS_VIEW),

@@ -29,6 +29,12 @@ class Company(models.Model):
     voip_caller_id = models.CharField(max_length=32, blank=True)
     grade_pass_score = models.PositiveIntegerField(default=70)
     grade_scale_max = models.PositiveIntegerField(default=100)
+    click_service_id = models.CharField(max_length=64, blank=True, default='')
+    click_merchant_id = models.CharField(max_length=64, blank=True, default='')
+    click_secret_key = models.CharField(max_length=128, blank=True, default='')
+    payme_merchant_id = models.CharField(max_length=64, blank=True, default='')
+    payme_secret_key = models.CharField(max_length=128, blank=True, default='')
+    uzum_merchant_id = models.CharField(max_length=64, blank=True, default='')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

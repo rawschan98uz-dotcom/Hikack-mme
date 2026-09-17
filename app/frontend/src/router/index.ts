@@ -27,6 +27,7 @@ import ReportsAttendanceView from '../views/ReportsAttendanceView.vue';
 import ReportsConversionView from '../views/ReportsConversionView.vue';
 import ReportsLeftStudentsView from '../views/ReportsLeftStudentsView.vue';
 import ReportsLeadsView from '../views/ReportsLeadsView.vue';
+import ReportsPnlView from '../views/ReportsPnlView.vue';
 import ReportsWorklyView from '../views/ReportsWorklyView.vue';
 import RoadmapView from '../views/RoadmapView.vue';
 import RoomsView from '../views/RoomsView.vue';
@@ -67,6 +68,8 @@ const router = createRouter({
         { path: 'finance/withdraw', component: FinanceWithdrawView },
         { path: 'finance/cost', component: FinanceExpensesView },
         { path: 'finance/new-salaries', component: FinanceSalariesView },
+        { path: 'finance/pnl', component: ReportsPnlView },
+        { path: 'reports/pnl', component: ReportsPnlView },
         { path: 'reports/conversion', component: ReportsConversionView },
         { path: 'reports/attendance', component: ReportsAttendanceView },
         { path: 'reports/leads', component: ReportsLeadsView },

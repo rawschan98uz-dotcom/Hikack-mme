@@ -1,621 +1,905 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref , watch} from 'vue';
-import { useRouter } from 'vue-router';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 
 import client, { type ApiEnvelope } from '../api/client';
-import { groupRoute, studentRoute } from '../utils/crossLinks';
 
 interface Branch {
   id: number;
   name: string;
 }
 
-interface GroupOption {
+interface CourseInfo {
+  id: number;
+  name: string | null;
+  price: number;
+}
+
+interface GroupTag {
   id: number;
   name: string;
-  branch_id: number;
 }
 
-interface StudentOption {
+interface GroupRow {
+  id: number;
+  name: string;
+  days: number;
+  days_label: string;
+  status: number;
+  status_label: string;
+  branch_id: number;
+  branch: string;
+  course_id: number | null;
+  course: CourseInfo | null;
+  teacher_id: number | null;
+  teacher: string | null;
+  room_id: number | null;
+  room: string | null;
+  lesson_start_time: string | null;
+  lesson_end_time: string | null;
+  students_count: number;
+  tags: GroupTag[];
+}
+
+interface GroupStudent {
   id: number;
   full_name: string;
-  group_id: number | null;
+  phone: string;
+  status: number;
+  status_label: string;
 }
 
-interface AttendanceRow {
+interface AttendanceRecordResponse {
   id: number;
   student_id: number;
   student: string;
   group_id: number;
-  group: string;
-  branch_id: number;
-  branch: string;
   date: string;
   status: number;
   status_label: string;
   note?: string;
-  created_at: string;
 }
 
-interface AttendanceSummary {
-  present: number;
-  absent: number;
-  late: number;
-  total: number;
+interface AttendanceSaveResult {
+  saved: number;
+  group_id: number;
+  date: string;
 }
 
-interface AttendancePayload {
-  summary: AttendanceSummary;
-  rows: AttendanceRow[];
-  total: number;
-  page: number;
-  total_pages: number;
-}
-
-const STATUS_OPTIONS = [
-  { value: 1, label: 'Present' },
-  { value: 0, label: 'Absent' },
-  { value: 2, label: 'Late' },
-] as const;
-
-const router = useRouter();
-
-const rows = ref<AttendanceRow[]>([]);
-const summary = ref<AttendanceSummary>({ present: 0, absent: 0, late: 0, total: 0 });
+// State
+const loadingGroups = ref(true);
 const branches = ref<Branch[]>([]);
-const groups = ref<GroupOption[]>([]);
-const students = ref<StudentOption[]>([]);
-const loading = ref(true);
-const saving = ref(false);
-const deleting = ref(false);
-const showPanel = ref(false);
-const panelLoading = ref(false);
-const formError = ref('');
-const editingRecord = ref<AttendanceRow | null>(null);
-const detailRecord = ref<AttendanceRow | null>(null);
+const allGroups = ref<GroupRow[]>([]);
 
+// Filter state
+const todayStr = new Date().toISOString().slice(0, 10);
+const selectedDate = ref(todayStr);
+const selectedBranch = ref<string>('');
+const searchQuery = ref<string>('');
+const showSuggestions = ref(false);
+
+// Pagination
+const pageSize = 50;
 const currentPage = ref(1);
-const totalPages = ref(1);
 
-const filters = reactive({
-  branch_id: '',
-  group_id: '',
-  status: '',
-  date_from: '',
-  date_to: '',
-  q: '',
+// Modal / Drawer state for group roster
+const showModal = ref(false);
+const activeGroup = ref<GroupRow | null>(null);
+const loadingStudents = ref(false);
+const groupStudents = ref<GroupStudent[]>([]);
+const studentStatuses = reactive<Record<number, number>>({});
+const studentNotes = reactive<Record<number, string>>({});
+const savingAttendance = ref(false);
+const saveSuccessMessage = ref('');
+const saveErrorMessage = ref('');
+
+// Smart search & live filtering
+const filteredGroups = computed(() => {
+  let list = allGroups.value;
+
+  if (selectedBranch.value) {
+    const branchId = Number(selectedBranch.value);
+    list = list.filter((g) => g.branch_id === branchId);
+  }
+
+  const q = searchQuery.value.trim().toLowerCase();
+  if (!q) return list;
+
+  return list.filter((g) => {
+    const nameMatch = g.name.toLowerCase().includes(q);
+    const courseMatch = g.course?.name?.toLowerCase().includes(q);
+    const teacherMatch = g.teacher?.toLowerCase().includes(q);
+    const branchMatch = g.branch?.toLowerCase().includes(q);
+    return Boolean(nameMatch || courseMatch || teacherMatch || branchMatch);
+  });
 });
 
-const form = reactive({
-  student_id: '' as number | '',
-  group_id: '' as number | '',
-  date: new Date().toISOString().slice(0, 10),
-  status: 1,
-  note: '',
+// Autocomplete suggestions (top 6 matches based on input)
+const searchSuggestions = computed(() => {
+  const q = searchQuery.value.trim().toLowerCase();
+  if (!q || q.length < 1) return [];
+
+  const matches: { group: GroupRow; highlightField: string }[] = [];
+  for (const g of allGroups.value) {
+    if (g.name.toLowerCase().includes(q)) {
+      matches.push({ group: g, highlightField: g.name });
+    } else if (g.course?.name?.toLowerCase().includes(q)) {
+      matches.push({ group: g, highlightField: `${g.name} (${g.course.name})` });
+    } else if (g.teacher?.toLowerCase().includes(q)) {
+      matches.push({ group: g, highlightField: `${g.name} — ${g.teacher}` });
+    } else if (g.branch?.toLowerCase().includes(q)) {
+      matches.push({ group: g, highlightField: `${g.name} [${g.branch}]` });
+    }
+    if (matches.length >= 8) break;
+  }
+  return matches;
 });
 
-const panelTitle = computed(() => {
-  if (editingRecord.value) return 'Edit attendance';
-  if (detailRecord.value) return 'Attendance details';
-  return 'Mark attendance';
+// Paginated groups for table
+const totalPages = computed(() => Math.ceil(filteredGroups.value.length / pageSize) || 1);
+
+const paginatedGroups = computed(() => {
+  const start = (currentPage.value - 1) * pageSize;
+  return filteredGroups.value.slice(start, start + pageSize);
 });
 
-const isReadOnly = computed(() => Boolean(detailRecord.value && !editingRecord.value));
-
-const filterGroups = computed(() => {
-  if (!filters.branch_id) return groups.value;
-  return groups.value.filter((g) => String(g.branch_id) === filters.branch_id);
-});
-
-const filteredStudents = computed(() => {
-  if (!form.group_id) return [];
-  return students.value.filter((student) => student.group_id === form.group_id);
-});
-
-function statusClass(status: number) {
-  if (status === 1) return 'bg-emerald-50 text-emerald-700';
-  if (status === 0) return 'bg-red-50 text-fb-danger';
-  return 'bg-amber-50 text-amber-700';
-}
-
-function resetForm() {
-  form.student_id = '';
-  form.group_id = groups.value[0]?.id ?? '';
-  form.date = new Date().toISOString().slice(0, 10);
-  form.status = 1;
-  form.note = '';
-  formError.value = '';
-  editingRecord.value = null;
-  detailRecord.value = null;
-}
-
-function fillForm(record: AttendanceRow) {
-  form.student_id = record.student_id;
-  form.group_id = record.group_id;
-  form.date = record.date;
-  form.status = record.status;
-  form.note = record.note || '';
-}
-
-function applyFilters() {
+// Reset page when filter changes
+watch([selectedBranch, searchQuery], () => {
   currentPage.value = 1;
-  loadReport();
+});
+
+// Summary counts inside active group roster
+const rosterSummary = computed(() => {
+  let present = 0;
+  let absent = 0;
+  let late = 0;
+  for (const student of groupStudents.value) {
+    const st = studentStatuses[student.id];
+    if (st === 1) present++;
+    else if (st === 0) absent++;
+    else if (st === 2) late++;
+  }
+  return { present, absent, late, total: groupStudents.value.length };
+});
+
+// Fetch groups & branches
+async function loadInitialData() {
+  loadingGroups.value = true;
+  try {
+    const [branchRes, groupsRes] = await Promise.all([
+      client.get<ApiEnvelope<Branch[]>>('/branch'),
+      client.get<ApiEnvelope<any>>('/groups', { params: { limit: '1000', status: '2' } }),
+    ]);
+
+    branches.value = Array.isArray(branchRes.data.data) ? branchRes.data.data : [];
+
+    const rawGroups = groupsRes.data.data;
+    if (Array.isArray(rawGroups)) {
+      allGroups.value = rawGroups;
+    } else if (rawGroups && Array.isArray(rawGroups.results)) {
+      allGroups.value = rawGroups.results;
+    } else {
+      allGroups.value = [];
+    }
+  } catch (err) {
+    console.error('Failed to load groups for attendance report:', err);
+  } finally {
+    loadingGroups.value = false;
+  }
 }
 
-function changePage(delta: number) {
-  currentPage.value += delta;
-  loadReport();
-}
+// Open group roster modal
+async function openGroupRoster(group: GroupRow) {
+  activeGroup.value = group;
+  showModal.value = true;
+  loadingStudents.value = true;
+  saveSuccessMessage.value = '';
+  saveErrorMessage.value = '';
+  showSuggestions.value = false;
 
-async function exportCsv() {
-  const params: Record<string, string> = { export: '1' };
-  if (filters.branch_id) params.branch_id = filters.branch_id;
-  if (filters.group_id) params.group_id = filters.group_id;
-  if (filters.status !== '') params.status = filters.status;
-  if (filters.date_from) params.date_from = filters.date_from;
-  if (filters.date_to) params.date_to = filters.date_to;
-  if (filters.q.trim()) params.q = filters.q.trim();
+  // Clear previous entries
+  groupStudents.value = [];
+  Object.keys(studentStatuses).forEach((k) => delete studentStatuses[Number(k)]);
+  Object.keys(studentNotes).forEach((k) => delete studentNotes[Number(k)]);
 
   try {
-    const { data } = await client.get<ApiEnvelope<AttendancePayload>>('/reports/attendance', { params });
+    // 1. Fetch group details including students
+    const groupDetailPromise = client.get<ApiEnvelope<any>>(`/groups/${group.id}`);
+
+    // 2. Fetch existing attendance records for this group and date
+    const attendancePromise = client.get<ApiEnvelope<any>>('/reports/attendance', {
+      params: {
+        group_id: String(group.id),
+        date_from: selectedDate.value,
+        date_to: selectedDate.value,
+        export: '1',
+      },
+    });
+
+    const [groupRes, attendanceRes] = await Promise.all([groupDetailPromise, attendancePromise]);
+
+    const groupData = groupRes.data.data;
+    const students: GroupStudent[] = groupData.students || [];
+    groupStudents.value = students;
+
+    // Build map of existing attendance records
+    const attendanceData = attendanceRes.data.data;
+    const rows: AttendanceRecordResponse[] = attendanceData.rows || [];
+    const attendanceMap = new Map<number, { status: number; note?: string }>();
+    for (const row of rows) {
+      attendanceMap.set(row.student_id, { status: row.status, note: row.note });
+    }
+
+    // Set statuses: default to 1 (Присутствовал) if no record yet
+    for (const student of students) {
+      const existing = attendanceMap.get(student.id);
+      if (existing) {
+        studentStatuses[student.id] = existing.status;
+        studentNotes[student.id] = existing.note || '';
+      } else {
+        studentStatuses[student.id] = 1; // Default present
+        studentNotes[student.id] = '';
+      }
+    }
+  } catch (err) {
+    console.error('Failed to load group students or attendance:', err);
+    saveErrorMessage.value = 'Ошибка при загрузке данных учеников группы';
+  } finally {
+    loadingStudents.value = false;
+  }
+}
+
+// Quick action: set all students to a given status
+function markAll(status: number) {
+  for (const student of groupStudents.value) {
+    studentStatuses[student.id] = status;
+  }
+}
+
+// Save attendance for the whole group
+async function saveGroupAttendance() {
+  if (!activeGroup.value || !selectedDate.value) return;
+
+  savingAttendance.value = true;
+  saveSuccessMessage.value = '';
+  saveErrorMessage.value = '';
+
+  const records = groupStudents.value.map((student) => ({
+    student_id: student.id,
+    status: studentStatuses[student.id] ?? 1,
+    note: (studentNotes[student.id] || '').trim(),
+  }));
+
+  try {
+    await client.post<ApiEnvelope<AttendanceSaveResult>>('/reports/attendance', {
+      group_id: activeGroup.value.id,
+      date: selectedDate.value,
+      records,
+    });
+
+    saveSuccessMessage.value = `Посещаемость успешно сохранена! (отмечено учеников: ${records.length})`;
+  } catch (err: any) {
+    console.error('Failed to save group attendance:', err);
+    saveErrorMessage.value = err?.response?.data?.error || err?.message || 'Не удалось сохранить посещаемость';
+  } finally {
+    savingAttendance.value = false;
+  }
+}
+
+function closeModal() {
+  showModal.value = false;
+  activeGroup.value = null;
+  saveSuccessMessage.value = '';
+  saveErrorMessage.value = '';
+}
+
+function selectSuggestion(suggestion: { group: GroupRow; highlightField: string }) {
+  searchQuery.value = suggestion.group.name;
+  showSuggestions.value = false;
+  openGroupRoster(suggestion.group);
+}
+
+function setDateToday() {
+  selectedDate.value = todayStr;
+  if (activeGroup.value) {
+    openGroupRoster(activeGroup.value);
+  }
+}
+
+function setDateYesterday() {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  selectedDate.value = d.toISOString().slice(0, 10);
+  if (activeGroup.value) {
+    openGroupRoster(activeGroup.value);
+  }
+}
+
+function onDateChange() {
+  if (activeGroup.value) {
+    openGroupRoster(activeGroup.value);
+  }
+}
+
+function resetSearchAndFilters() {
+  searchQuery.value = '';
+  selectedBranch.value = '';
+  currentPage.value = 1;
+}
+
+function statusBadgeClass(status: number) {
+  if (status === 1) return 'bg-emerald-100 text-emerald-800 border-emerald-300';
+  if (status === 0) return 'bg-red-100 text-red-800 border-red-300';
+  return 'bg-amber-100 text-amber-800 border-amber-300';
+}
+
+function studentStatusPill(status: number) {
+  if (status === 1) return 'bg-emerald-50 text-emerald-700 border-emerald-200';
+  if (status === 2) return 'bg-sky-50 text-sky-700 border-sky-200';
+  if (status === 7 || status === 8) return 'bg-red-50 text-red-700 border-red-200';
+  return 'bg-gray-50 text-gray-700 border-gray-200';
+}
+
+async function exportAllAttendanceCsv() {
+  try {
+    const params: Record<string, string> = {
+      export: '1',
+      date_from: selectedDate.value,
+      date_to: selectedDate.value,
+    };
+    if (selectedBranch.value) params.branch_id = selectedBranch.value;
+
+    const { data } = await client.get<ApiEnvelope<any>>('/reports/attendance', { params });
+    const rows = data?.data?.rows || [];
+    if (!rows.length) {
+      alert('За выбранную дату нет сохраненных записей посещаемости для экспорта.');
+      return;
+    }
+
     const csvRows = [
-      ['Student', 'Group', 'Branch', 'Date', 'Status', 'Note']
+      ['Ученик', 'Группа', 'Филиал', 'Дата', 'Статус', 'Заметка'],
     ];
-    for (const row of data.data.rows) {
+    for (const r of rows) {
       csvRows.push([
-        `"${row.student}"`,
-        `"${row.group}"`,
-        `"${row.branch}"`,
-        `"${row.date}"`,
-        `"${row.status_label}"`,
-        `"${row.note || ''}"`
+        `"${r.student}"`,
+        `"${r.group}"`,
+        `"${r.branch}"`,
+        `"${r.date}"`,
+        `"${r.status_label}"`,
+        `"${r.note || ''}"`,
       ]);
     }
-    const csvContent = "data:text/csv;charset=utf-8,\uFEFF" + csvRows.map(e => e.join(",")).join("\n");
+    const csvContent = 'data:text/csv;charset=utf-8,\uFEFF' + csvRows.map((e) => e.join(',')).join('\n');
     const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", "student_attendance.csv");
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `attendance_${selectedDate.value}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
   } catch (err) {
     console.error(err);
-    alert('Export failed');
+    alert('Не удалось экспортировать отчет в CSV');
   }
 }
 
-async function loadReport() {
-  loading.value = true;
-  try {
-    const params: Record<string, string> = { page: String(currentPage.value) };
-    if (filters.branch_id) params.branch_id = filters.branch_id;
-    if (filters.group_id) params.group_id = filters.group_id;
-    if (filters.status !== '') params.status = filters.status;
-    if (filters.date_from) params.date_from = filters.date_from;
-    if (filters.date_to) params.date_to = filters.date_to;
-    if (filters.q.trim()) params.q = filters.q.trim();
-
-    const { data } = await client.get<ApiEnvelope<AttendancePayload>>('/reports/attendance', { params });
-    summary.value = data.data.summary;
-    rows.value = data.data.rows;
-    totalPages.value = data.data.total_pages || 1;
-  } finally {
-    loading.value = false;
-  }
-}
-
-async function loadOptions() {
-  const [branchRes, groupRes, studentRes] = await Promise.all([
-    client.get<ApiEnvelope<Branch[]>>('/branch'),
-    client.get<ApiEnvelope<GroupOption[]>>('/groups'),
-    client.get<ApiEnvelope<{ id: number; full_name: string; group_id?: number | null }[]>>('/students'),
-  ]);
-  branches.value = branchRes.data.data;
-  groups.value = groupRes.data.data.map((group) => ({
-    id: group.id,
-    name: group.name,
-    branch_id: group.branch_id,
-  }));
-  students.value = studentRes.data.data.map((student) => ({
-    id: student.id,
-    full_name: student.full_name,
-    group_id: student.group_id ?? null,
-  }));
-}
-
-function openCreatePanel() {
-  resetForm();
-  showPanel.value = true;
-}
-
-async function openDetailPanel(recordId: number) {
-  resetForm();
-  showPanel.value = true;
-  panelLoading.value = true;
-  try {
-    const { data } = await client.get<ApiEnvelope<AttendanceRow>>(
-      `/reports/attendance/${recordId}`,
-    );
-    detailRecord.value = data.data;
-    fillForm(data.data);
-  } finally {
-    panelLoading.value = false;
-  }
-}
-
-function startEdit() {
-  if (!detailRecord.value) return;
-  editingRecord.value = detailRecord.value;
-}
-
-function closePanel() {
-  showPanel.value = false;
-  resetForm();
-}
-
-async function submitRecord() {
-  formError.value = '';
-  if (!form.student_id || !form.group_id || !form.date) {
-    formError.value = 'Fill in student, group and date';
-    return;
-  }
-
-  saving.value = true;
-  try {
-    const payload = {
-      student_id: form.student_id,
-      group_id: form.group_id,
-      date: form.date,
-      status: form.status,
-      note: form.note.trim(),
-    };
-    if (editingRecord.value) {
-      await client.patch(`/reports/attendance/${editingRecord.value.id}`, payload);
-    } else {
-      await client.post('/reports/attendance', payload);
-    }
-    closePanel();
-    await loadReport();
-  } catch {
-    formError.value = editingRecord.value
-      ? 'Could not update record'
-      : 'Could not create record';
-  } finally {
-    saving.value = false;
-  }
-}
-
-async function deleteRecord() {
-  if (!detailRecord.value) return;
-  if (!window.confirm(`Delete attendance for ${detailRecord.value.student}?`)) return;
-
-  deleting.value = true;
-  try {
-    await client.delete(`/reports/attendance/${detailRecord.value.id}`);
-    closePanel();
-    await loadReport();
-  } catch {
-    window.alert('Could not delete record');
-  } finally {
-    deleting.value = false;
-  }
-}
-
-function goStudent(record: AttendanceRow) {
-  router.push(studentRoute(record.student_id));
-}
-
-function goGroup(record: AttendanceRow) {
-  router.push(groupRoute(record.group_id));
-}
-
-onMounted(async () => {
-  try {
-    await Promise.all([loadOptions(), loadReport()]);
-  } finally {
-    loading.value = false;
-  }
+onMounted(() => {
+  loadInitialData();
 });
-
-let searchDebounce: ReturnType<typeof setTimeout> | null = null;
-watch(
-  () => filters.q,
-  (newQ, oldQ) => {
-    if (newQ === oldQ) return;
-    if (searchDebounce) clearTimeout(searchDebounce);
-    searchDebounce = setTimeout(() => {
-      applyFilters();
-    }, 400);
-  },
-);
-
 </script>
 
 <template>
   <div class="space-y-4">
+    <!-- Header -->
     <div class="flex flex-wrap items-center justify-between gap-3">
-      <h1 class="text-xl font-semibold text-fb-text">Attendance reports</h1>
+      <div>
+        <h1 class="text-xl font-bold text-fb-text flex items-center gap-2">
+          <span>📋</span>
+          <span>Посещаемость учеников</span>
+        </h1>
+        <p class="text-xs text-fb-secondary mt-0.5">
+          Журнал учета посещаемости по группам. Нажмите на название группы для просмотра списка учеников и быстрой отметки.
+        </p>
+      </div>
+
       <div class="flex items-center gap-2">
         <button
           type="button"
-          class="rounded-lg border border-fb-line px-4 py-2 text-sm text-fb-secondary hover:border-fb-blue hover:text-fb-blue"
-          @click="exportCsv"
+          class="rounded-lg border border-fb-line bg-fb-card px-3.5 py-2 text-sm text-fb-secondary hover:border-fb-blue hover:text-fb-blue transition-colors flex items-center gap-1.5 shadow-sm"
+          title="Экспортировать сохраненную посещаемость за выбранную дату"
+          @click="exportAllAttendanceCsv"
         >
-          Export CSV
+          <span>📥</span>
+          <span>Экспорт CSV за дату</span>
         </button>
+      </div>
+    </div>
+
+    <!-- Filter & Control Panel -->
+    <div class="rounded-xl border border-fb-line bg-fb-card p-4 shadow-sm space-y-3">
+      <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-12 items-end">
+        <!-- Date Picker -->
+        <div class="lg:col-span-4">
+          <div class="flex items-center justify-between mb-1">
+            <label class="block text-xs font-semibold text-fb-text">
+              Дата занятия:
+            </label>
+            <div class="flex items-center gap-1.5 text-xs">
+              <button
+                type="button"
+                class="text-fb-blue hover:underline font-medium"
+                @click="setDateToday"
+              >
+                Сегодня
+              </button>
+              <span class="text-fb-secondary">|</span>
+              <button
+                type="button"
+                class="text-fb-blue hover:underline font-medium"
+                @click="setDateYesterday"
+              >
+                Вчера
+              </button>
+            </div>
+          </div>
+          <input
+            v-model="selectedDate"
+            type="date"
+            class="w-full rounded-lg border border-fb-line bg-white px-3 py-2 text-sm text-fb-text focus:border-fb-blue focus:outline-none focus:ring-1 focus:ring-fb-blue"
+            @change="onDateChange"
+          />
+        </div>
+
+        <!-- Smart Search Input with Autocomplete Dropdown -->
+        <div class="relative lg:col-span-5">
+          <label class="mb-1 block text-xs font-semibold text-fb-text flex items-center justify-between">
+            <span>Умный поиск группы</span>
+            <span v-if="searchQuery" class="text-[11px] font-normal text-fb-secondary">
+              Найдено: {{ filteredGroups.length }}
+            </span>
+          </label>
+          <div class="relative">
+            <input
+              v-model="searchQuery"
+              type="search"
+              placeholder="Введите название группы, курс или учителя..."
+              autocomplete="off"
+              class="w-full rounded-lg border border-fb-line bg-white pl-9 pr-8 py-2 text-sm text-fb-text placeholder-fb-secondary/70 focus:border-fb-blue focus:outline-none focus:ring-1 focus:ring-fb-blue"
+              @focus="showSuggestions = true"
+              @input="showSuggestions = true"
+            />
+            <span class="absolute left-3 top-2.5 text-fb-secondary text-sm pointer-events-none">
+              🔍
+            </span>
+            <button
+              v-if="searchQuery"
+              type="button"
+              class="absolute right-2.5 top-2.5 text-fb-secondary hover:text-fb-text text-sm"
+              title="Очистить поиск"
+              @click="searchQuery = ''; showSuggestions = false;"
+            >
+              ✕
+            </button>
+          </div>
+
+          <!-- Autocomplete Dropdown Menu -->
+          <div
+            v-if="showSuggestions && searchSuggestions.length > 0"
+            class="absolute left-0 right-0 top-full mt-1 z-30 rounded-xl border border-fb-line bg-white shadow-xl overflow-hidden divide-y divide-fb-line max-h-64 overflow-y-auto"
+          >
+            <div class="bg-fb-canvas px-3 py-1.5 text-[11px] font-semibold text-fb-secondary uppercase tracking-wider">
+              Подсказки (нажмите для открытия журнала):
+            </div>
+            <button
+              v-for="item in searchSuggestions"
+              :key="item.group.id"
+              type="button"
+              class="w-full px-3 py-2 text-left hover:bg-fb-hover transition-colors flex items-center justify-between gap-2 group"
+              @mousedown.prevent="selectSuggestion(item)"
+            >
+              <div class="truncate">
+                <span class="font-medium text-sm text-fb-text group-hover:text-fb-blue">
+                  {{ item.group.name }}
+                </span>
+                <span v-if="item.group.course" class="text-xs text-fb-secondary ml-2">
+                  {{ item.group.course.name }}
+                </span>
+                <span v-if="item.group.teacher" class="text-xs text-fb-secondary/80 ml-2">
+                  • {{ item.group.teacher }}
+                </span>
+              </div>
+              <span class="shrink-0 text-xs text-fb-secondary bg-fb-canvas px-2 py-0.5 rounded-md border border-fb-line">
+                👥 {{ item.group.students_count }} уч.
+              </span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Branch Select -->
+        <div class="lg:col-span-3">
+          <label class="mb-1 block text-xs font-semibold text-fb-text">
+            Филиал
+          </label>
+          <select
+            v-model="selectedBranch"
+            class="w-full rounded-lg border border-fb-line bg-white px-3 py-2 text-sm text-fb-text focus:border-fb-blue focus:outline-none focus:ring-1 focus:ring-fb-blue"
+          >
+            <option value="">Все филиалы</option>
+            <option v-for="b in branches" :key="b.id" :value="String(b.id)">
+              {{ b.name }}
+            </option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Filter Subbar: Active groups count & Reset button -->
+      <div class="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-fb-line/60 text-xs">
+        <span class="text-fb-secondary">
+          Всего групп: <strong class="text-fb-text">{{ filteredGroups.length }}</strong>
+        </span>
+
+        <button
+          v-if="searchQuery || selectedBranch"
+          type="button"
+          class="text-fb-blue hover:underline font-medium"
+          @click="resetSearchAndFilters"
+        >
+          Сбросить фильтры
+        </button>
+      </div>
+    </div>
+
+    <!-- Groups Table Card -->
+    <div class="overflow-hidden rounded-xl border border-fb-line bg-fb-card shadow-sm">
+      <!-- Loading State -->
+      <div v-if="loadingGroups" class="p-16 text-center text-fb-secondary">
+        <div class="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-fb-blue border-r-transparent mb-3" />
+        <p class="text-sm font-medium text-fb-text">Загрузка списка групп…</p>
+      </div>
+
+      <!-- Empty State -->
+      <div v-else-if="!filteredGroups.length" class="flex flex-col items-center justify-center p-14 text-center">
+        <div class="flex h-16 w-16 items-center justify-center rounded-full bg-fb-hover text-2xl mb-3 text-fb-icon">
+          👥
+        </div>
+        <h3 class="text-base font-semibold text-fb-text">Группы не найдены</h3>
+        <p class="mt-1 text-sm text-fb-secondary max-w-sm">
+          По текущим параметрам поиска и фильтрам группы отсутствуют.
+        </p>
         <button
           type="button"
-          class="rounded-lg bg-fb-blue px-4 py-2 text-sm font-medium text-white hover:bg-fb-blue-dark"
-          @click="openCreatePanel"
+          class="mt-4 rounded-lg bg-fb-blue px-4 py-2 text-xs font-medium text-white hover:bg-fb-blue-dark transition-colors shadow-sm"
+          @click="resetSearchAndFilters"
         >
-          + Mark attendance
+          Сбросить фильтры поиска
         </button>
       </div>
-    </div>
 
-    <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
-      <div class="rounded-xl border border-fb-line bg-fb-card p-4">
-        <p class="text-sm text-fb-secondary">Total</p>
-        <p class="mt-1 text-2xl font-bold text-fb-text">{{ summary.total }}</p>
-      </div>
-      <div class="rounded-xl border border-emerald-200 bg-emerald-50/50 p-4">
-        <p class="text-sm text-emerald-700">Present</p>
-        <p class="mt-1 text-2xl font-bold text-emerald-800">{{ summary.present }}</p>
-      </div>
-      <div class="rounded-xl border border-red-200 bg-red-50/50 p-4">
-        <p class="text-sm text-red-700">Absent</p>
-        <p class="mt-1 text-2xl font-bold text-red-800">{{ summary.absent }}</p>
-      </div>
-      <div class="rounded-xl border border-amber-200 bg-amber-50/50 p-4">
-        <p class="text-sm text-amber-700">Late</p>
-        <p class="mt-1 text-2xl font-bold text-amber-800">{{ summary.late }}</p>
-      </div>
-    </div>
-
-    <div>
-      <input
-        v-model="filters.q"
-        type="search"
-        placeholder="Search student by name..."
-        class="w-full rounded-xl border border-fb-line bg-fb-card px-4 py-3 text-sm focus:border-fb-blue focus:outline-none focus:ring-1 focus:ring-fb-blue"
-        @keydown.enter="applyFilters"
-      />
-    </div>
-
-    <div class="flex flex-wrap items-end gap-3 rounded-xl border border-fb-line bg-fb-card p-4">
-      <div>
-        <label class="mb-1 block text-xs font-medium text-fb-secondary">Branch</label>
-        <select v-model="filters.branch_id" class="rounded-lg border border-fb-line px-3 py-2 text-sm">
-          <option value="">All</option>
-          <option v-for="branch in branches" :key="branch.id" :value="String(branch.id)">
-            {{ branch.name }}
-          </option>
-        </select>
-      </div>
-      <div>
-        <label class="mb-1 block text-xs font-medium text-fb-secondary">Group</label>
-        <select v-model="filters.group_id" class="rounded-lg border border-fb-line px-3 py-2 text-sm">
-          <option value="">All</option>
-          <option v-for="group in filterGroups" :key="group.id" :value="String(group.id)">
-            {{ group.name }}
-          </option>
-        </select>
-      </div>
-      <div>
-        <label class="mb-1 block text-xs font-medium text-fb-secondary">Status</label>
-        <select v-model="filters.status" class="rounded-lg border border-fb-line px-3 py-2 text-sm">
-          <option value="">All</option>
-          <option v-for="option in STATUS_OPTIONS" :key="option.value" :value="String(option.value)">
-            {{ option.label }}
-          </option>
-        </select>
-      </div>
-      <div>
-        <label class="mb-1 block text-xs font-medium text-fb-secondary">From</label>
-        <input v-model="filters.date_from" type="date" class="rounded-lg border border-fb-line px-3 py-2 text-sm" />
-      </div>
-      <div>
-        <label class="mb-1 block text-xs font-medium text-fb-secondary">To</label>
-        <input v-model="filters.date_to" type="date" class="rounded-lg border border-fb-line px-3 py-2 text-sm" />
-      </div>
-      <div class="flex-1"></div>
-      <button
-        type="button"
-        class="rounded-lg border border-fb-line px-4 py-2 text-sm text-fb-secondary hover:border-fb-blue hover:text-fb-blue"
-        @click="applyFilters"
-      >
-        Apply
-      </button>
-    </div>
-
-    <div class="overflow-hidden rounded-xl border border-fb-line bg-fb-card">
-      <div v-if="loading" class="p-8 text-center text-fb-secondary">Loading…</div>
-      <div v-else-if="!rows.length" class="p-8 text-center text-fb-icon">No attendance records</div>
+      <!-- Table of Groups -->
       <template v-else>
-        <table class="w-full text-base">
-          <thead class="border-b border-fb-line bg-fb-canvas">
-            <tr>
-              <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Student</th>
-              <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Group</th>
-              <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Branch</th>
-              <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Date</th>
-              <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Status</th>
-              <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Note</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="row in rows"
-              :key="row.id"
-              class="cursor-pointer border-b border-fb-line hover:bg-fb-hover/40"
-              @click="openDetailPanel(row.id)"
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm text-left">
+            <thead class="border-b border-fb-line bg-fb-canvas text-xs uppercase tracking-wider font-semibold text-fb-secondary">
+              <tr>
+                <th class="px-5 py-3.5">Группа</th>
+                <th class="px-5 py-3.5">Курс</th>
+                <th class="px-5 py-3.5">Преподаватель</th>
+                <th class="px-5 py-3.5">Филиал</th>
+                <th class="px-5 py-3.5">Дни / Время</th>
+                <th class="px-5 py-3.5 text-center">Учеников</th>
+                <th class="px-5 py-3.5 text-right">Действие</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-fb-line">
+              <tr
+                v-for="group in paginatedGroups"
+                :key="group.id"
+                class="hover:bg-fb-hover/50 transition-colors group cursor-pointer"
+                @click="openGroupRoster(group)"
+              >
+                <!-- Group Name (Clickable) -->
+                <td class="px-5 py-3.5 font-medium">
+                  <div class="flex items-center gap-2">
+                    <span class="text-blue-600 hover:underline font-semibold text-sm group-hover:text-blue-700">
+                      {{ group.name }}
+                    </span>
+                  </div>
+                  <div v-if="group.tags && group.tags.length" class="flex flex-wrap gap-1 mt-1">
+                    <span
+                      v-for="tag in group.tags"
+                      :key="tag.id"
+                      class="rounded px-1.5 py-0.2 text-[10px] bg-sky-50 text-sky-700 border border-sky-200"
+                    >
+                      #{{ tag.name }}
+                    </span>
+                  </div>
+                </td>
+
+                <!-- Course -->
+                <td class="px-5 py-3.5 text-fb-secondary">
+                  <span v-if="group.course" class="font-medium text-fb-text">
+                    {{ group.course.name }}
+                  </span>
+                  <span v-else class="text-fb-secondary/70">—</span>
+                </td>
+
+                <!-- Teacher -->
+                <td class="px-5 py-3.5 text-fb-secondary">
+                  <span v-if="group.teacher" class="font-medium text-fb-text">
+                    {{ group.teacher }}
+                  </span>
+                  <span v-else class="text-fb-secondary/70">—</span>
+                </td>
+
+                <!-- Branch -->
+                <td class="px-5 py-3.5 text-fb-secondary">
+                  {{ group.branch }}
+                </td>
+
+                <!-- Days & Time -->
+                <td class="px-5 py-3.5 text-fb-secondary">
+                  <div class="text-xs">
+                    <span class="font-medium text-fb-text">{{ group.days_label }}</span>
+                    <span v-if="group.lesson_start_time" class="block text-[11px] text-fb-secondary">
+                      {{ group.lesson_start_time }} - {{ group.lesson_end_time || '?' }}
+                    </span>
+                  </div>
+                </td>
+
+                <!-- Students Count -->
+                <td class="px-5 py-3.5 text-center">
+                  <span class="inline-flex items-center justify-center rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-semibold text-blue-700 border border-blue-200">
+                    {{ group.students_count }}
+                  </span>
+                </td>
+
+                <!-- Action Button -->
+                <td class="px-5 py-3.5 text-right" @click.stop>
+                  <button
+                    type="button"
+                    class="inline-flex items-center gap-1.5 rounded-lg bg-fb-blue px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-fb-blue-dark transition-colors"
+                    @click="openGroupRoster(group)"
+                  >
+                    <span>📝</span>
+                    <span>Отметить</span>
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Pagination Bar (50 groups per page) -->
+        <div class="flex flex-wrap items-center justify-between border-t border-fb-line px-5 py-3.5 bg-fb-canvas/40 gap-3">
+          <div class="flex items-center gap-2">
+            <button
+              type="button"
+              class="rounded-lg border border-fb-line bg-white px-3.5 py-1.5 text-xs font-semibold text-fb-text hover:text-fb-blue hover:border-fb-blue disabled:opacity-40 disabled:hover:text-fb-text disabled:hover:border-fb-line transition-colors shadow-sm"
+              :disabled="currentPage <= 1"
+              @click="currentPage--"
             >
-              <td class="px-5 py-4 font-medium text-fb-text">{{ row.student }}</td>
-              <td class="px-5 py-4 text-fb-secondary">{{ row.group }}</td>
-              <td class="px-5 py-4 text-fb-secondary">{{ row.branch }}</td>
-              <td class="px-5 py-4 text-fb-secondary">{{ row.date }}</td>
-              <td class="px-5 py-4">
-                <span class="rounded-full px-2 py-0.5 text-xs" :class="statusClass(row.status)">
-                  {{ row.status_label }}
-                </span>
-              </td>
-              <td class="px-5 py-4 text-fb-secondary">{{ row.note || '—' }}</td>
-            </tr>
-          </tbody>
-        </table>
-        
-        <div class="flex items-center justify-between border-t border-fb-line px-5 py-4">
-          <button
-            type="button"
-            class="rounded-lg border border-fb-line px-4 py-2 text-sm text-fb-secondary hover:text-fb-blue disabled:opacity-50"
-            :disabled="currentPage <= 1"
-            @click="changePage(-1)"
-          >
-            Previous
-          </button>
-          <span class="text-sm text-fb-secondary">
-            Page {{ currentPage }} of {{ totalPages }}
+              ← Назад
+            </button>
+            <button
+              type="button"
+              class="rounded-lg border border-fb-line bg-white px-3.5 py-1.5 text-xs font-semibold text-fb-text hover:text-fb-blue hover:border-fb-blue disabled:opacity-40 disabled:hover:text-fb-text disabled:hover:border-fb-line transition-colors shadow-sm"
+              :disabled="currentPage >= totalPages"
+              @click="currentPage++"
+            >
+              Вперед →
+            </button>
+          </div>
+
+          <span class="text-xs text-fb-secondary font-medium">
+            Страница <strong class="text-fb-text">{{ currentPage }}</strong> из <strong class="text-fb-text">{{ totalPages }}</strong>
+            <span class="ml-1 text-fb-secondary/80">
+              (показано {{ paginatedGroups.length }} из {{ filteredGroups.length }} групп, по 50 на стр.)
+            </span>
           </span>
-          <button
-            type="button"
-            class="rounded-lg border border-fb-line px-4 py-2 text-sm text-fb-secondary hover:text-fb-blue disabled:opacity-50"
-            :disabled="currentPage >= totalPages"
-            @click="changePage(1)"
-          >
-            Next
-          </button>
         </div>
       </template>
     </div>
 
-    <div v-if="showPanel" class="fixed inset-0 z-50 flex justify-end">
-      <div class="absolute inset-0 bg-black/35" @click="closePanel" />
-      <div class="drawer-panel-fb max-w-lg">
-        <div class="flex items-center justify-between border-b border-fb-line px-6 py-4">
-          <h2 class="text-lg font-semibold text-fb-text">{{ panelTitle }}</h2>
-          <button type="button" class="text-fb-icon hover:text-fb-secondary" @click="closePanel">✕</button>
-        </div>
-
-        <div v-if="panelLoading" class="flex-1 p-6 text-fb-secondary">Loading…</div>
-
-        <form v-else class="flex flex-1 flex-col overflow-hidden" @submit.prevent="submitRecord">
-          <div class="flex-1 space-y-4 overflow-y-auto p-6">
-            <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Group</label>
-              <select
-                v-model="form.group_id"
-                :disabled="isReadOnly"
-                class="w-full rounded-lg border border-fb-line px-3 py-2 disabled:bg-fb-canvas"
-              >
-                <option v-for="group in groups" :key="group.id" :value="group.id">
-                  {{ group.name }}
-                </option>
-              </select>
+    <!-- Group Attendance Roster Modal -->
+    <div
+      v-if="showModal && activeGroup"
+      class="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-black/50 backdrop-blur-sm overflow-y-auto"
+      @click.self="closeModal"
+    >
+      <div class="relative w-full max-w-3xl rounded-2xl border border-fb-line bg-white shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
+        <!-- Modal Header -->
+        <div class="flex flex-wrap items-center justify-between border-b border-fb-line bg-fb-canvas px-6 py-4 gap-3">
+          <div>
+            <div class="flex items-center gap-2">
+              <h2 class="text-lg font-bold text-fb-text">
+                {{ activeGroup.name }}
+              </h2>
+              <span class="rounded-full bg-blue-100 px-2 py-0.5 text-xs font-semibold text-blue-800 border border-blue-200">
+                {{ groupStudents.length }} учеников
+              </span>
             </div>
-
-            <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Student</label>
-              <select
-                v-model="form.student_id"
-                :disabled="isReadOnly || Boolean(editingRecord)"
-                class="w-full rounded-lg border border-fb-line px-3 py-2 disabled:bg-fb-canvas"
-              >
-                <option value="">Select student</option>
-                <option v-for="student in filteredStudents" :key="student.id" :value="student.id">
-                  {{ student.full_name }}
-                </option>
-              </select>
-              <p v-if="!form.group_id" class="mt-1 text-xs text-amber-600">
-                Please select a group first.
-              </p>
-            </div>
-
-            <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Date</label>
-              <input
-                v-model="form.date"
-                type="date"
-                required
-                :readonly="isReadOnly"
-                class="w-full rounded-lg border border-fb-line px-3 py-2 read-only:bg-fb-canvas"
-              />
-            </div>
-
-            <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Status</label>
-              <select
-                v-model="form.status"
-                :disabled="isReadOnly"
-                class="w-full rounded-lg border border-fb-line px-3 py-2 disabled:bg-fb-canvas"
-              >
-                <option v-for="option in STATUS_OPTIONS" :key="option.value" :value="option.value">
-                  {{ option.label }}
-                </option>
-              </select>
-            </div>
-
-            <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Note</label>
-              <textarea
-                v-model="form.note"
-                rows="3"
-                :readonly="isReadOnly"
-                class="w-full rounded-lg border border-fb-line px-3 py-2 read-only:bg-fb-canvas"
-              />
-            </div>
-
-            <div
-              v-if="detailRecord"
-              class="rounded-lg border border-fb-line bg-fb-canvas px-4 py-3 text-sm"
-            >
-              <button type="button" class="text-fb-blue hover:underline" @click="goStudent(detailRecord)">
-                Students →
-              </button>
-              <button type="button" class="ml-3 text-fb-blue hover:underline" @click="goGroup(detailRecord)">
-                Groups →
-              </button>
-            </div>
-
-            <p v-if="formError" class="text-sm text-fb-danger">{{ formError }}</p>
+            <p class="text-xs text-fb-secondary mt-0.5">
+              <span v-if="activeGroup.course">{{ activeGroup.course.name }} • </span>
+              <span v-if="activeGroup.teacher">{{ activeGroup.teacher }} • </span>
+              <span>{{ activeGroup.branch }}</span>
+            </p>
           </div>
 
-          <div class="flex flex-wrap gap-2 border-t border-fb-line px-6 py-4">
-            <template v-if="isReadOnly && detailRecord">
-              <button
-                type="button"
-                class="rounded-lg bg-fb-blue px-5 py-2 text-sm font-medium text-white hover:opacity-90"
-                @click="startEdit"
-              >
-                Edit
-              </button>
-              <button
-                type="button"
-                class="rounded-lg border border-red-300 px-5 py-2 text-sm font-medium text-fb-danger hover:bg-red-50 disabled:opacity-50"
-                :disabled="deleting"
-                @click="deleteRecord"
-              >
-                Delete
-              </button>
-            </template>
-            <template v-else>
-              <button
-                type="submit"
-                class="rounded-lg bg-fb-blue px-5 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
-                :disabled="saving"
-              >
-                {{ saving ? 'Saving…' : editingRecord ? 'Save' : 'Create' }}
-              </button>
-            </template>
+          <div class="flex items-center gap-3">
+            <!-- Inline Date Picker in Modal -->
+            <div class="flex items-center gap-2">
+              <span class="text-xs font-semibold text-fb-secondary">Дата:</span>
+              <input
+                v-model="selectedDate"
+                type="date"
+                class="rounded-lg border border-fb-line bg-white px-2.5 py-1 text-xs font-medium text-fb-text focus:border-fb-blue focus:outline-none"
+                @change="onDateChange"
+              />
+            </div>
             <button
               type="button"
-              class="rounded-lg border border-fb-line px-5 py-2 text-sm font-medium text-fb-secondary"
-              @click="closePanel"
+              class="rounded-lg p-1.5 text-fb-secondary hover:bg-fb-hover hover:text-fb-text transition-colors"
+              title="Закрыть"
+              @click="closeModal"
             >
-              Cancel
+              <span class="text-lg leading-none">✕</span>
             </button>
           </div>
-        </form>
+        </div>
+
+        <!-- Quick Bulk Actions & Counters Bar -->
+        <div class="border-b border-fb-line bg-white px-6 py-3 flex flex-wrap items-center justify-between gap-3 text-xs">
+          <div class="flex items-center gap-2">
+            <span class="font-medium text-fb-secondary">Быстрая отметка:</span>
+            <button
+              type="button"
+              class="rounded-lg bg-emerald-50 border border-emerald-300 text-emerald-800 px-2.5 py-1 font-semibold hover:bg-emerald-100 transition-colors"
+              @click="markAll(1)"
+            >
+              ✓ Все присутствовали
+            </button>
+            <button
+              type="button"
+              class="rounded-lg bg-red-50 border border-red-300 text-red-800 px-2.5 py-1 font-semibold hover:bg-red-100 transition-colors"
+              @click="markAll(0)"
+            >
+              ✕ Все отсутствовали
+            </button>
+          </div>
+
+          <!-- Roster Counters -->
+          <div class="flex items-center gap-2">
+            <span class="rounded-full bg-emerald-100 text-emerald-800 px-2 py-0.5 font-semibold text-[11px] border border-emerald-200">
+              Присутствуют: {{ rosterSummary.present }}
+            </span>
+            <span class="rounded-full bg-red-100 text-red-800 px-2 py-0.5 font-semibold text-[11px] border border-red-200">
+              Отсутствуют: {{ rosterSummary.absent }}
+            </span>
+            <span class="rounded-full bg-amber-100 text-amber-800 px-2 py-0.5 font-semibold text-[11px] border border-amber-200">
+              Опоздали: {{ rosterSummary.late }}
+            </span>
+          </div>
+        </div>
+
+        <!-- Feedback Alert Messages -->
+        <div v-if="saveSuccessMessage" class="px-6 pt-3">
+          <div class="rounded-xl border border-emerald-300 bg-emerald-50 p-3 text-xs font-semibold text-emerald-800 flex items-center justify-between">
+            <div class="flex items-center gap-2">
+              <span>✅</span>
+              <span>{{ saveSuccessMessage }}</span>
+            </div>
+            <button type="button" class="text-emerald-700 hover:text-emerald-900" @click="saveSuccessMessage = ''">✕</button>
+          </div>
+        </div>
+
+        <div v-if="saveErrorMessage" class="px-6 pt-3">
+          <div class="rounded-xl border border-red-300 bg-red-50 p-3 text-xs font-semibold text-red-800 flex items-center justify-between">
+            <div class="flex items-center gap-2">
+              <span>⚠️</span>
+              <span>{{ saveErrorMessage }}</span>
+            </div>
+            <button type="button" class="text-red-700 hover:text-red-900" @click="saveErrorMessage = ''">✕</button>
+          </div>
+        </div>
+
+        <!-- Modal Body: Student List -->
+        <div class="flex-1 overflow-y-auto px-6 py-3">
+          <!-- Loading Students -->
+          <div v-if="loadingStudents" class="py-16 text-center text-fb-secondary">
+            <div class="inline-block h-7 w-7 animate-spin rounded-full border-4 border-solid border-fb-blue border-r-transparent mb-2" />
+            <p class="text-sm font-medium">Загрузка списка учеников группы…</p>
+          </div>
+
+          <!-- Empty Students State -->
+          <div v-else-if="!groupStudents.length" class="py-12 text-center text-fb-secondary">
+            <div class="text-3xl mb-2">👤</div>
+            <p class="font-semibold text-fb-text text-sm">В этой группе пока нет учеников</p>
+            <p class="text-xs text-fb-secondary mt-1">
+              Добавьте учеников в группу в разделе «Группы» или переведите лидов в статус «Обучается».
+            </p>
+          </div>
+
+          <!-- Student Roster Table -->
+          <div v-else class="divide-y divide-fb-line">
+            <div
+              v-for="(student, index) in groupStudents"
+              :key="student.id"
+              class="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-fb-canvas/50 px-2 rounded-lg transition-colors"
+            >
+              <!-- Left: Student Info (Full Name, Phone, Status) -->
+              <div class="flex items-center gap-3 min-w-0">
+                <span class="text-xs font-bold text-fb-secondary/70 w-5 shrink-0">
+                  {{ index + 1 }}.
+                </span>
+                <div class="truncate">
+                  <div class="flex items-center gap-2">
+                    <span class="font-semibold text-sm text-fb-text">
+                      {{ student.full_name }}
+                    </span>
+                    <span
+                      class="rounded-full px-2 py-0.2 text-[10px] font-semibold border"
+                      :class="studentStatusPill(student.status)"
+                    >
+                      {{ student.status_label }}
+                    </span>
+                  </div>
+                  <div v-if="student.phone" class="text-xs text-fb-secondary mt-0.5">
+                    📞 {{ student.phone }}
+                  </div>
+                </div>
+              </div>
+
+              <!-- Right: Attendance Dropdown & Optional Note -->
+              <div class="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                <!-- Status Dropdown -->
+                <select
+                  v-model="studentStatuses[student.id]"
+                  class="rounded-lg border px-3 py-1.5 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-fb-blue transition-colors cursor-pointer shadow-sm"
+                  :class="statusBadgeClass(studentStatuses[student.id])"
+                >
+                  <option :value="1">Присутствовал</option>
+                  <option :value="0">Отсутствовал</option>
+                  <option :value="2">Опоздал</option>
+                </select>
+
+                <!-- Note input -->
+                <input
+                  v-model="studentNotes[student.id]"
+                  type="text"
+                  placeholder="Заметка…"
+                  class="w-32 sm:w-40 rounded-lg border border-fb-line px-2.5 py-1.5 text-xs text-fb-text placeholder-fb-secondary/60 focus:border-fb-blue focus:outline-none"
+                  title="Заметка к посещаемости"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Modal Footer with Batch Save Button -->
+        <div class="border-t border-fb-line bg-fb-canvas px-6 py-4 flex flex-wrap items-center justify-between gap-3">
+          <div class="text-xs text-fb-secondary">
+            Дата сохранения: <strong class="text-fb-text">{{ selectedDate }}</strong>
+          </div>
+
+          <div class="flex items-center gap-3">
+            <button
+              type="button"
+              class="rounded-lg border border-fb-line bg-white px-4 py-2 text-xs font-semibold text-fb-secondary hover:text-fb-text transition-colors"
+              @click="closeModal"
+            >
+              Отмена
+            </button>
+
+            <button
+              type="button"
+              class="rounded-lg bg-emerald-600 px-5 py-2 text-xs font-bold text-white shadow hover:bg-emerald-700 transition-colors disabled:opacity-50 flex items-center gap-2"
+              :disabled="savingAttendance || !groupStudents.length"
+              @click="saveGroupAttendance"
+            >
+              <span v-if="savingAttendance" class="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-solid border-white border-r-transparent" />
+              <span>💾 Сохранить посещаемость группы</span>
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   </div>

@@ -1,6 +1,6 @@
 from django.urls import path
 
-from api.v1 import views, views_extended, views_import, views_misc
+from api.v1 import views, views_extended, views_import, views_misc, views_payments
 
 urlpatterns = [
     path('company/subdomain/<slug:subdomain>', views.company_by_subdomain),
@@ -17,6 +17,8 @@ urlpatterns = [
     path('students/import', views_import.student_import),
     path('students/<int:student_id>', views.student_detail),
     path('students/<int:student_id>/payments', views_extended.student_payments),
+    path('students/<int:student_id>/payment-links', views_payments.student_payment_links),
+    path('students/<int:student_id>/send-payment-link', views_payments.student_send_payment_link),
     path('students/<int:student_id>/photo', views.student_photo),
     path('telegram/config', views.telegram_config),
     path('leads', views.lead_list),
@@ -34,6 +36,8 @@ urlpatterns = [
     path('user/teacher/<int:teacher_id>', views_extended.teacher_detail_view),
     path('replenishments', views_extended.replenishments),
     path('replenishments/<int:payment_id>', views_extended.payment_detail),
+    path('payments/click/webhook', views_payments.click_webhook),
+    path('payments/payme/webhook', views_payments.payme_webhook),
     path('withdraws', views_extended.withdraws),
     path('withdraws/<int:withdrawal_id>', views_extended.withdrawal_detail),
     path('expense', views_extended.expense_list),
@@ -42,6 +46,9 @@ urlpatterns = [
     path('expense_types/<int:category_id>', views_extended.expense_type_detail),
     path('salary-settings', views_extended.salary_settings),
     path('salary-settings/<int:setting_id>', views_extended.salary_setting_detail),
+    path('finance/payroll', views_extended.payroll_summary),
+    path('finance/payroll/pay', views_extended.payroll_pay),
+    path('reports/pnl', views_extended.report_pnl),
     path('reports/conversion', views_extended.report_conversion),
     path('reports/attendance', views_extended.report_attendance),
     path('reports/attendance/<int:record_id>', views_extended.attendance_detail),

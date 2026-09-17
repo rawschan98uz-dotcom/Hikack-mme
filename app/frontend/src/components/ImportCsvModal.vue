@@ -19,7 +19,6 @@ export interface PreviewRow {
   branch_name: string;
   group_name: string;
   status_label: string;
-  balance: number;
   school: string;
   parent_telegram?: string;
   is_valid: boolean;
@@ -283,7 +282,6 @@ async function confirmImport() {
                     <th class="py-2.5 px-3">Телефон</th>
                     <th class="py-2.5 px-3">Группа</th>
                     <th class="py-2.5 px-3">Школа</th>
-                    <th class="py-2.5 px-3">Баланс</th>
                     <th class="py-2.5 px-3">Филиал</th>
                   </tr>
                 </thead>
@@ -323,9 +321,6 @@ async function confirmImport() {
                     </td>
                     <td class="py-2.5 px-3 text-fb-secondary">
                       {{ row.school }}
-                    </td>
-                    <td class="py-2.5 px-3 font-medium text-fb-text whitespace-nowrap">
-                      {{ Number(row.balance).toLocaleString() }} сум
                     </td>
                     <td class="py-2.5 px-3 text-fb-secondary whitespace-nowrap">
                       {{ row.branch_name }}

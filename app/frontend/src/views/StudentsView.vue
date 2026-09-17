@@ -7,6 +7,8 @@ import { useAuthStore } from '../stores/auth';
 import { PERM } from '../utils/rbac';
 import { downloadCsv } from '../utils/csvExport';
 import ImportCsvModal from '../components/ImportCsvModal.vue';
+import ReceiptModal, { type ReceiptPayment } from '../components/ReceiptModal.vue';
+import PaymentLinkModal, { type StudentPaymentLinkTarget } from '../components/PaymentLinkModal.vue';
 import {
   groupRoute,
   hasCreateFlag,
@@ -74,8 +76,9 @@ interface StudentPayment {
 const STATUS_OPTIONS = [
   { value: 1, label: 'Обучается' },
   { value: 2, label: 'Заморозка' },
-  { value: 9, label: 'Завершил курс' },
+  { value: 7, label: 'Ушел после пробного' },
   { value: 8, label: 'Отчислен / Ушел' },
+  { value: 9, label: 'Завершил курс' },
 ] as const;
 
 const route = useRoute();
@@ -116,6 +119,42 @@ const payForm = reactive({
 });
 const paySaving = ref(false);
 const payError = ref('');
+
+const showReceiptModal = ref(false);
+const receiptPayment = ref<ReceiptPayment | null>(null);
+
+const showPaymentLinkModal = ref(false);
+const paymentLinkStudent = ref<StudentPaymentLinkTarget | null>(null);
+
+function openPaymentLinkModal(student?: StudentRow | null) {
+  const target = student || detailStudent.value;
+  if (!target) return;
+  paymentLinkStudent.value = {
+    id: target.id,
+    full_name: target.full_name,
+    phone: target.phone,
+    group: target.group,
+    course_price: target.course_price,
+    parent_telegram: target.parent_telegram,
+  };
+  showPaymentLinkModal.value = true;
+}
+
+function printStudentPayment(p: StudentPayment) {
+  receiptPayment.value = {
+    id: p.id,
+    date: p.date,
+    student_name: detailStudent.value?.full_name || 'Ученик',
+    amount: p.amount,
+    months_covered: p.months_covered || 1,
+    method: p.method,
+    method_pay: p.method_pay,
+    teacher: detailStudent.value?.group_teacher || '',
+    comment: p.comment,
+    creator: p.creator,
+  };
+  showReceiptModal.value = true;
+}
 
 async function loadStudentPayments(studentId: number) {
   paymentsLoading.value = true;
@@ -244,6 +283,7 @@ const title = computed(() => {
   if (route.path.includes('debtors')) return 'Debtors (Должники)';
   if (route.query.statuses === '1') return 'Обучающиеся';
   if (route.query.statuses === '2') return 'Замороженные';
+  if (route.query.statuses === '7') return 'Ушедшие после пробного';
   if (route.query.statuses === '8') return 'Отчисленные / Ушедшие';
   if (route.query.statuses === '9') return 'Завершившие курс';
   if (route.query.q) return `Students — search “${route.query.q}”`;
@@ -306,6 +346,7 @@ function formatAddedDate(value: string) {
 
 function statusBadgeClass(status: number) {
   if (status === 2) return 'bg-amber-100 text-amber-700';
+  if (status === 7) return 'bg-orange-100 text-orange-700';
   if (status === 9) return 'bg-purple-100 text-purple-700';
   if (status === 8) return 'bg-gray-100 text-gray-700';
   return 'bg-emerald-100 text-emerald-700';
@@ -969,22 +1010,29 @@ onMounted(async () => {
               </div>
               <div class="flex items-center justify-between gap-4 border-b border-fb-line pb-2">
                 <dt class="text-fb-secondary">Next payment (Следующая оплата)</dt>
-                <dd class="text-right">
+                <dd class="text-right flex items-center justify-end flex-wrap gap-2">
                   <span class="font-medium text-fb-text">
                     {{ detailStudent.next_payment_date ? formatAddedDate(detailStudent.next_payment_date) : '-' }}
                   </span>
                   <span
                     v-if="detailStudent.is_debtor"
-                    class="ml-2 inline-block rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700"
+                    class="inline-block rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700"
                   >
                     Просрочено на {{ detailStudent.overdue_days }} дн.
                   </span>
                   <span
                     v-else-if="detailStudent.next_payment_date"
-                    class="ml-2 inline-block rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700"
+                    class="inline-block rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700"
                   >
                     Оплачено
                   </span>
+                  <button
+                    type="button"
+                    class="rounded-md bg-emerald-600 px-2.5 py-1 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700"
+                    @click="openAcceptPaymentModal"
+                  >
+                    + Оплатить
+                  </button>
                 </dd>
               </div>
               <div class="flex items-center justify-between gap-4 border-b border-fb-line pb-2">
@@ -1027,6 +1075,74 @@ onMounted(async () => {
                 >
                   Copy
                 </button>
+              </div>
+            </div>
+
+            <!-- Payment History Section -->
+            <div class="mt-5 rounded-xl border border-fb-line bg-fb-canvas p-4 text-sm">
+              <div class="flex items-center justify-between border-b border-fb-line pb-3">
+                <div class="flex items-center gap-2">
+                  <span class="font-semibold text-fb-text">История оплат</span>
+                  <span class="rounded-full bg-white px-2 py-0.5 text-xs font-medium text-fb-secondary shadow-sm">
+                    {{ studentPayments.length }}
+                  </span>
+                </div>
+                <div class="flex items-center gap-2">
+                  <button
+                    type="button"
+                    class="rounded-lg border border-fb-line bg-white px-2.5 py-1 text-xs font-semibold text-fb-secondary hover:border-fb-blue hover:text-fb-blue shadow-sm transition-colors"
+                    title="Ссылка на оплату Click / Payme / Uzum"
+                    @click="openPaymentLinkModal(detailStudent)"
+                  >
+                    💳 Ссылка на оплату
+                  </button>
+                  <button
+                    type="button"
+                    class="rounded-lg bg-emerald-600 px-3 py-1 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700"
+                    @click="openAcceptPaymentModal"
+                  >
+                    + Принять оплату
+                  </button>
+                </div>
+              </div>
+
+              <div v-if="paymentsLoading" class="py-6 text-center text-xs text-fb-secondary">
+                Загрузка платежей…
+              </div>
+              <div v-else-if="!studentPayments.length" class="py-6 text-center text-xs text-fb-secondary">
+                Оплат пока не зафиксировано
+              </div>
+              <div v-else class="mt-3 space-y-2 max-h-56 overflow-y-auto pr-1">
+                <div
+                  v-for="p in studentPayments"
+                  :key="p.id"
+                  class="flex items-center justify-between rounded-lg border border-fb-line bg-white p-3 shadow-sm"
+                >
+                  <div>
+                    <div class="flex items-center gap-2">
+                      <span class="font-semibold text-fb-blue">{{ p.amount.toLocaleString() }} UZS</span>
+                      <span class="rounded bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-fb-blue">
+                        {{ p.months_covered || 1 }} мес.
+                      </span>
+                    </div>
+                    <div class="mt-1 text-xs text-fb-secondary">
+                      {{ p.date }} • {{ p.method_pay || p.method }}
+                      <span v-if="p.creator"> • Принял: {{ p.creator }}</span>
+                    </div>
+                    <div v-if="p.comment" class="mt-1 text-xs italic text-fb-secondary">
+                      {{ p.comment }}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    title="Печать квитанции"
+                    class="ml-2 inline-flex items-center gap-1 rounded-lg border border-fb-line bg-fb-canvas/50 px-2.5 py-1 text-xs font-medium text-fb-secondary hover:border-fb-blue hover:text-fb-blue transition-colors"
+                    @click="printStudentPayment(p)"
+                  >
+                    <span>🖨️</span>
+                    <span>Чек</span>
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -1374,15 +1490,109 @@ onMounted(async () => {
       </div>
     </div>
 
+    <!-- Modal: Принять оплату -->
+    <div v-if="showPayModal" class="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div class="fixed inset-0 bg-black/40" @click="showPayModal = false" />
+      <div class="relative w-full max-w-md rounded-2xl border border-fb-line bg-fb-card p-6 shadow-2xl">
+        <div class="flex items-center justify-between border-b border-fb-line pb-3">
+          <div>
+            <h3 class="text-base font-semibold text-fb-text">Принять оплату</h3>
+            <p class="text-xs text-fb-secondary mt-0.5">{{ detailStudent?.full_name }}</p>
+          </div>
+          <button type="button" class="text-fb-secondary hover:text-fb-text" @click="showPayModal = false">✕</button>
+        </div>
+
+        <form class="mt-4 space-y-4" @submit.prevent="submitPayment">
+          <div>
+            <label class="mb-1 block text-xs font-medium text-fb-secondary">Оплачено месяцев (Период)</label>
+            <input
+              v-model.number="payForm.months_covered"
+              type="number"
+              min="1"
+              required
+              class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none"
+              @input="onPayMonthsChange"
+            />
+          </div>
+
+          <div>
+            <label class="mb-1 block text-xs font-medium text-fb-secondary">Сумма к оплате (UZS)</label>
+            <input
+              v-model.number="payForm.amount"
+              type="number"
+              required
+              class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm font-semibold focus:border-fb-blue focus:outline-none"
+            />
+            <p v-if="detailStudent?.course_price" class="mt-1 text-[11px] text-fb-secondary">
+              Стоимость курса: {{ detailStudent.course_price.toLocaleString() }} UZS / мес.
+            </p>
+          </div>
+
+          <div>
+            <label class="mb-1 block text-xs font-medium text-fb-secondary">Способ оплаты</label>
+            <select
+              v-model="payForm.method"
+              class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none"
+            >
+              <option value="cash">Наличные (Cash)</option>
+              <option value="card">Карта (Card)</option>
+              <option value="transfer">Перевод (Transfer)</option>
+            </select>
+          </div>
+
+          <div>
+            <label class="mb-1 block text-xs font-medium text-fb-secondary">Комментарий / Примечание</label>
+            <textarea
+              v-model="payForm.comment"
+              rows="2"
+              placeholder="Опционально..."
+              class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none"
+            />
+          </div>
+
+          <p v-if="payError" class="text-xs text-fb-danger">{{ payError }}</p>
+
+          <div class="flex justify-end gap-2 border-t border-fb-line pt-4">
+            <button
+              type="button"
+              class="rounded-lg border border-fb-line px-4 py-2 text-sm font-medium text-fb-secondary hover:bg-fb-canvas"
+              @click="showPayModal = false"
+            >
+              Отмена
+            </button>
+            <button
+              type="submit"
+              class="rounded-lg bg-emerald-600 px-5 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+              :disabled="paySaving"
+            >
+              {{ paySaving ? 'Проведение…' : 'Провести оплату' }}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
     <ImportCsvModal
       v-model:open="showImportModal"
       title="Импорт учеников"
       upload-url="/students/import"
       template-filename="students-import-template.csv"
-      :template-header="['first_name', 'last_name', 'phone', 'school', 'branch', 'group', 'status', 'balance', 'parent_telegram']"
-      :template-example="['Ali', 'Valiyev', '998901234567', 'School #5', 'Main branch', '', 'Active', '0', '@parent_tg']"
+      :template-header="['first_name', 'last_name', 'phone', 'school', 'branch', 'group', 'status', 'parent_telegram']"
+      :template-example="['Ali', 'Valiyev', '998901234567', 'School #5', 'Main branch', '', 'Active', '@parent_tg']"
       columns-help="Поддерживаются файлы Excel (.xlsx, .xls) и CSV. Обязательные данные: имя и номер телефона. Программа автоматически разделит ФИО, очистит телефон и сопоставит группы."
       @imported="loadStudents"
+    />
+
+    <!-- Receipt Modal -->
+    <ReceiptModal
+      v-model:open="showReceiptModal"
+      :payment="receiptPayment"
+    />
+
+    <!-- Payment Link Modal -->
+    <PaymentLinkModal
+      v-model:open="showPaymentLinkModal"
+      :student="paymentLinkStudent"
     />
   </div>
 </template>

@@ -772,7 +772,7 @@ def dashboard(request):
         'trial_students': 0,
         'paid_during_month': students.filter(paid_this_month=True).count(),
         'left_active_group': students.filter(status=Student.Status.LEFT).count(),
-        'left_after_trial': 0,
+        'left_after_trial': students.filter(status=Student.Status.LEFT_TRIAL).count(),
         'finance_chart': finance_chart,
         'schedule': schedule,
         'reminders': reminders,
@@ -1055,8 +1055,6 @@ def student_list(request):
             status_val = safe_int(statuses, default=None)
             if status_val in (5, 6):
                 status_val = Student.Status.STUDYING
-            elif status_val == 7:
-                status_val = Student.Status.LEFT
             if status_val is not None and status_val in VALID_STUDENT_STATUSES:
                 qs = qs.filter(status=status_val)
 
@@ -1432,8 +1430,6 @@ def lead_convert_to_student(request, lead_id: int):
         status = safe_int(raw_status, default=Student.Status.STUDYING)
         if status in (5, 6):
             status = Student.Status.STUDYING
-        elif status == 7:
-            status = Student.Status.LEFT
         elif status not in VALID_STUDENT_STATUSES:
             status = Student.Status.STUDYING
     else:

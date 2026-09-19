@@ -35,8 +35,10 @@ interface StudentRow {
   full_name: string;
   phone: string;
   phone2?: string;
+  phone2_owner?: string;
   address?: string;
   comment?: string;
+  level?: string;
   lead_id?: number | null;
   photo: string | null;
   school: string;
@@ -263,18 +265,28 @@ const filters = reactive({
   q: '',
 });
 
+function getTodayDateString(): string {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 const form = reactive({
   first_name: '',
   last_name: '',
   phone: '',
   phone2: '',
+  phone2_owner: '',
   address: '',
   comment: '',
+  level: '',
   school: '',
   telegram: '',
   parent_telegram: '',
   status: 1,
-  trial_date: '',
+  trial_date: getTodayDateString(),
   branch_id: 0,
   group_id: '' as number | '',
 });
@@ -303,11 +315,12 @@ const canImportStudents = computed(() => auth.can(PERM.STUDENTS_WRITE));
 function exportCsv() {
   downloadCsv(
     'students.csv',
-    ['Name', 'Phone', 'Phone 2', 'Address', 'Comment', 'Status', 'Start Date', 'Next Payment', 'Payment Status', 'School', 'Group', 'Branch', 'Telegram (parents)'],
+    ['Name', 'Phone', 'Phone 2', 'Phone 2 Owner', 'Address', 'Comment', 'Status', 'Start Date', 'Next Payment', 'Payment Status', 'School', 'Group', 'Branch', 'Telegram (parents)'],
     rows.value.map((row) => [
       row.full_name,
       row.phone,
       row.phone2 || '',
+      row.phone2_owner || '',
       row.address || '',
       row.comment || '',
       row.status_label,
@@ -366,9 +379,10 @@ const filteredStudents = computed(() => {
     const phoneMatch = digits
       ? phoneDigits1.includes(digits) || phoneDigits2.includes(digits)
       : (row.phone && row.phone.toLowerCase().includes(q)) || (row.phone2 && row.phone2.toLowerCase().includes(q));
+    const ownerMatch = row.phone2_owner?.toLowerCase().includes(q);
     const schoolMatch = row.school?.toLowerCase().includes(q);
     const groupMatch = row.group?.toLowerCase().includes(q);
-    return Boolean(nameMatch || phoneMatch || schoolMatch || groupMatch);
+    return Boolean(nameMatch || phoneMatch || ownerMatch || schoolMatch || groupMatch);
   });
 });
 
@@ -380,8 +394,10 @@ const tableRows = computed(() =>
     full_name: row.full_name,
     phone: row.phone,
     phone2: row.phone2 || '',
+    phone2_owner: row.phone2_owner || '',
     status: row.status,
     statusText: row.status_label,
+    level: row.level || '',
     school: row.school || '—',
     group: row.group ?? '—',
     group_id: row.group_id,
@@ -412,13 +428,15 @@ function resetForm() {
   form.last_name = '';
   form.phone = '';
   form.phone2 = '';
+  form.phone2_owner = '';
   form.address = '';
   form.comment = '';
+  form.level = '';
   form.school = '';
   form.telegram = '';
   form.parent_telegram = '';
   form.status = 1;
-  form.trial_date = '';
+  form.trial_date = getTodayDateString();
   form.branch_id = branches.value[0]?.id ?? 0;
   form.group_id = '';
   formError.value = '';
@@ -436,8 +454,10 @@ function fillForm(student: StudentRow) {
   form.last_name = student.last_name;
   form.phone = student.phone;
   form.phone2 = student.phone2 ?? '';
+  form.phone2_owner = student.phone2_owner ?? '';
   form.address = student.address ?? '';
   form.comment = student.comment ?? '';
+  form.level = student.level ?? '';
   form.school = student.school ?? '';
   form.telegram = student.telegram ?? '';
   form.parent_telegram = student.parent_telegram ?? '';
@@ -589,8 +609,10 @@ function buildPayload() {
     last_name: form.last_name.trim(),
     phone: form.phone.trim(),
     phone2: form.phone2.trim(),
+    phone2_owner: form.phone2_owner.trim(),
     address: form.address.trim(),
     comment: form.comment.trim(),
+    level: form.level.trim(),
     school: form.school.trim(),
     telegram: form.telegram.trim(),
     parent_telegram: form.parent_telegram.trim(),
@@ -601,23 +623,57 @@ function buildPayload() {
   };
 }
 
+function cleanPhoneDigits(raw: string): string {
+  let d = raw.replace(/\D/g, '');
+  if (d.startsWith('998') && d.length >= 10) {
+    d = d.slice(3);
+  }
+  return d;
+}
+
 function apiErrorMessage(error: unknown, fallback: string) {
-  const response = (error as { response?: { data?: { message?: string } } }).response;
-  return response?.data?.message || fallback;
+  const data = (error as { response?: { data?: { message?: string; error?: string; detail?: string } } })?.response?.data;
+  const msg = data?.message || data?.error || data?.detail;
+  if (msg && msg.includes('Secondary phone must contain at least 9 digits')) {
+    return 'Дополнительный номер должен содержать минимум 9 цифр (например, 90 123 45 67)';
+  }
+  if (msg && msg.includes('at least 9 digits')) {
+    return 'Номер телефона должен содержать минимум 9 цифр (например, 90 123 45 67)';
+  }
+  if (msg && msg.includes('Trial / start date is required')) {
+    return 'Укажите дату старта / число оплаты (Anchor date)';
+  }
+  return msg || fallback;
 }
 
 async function submitStudent() {
   formError.value = '';
   if (!form.first_name.trim()) {
-    formError.value = 'Enter first name';
+    formError.value = 'Введите имя';
     return;
   }
   if (!form.phone.trim()) {
-    formError.value = 'Enter phone number';
+    formError.value = 'Введите номер телефона';
     return;
   }
+  const digits = cleanPhoneDigits(form.phone);
+  if (digits.length < 9) {
+    formError.value = 'Номер телефона должен содержать минимум 9 цифр (например, 90 123 45 67)';
+    return;
+  }
+  if (form.phone2.trim()) {
+    const digits2 = cleanPhoneDigits(form.phone2);
+    if (digits2.length < 9) {
+      formError.value = 'Дополнительный номер должен содержать минимум 9 цифр (например, 90 123 45 67)';
+      return;
+    }
+  }
   if (!form.branch_id) {
-    formError.value = 'Select a branch';
+    formError.value = 'Выберите филиал';
+    return;
+  }
+  if (!form.trial_date) {
+    formError.value = 'Укажите дату старта / число оплаты (Anchor date)';
     return;
   }
 
@@ -887,12 +943,22 @@ onMounted(async () => {
                 >
                   {{ row.initials }}
                 </div>
-                <span class="font-medium text-fb-text">{{ row.full_name }}</span>
+                <div>
+                  <span class="font-medium text-fb-text">{{ row.full_name }}</span>
+                  <div v-if="row.level" class="mt-0.5">
+                    <span class="rounded-md bg-emerald-50 px-1.5 py-0.5 text-[11px] font-medium text-emerald-800 border border-emerald-200">
+                      🎯 {{ row.level }}
+                    </span>
+                  </div>
+                </div>
               </div>
             </td>
             <td class="px-5 py-4 text-fb-secondary">
               <div>{{ row.phone }}</div>
-              <div v-if="row.phone2" class="text-xs text-fb-icon">{{ row.phone2 }}</div>
+              <div v-if="row.phone2" class="text-xs text-fb-icon flex items-center gap-1 mt-0.5">
+                <span v-if="row.phone2_owner" class="font-medium text-fb-secondary">({{ row.phone2_owner }})</span>
+                <span>{{ row.phone2 }}</span>
+              </div>
             </td>
             <td class="px-5 py-4 text-fb-secondary">
               <span
@@ -968,7 +1034,9 @@ onMounted(async () => {
                 </span>
                 <div class="mt-1 text-sm text-fb-secondary">
                   <div>{{ detailStudent.phone }}</div>
-                  <div v-if="detailStudent.phone2" class="text-xs text-fb-icon">Extra: {{ detailStudent.phone2 }}</div>
+                  <div v-if="detailStudent.phone2" class="text-xs text-fb-icon">
+                    {{ detailStudent.phone2_owner ? `${detailStudent.phone2_owner}: ` : 'Extra: ' }}{{ detailStudent.phone2 }}
+                  </div>
                 </div>
               </div>
             </div>
@@ -1221,14 +1289,51 @@ onMounted(async () => {
             </div>
 
             <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Second phone (optional)</label>
-              <input
-                v-model="form.phone2"
-                type="tel"
-                placeholder="Additional phone number"
-                :readonly="isReadOnly"
-                class="w-full rounded-lg border border-fb-line px-3 py-2 read-only:bg-fb-canvas focus:border-fb-blue focus:outline-none"
-              />
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label class="mb-1 block text-sm font-medium text-fb-secondary">Second phone (optional)</label>
+                  <input
+                    v-model="form.phone2"
+                    type="tel"
+                    placeholder="Additional phone number"
+                    :readonly="isReadOnly"
+                    class="w-full rounded-lg border border-fb-line px-3 py-2 read-only:bg-fb-canvas focus:border-fb-blue focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label class="mb-1 block text-sm font-medium text-fb-secondary">Whose number? (Чей номер)</label>
+                  <input
+                    v-model="form.phone2_owner"
+                    list="phone2-owners-student"
+                    type="text"
+                    placeholder="e.g. Мама, Отец, Брат..."
+                    :readonly="isReadOnly"
+                    class="w-full rounded-lg border border-fb-line px-3 py-2 read-only:bg-fb-canvas focus:border-fb-blue focus:outline-none"
+                  />
+                  <datalist id="phone2-owners-student">
+                    <option value="Мама" />
+                    <option value="Отец" />
+                    <option value="Брат" />
+                    <option value="Сестра" />
+                    <option value="Бабушка" />
+                    <option value="Дедушка" />
+                    <option value="Родственник" />
+                  </datalist>
+                </div>
+              </div>
+              <div v-if="!isReadOnly" class="mt-1.5 flex flex-wrap items-center gap-1.5">
+                <span class="text-xs text-fb-icon">Быстрый выбор:</span>
+                <button
+                  v-for="owner in ['Мама', 'Отец', 'Брат', 'Сестра', 'Родственник']"
+                  :key="owner"
+                  type="button"
+                  class="rounded-md border px-2 py-0.5 text-xs transition-colors"
+                  :class="form.phone2_owner === owner ? 'bg-fb-blue text-white border-fb-blue' : 'border-fb-line text-fb-secondary hover:bg-fb-canvas'"
+                  @click="form.phone2_owner = form.phone2_owner === owner ? '' : owner"
+                >
+                  {{ owner }}
+                </button>
+              </div>
             </div>
 
             <div>
@@ -1307,6 +1412,17 @@ onMounted(async () => {
             </div>
 
             <div>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">Level (Уровень знаний)</label>
+              <input
+                v-model="form.level"
+                type="text"
+                placeholder="e.g. Beginner, Elementary, Intermediate, 5 класс, IELTS..."
+                :readonly="isReadOnly"
+                class="w-full rounded-lg border border-fb-line px-3 py-2 read-only:bg-fb-canvas focus:border-fb-blue focus:outline-none"
+              />
+            </div>
+
+            <div>
               <label class="mb-1 block text-sm font-medium text-fb-secondary">Branch</label>
               <select
                 v-model="form.branch_id"
@@ -1359,10 +1475,13 @@ onMounted(async () => {
             </div>
 
             <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Дата старта / число оплаты (Anchor date)</label>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">
+                Дата старта / число оплаты (Anchor date) <span class="text-rose-500">*</span>
+              </label>
               <input
                 v-model="form.trial_date"
                 type="date"
+                required
                 :readonly="isReadOnly"
                 class="w-full rounded-lg border border-fb-line px-3 py-2 read-only:bg-fb-canvas focus:border-fb-blue focus:outline-none"
               />

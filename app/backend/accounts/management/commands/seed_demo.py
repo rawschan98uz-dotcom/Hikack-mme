@@ -77,7 +77,24 @@ class Command(BaseCommand):
         Student.objects.filter(company=company).delete()
         Lead.objects.filter(company=company).delete()
         Group.objects.filter(company=company).delete()
-        Course.objects.filter(company=company).delete()
+        default_courses = [
+            ('Английский', 'ENG', 600000),
+            ('Математика', 'MATH', 500000),
+            ('Немецкий', 'GER', 600000),
+            ('Китайский', 'CHN', 650000),
+        ]
+        for c_name, c_code, c_price in default_courses:
+            Course.objects.get_or_create(
+                company=company,
+                name=c_name,
+                defaults={
+                    'code': c_code,
+                    'price': c_price,
+                    'lesson_duration': 90,
+                    'course_duration': 12,
+                    'description': f'Курс {c_name}',
+                }
+            )
         Room.objects.filter(branch=branch).delete()
         Tag.objects.filter(company=company).delete()
         Payment.objects.filter(company=company).delete()

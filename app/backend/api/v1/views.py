@@ -5,6 +5,7 @@ from django.contrib.auth import authenticate
 from django.db.models import Count, Q
 from django.db.models import Sum
 from django.db.models.functions import TruncMonth
+from django.db import transaction
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -75,6 +76,15 @@ def _normalize_phone(phone: str) -> str:
 
 
 def _serialize_lead(lead: Lead) -> dict:
+    converted_student_id = (
+        lead.converted_students.values_list('id', flat=True).first()
+        if lead.stage == Lead.Stage.CONVERTED
+        else None
+    )
+    student_deleted = (
+        lead.stage == Lead.Stage.CONVERTED
+        and converted_student_id is None
+    )
     return {
         'id': lead.id,
         'first_name': lead.first_name,
@@ -82,14 +92,25 @@ def _serialize_lead(lead: Lead) -> dict:
         'full_name': lead.full_name,
         'phone': lead.phone,
         'phone2': lead.phone2,
+        'phone2_owner': lead.phone2_owner,
         'address': lead.address,
+        'school': lead.school,
         'comment': lead.comment,
+        'source': lead.source,
+        'level': lead.level,
+        'branch_id': lead.branch_id,
+        'branch_name': lead.branch.name if lead.branch else None,
+        'course_id': lead.course_id,
+        'course_name': lead.course.name if lead.course else None,
         'is_active': lead.is_active,
         'stage': lead.stage,
         'stage_label': lead.get_stage_display(),
         'status': lead.stage,
         'status_label': lead.get_stage_display(),
+        'attended_trial': bool(getattr(lead, 'attended_trial', False) or lead.stage in (Lead.Stage.ATTENDED, Lead.Stage.CONVERTED)),
         'trial_date': lead.trial_date.isoformat() if lead.trial_date else None,
+        'converted_student_id': converted_student_id,
+        'student_deleted': student_deleted,
         'created_at': lead.created_at.isoformat(),
     }
 
@@ -402,8 +423,10 @@ def _serialize_student(student: Student, *, payment_info: dict | None = None, de
         'full_name': student.full_name,
         'phone': student.phone,
         'phone2': student.phone2,
+        'phone2_owner': student.phone2_owner,
         'address': student.address,
         'comment': student.comment,
+        'level': student.level,
         'lead_id': student.lead_id,
         # ✅ ИСПРАВЛЕНО: проверяем существование файла
         'photo': get_photo_url(student.photo),
@@ -452,13 +475,25 @@ def _apply_student_fields(student: Student, company: Company, data: dict) -> str
 
     if 'phone2' in data or 'extra_phone' in data:
         p2_raw = str(data.get('phone2') or data.get('extra_phone') or '').strip()
-        student.phone2 = normalize_phone(p2_raw) if p2_raw else ''
+        if p2_raw:
+            p2 = normalize_phone(p2_raw)
+            if len(p2) < 9:
+                return 'Secondary phone must contain at least 9 digits'
+            student.phone2 = p2
+        else:
+            student.phone2 = ''
+
+    if 'phone2_owner' in data:
+        student.phone2_owner = str(data.get('phone2_owner') or '').strip()
 
     if 'address' in data:
         student.address = str(data.get('address') or '').strip()
 
     if 'comment' in data or 'notes' in data:
         student.comment = str(data.get('comment') or data.get('notes') or '').strip()
+
+    if 'level' in data:
+        student.level = str(data.get('level') or '').strip()
 
     if 'school' in data:
         student.school = str(data.get('school') or '').strip()
@@ -519,7 +554,13 @@ def _apply_student_fields(student: Student, company: Company, data: dict) -> str
         student.paid_this_month = bool(data.get('paid_this_month'))
 
     if 'trial_date' in data and not (was_frozen and student.status == Student.Status.STUDYING):
-        student.trial_date = parse_date_safe(data.get('trial_date'))
+        raw_td = data.get('trial_date')
+        if not raw_td:
+            return 'Trial / start date is required'
+        parsed_td = parse_date_safe(raw_td)
+        if not parsed_td:
+            return 'Invalid trial / start date format'
+        student.trial_date = parsed_td
 
     branch_id = data.get('branch_id')
     if branch_id is not None:
@@ -722,7 +763,11 @@ def dashboard(request):
     students = Student.objects.filter(company=company)
     groups = Group.objects.filter(company=company, status=Group.Status.ACTIVE)
     groups = filter_groups_queryset(groups, request.user)
-    leads = Lead.objects.filter(company=company, is_active=True)
+    active_leads_count = Lead.objects.filter(
+        company=company,
+        is_active=True,
+        stage__in=[Lead.Stage.TRIAL_BOOKED, Lead.Stage.ATTENDED],
+    ).count()
 
     six_months_ago = timezone.now() - timedelta(days=180)
     monthly_payments = (
@@ -765,7 +810,7 @@ def dashboard(request):
     )
 
     return ok({
-        'active_leads': leads.count(),
+        'active_leads': active_leads_count,
         'active_students': studying_students.count(),
         'groups': groups.count(),
         'debtors': debtors_count,
@@ -1013,22 +1058,70 @@ def student_list(request):
         if status not in VALID_STUDENT_STATUSES:
             return fail('Invalid status')
 
-        student = Student(
-            company=company,
-            branch=branch,
-            first_name=first_name,
-            last_name=last_name,
-            phone=phone,
-            status=status,
-        )
-        error = _apply_student_fields(student, company, request.data)
-        if error:
-            return fail(error)
-        student.save()
-        # Clean up any existing lead with the same phone in this company
-        Lead.objects.filter(company=company, phone=student.phone).delete()
-        student = Student.objects.select_related('group', 'branch').get(pk=student.pk)
-        return ok(_serialize_student(student, detailed=True), status_code=201)
+        trial_date_raw = request.data.get('trial_date')
+        if not trial_date_raw:
+            return fail('Trial / start date is required')
+        trial_date = parse_date_safe(trial_date_raw)
+        if not trial_date:
+            return fail('Invalid trial / start date format')
+
+        with transaction.atomic():
+            student = Student(
+                company=company,
+                branch=branch,
+                first_name=first_name,
+                last_name=last_name,
+                phone=phone,
+                status=status,
+                trial_date=trial_date,
+            )
+            error = _apply_student_fields(student, company, request.data)
+            if error:
+                return fail(error)
+
+            # Brothers logic: search by phone+name first (exact person), then phone only (family)
+            phone_variants = [student.phone, f'998{student.phone}', f'+998{student.phone}']
+            exact_lead = Lead.objects.filter(
+                company=company,
+                phone__in=phone_variants,
+                first_name__iexact=student.first_name
+            ).order_by('-created_at').first()
+
+            if exact_lead:
+                # Same person — link and mark as converted
+                student.lead = exact_lead
+                if exact_lead.stage != Lead.Stage.CONVERTED:
+                    exact_lead.stage = Lead.Stage.CONVERTED
+                    update_fields = ['stage']
+                    if not exact_lead.branch and student.branch:
+                        exact_lead.branch = student.branch
+                        update_fields.append('branch')
+                    if not exact_lead.course and student.group and student.group.course:
+                        exact_lead.course = student.group.course
+                        update_fields.append('course')
+                    if not exact_lead.school and student.school:
+                        exact_lead.school = student.school
+                        update_fields.append('school')
+                    exact_lead.save(update_fields=update_fields)
+            else:
+                # Different name = family member — copy family fields from matching leads, don't touch lead's stage
+                family_leads = Lead.objects.filter(
+                    company=company,
+                    phone__in=phone_variants
+                ).order_by('-created_at')
+                for fl in family_leads:
+                    if not student.school and fl.school:
+                        student.school = fl.school
+                    if not student.address and fl.address:
+                        student.address = fl.address
+                    if not student.phone2 and fl.phone2:
+                        student.phone2 = fl.phone2
+                        if not student.phone2_owner and fl.phone2_owner:
+                            student.phone2_owner = fl.phone2_owner
+
+            student.save()
+            student = Student.objects.select_related('group', 'branch').get(pk=student.pk)
+            return ok(_serialize_student(student, detailed=True), status_code=201)
 
     # GET
     qs = Student.objects.filter(company=company).select_related(
@@ -1077,6 +1170,7 @@ def student_list(request):
             | Q(last_name__icontains=query)
             | Q(phone__icontains=query)
             | Q(phone2__icontains=query)
+            | Q(phone2_owner__icontains=query)
             | Q(address__icontains=query)
             | Q(comment__icontains=query),
         )
@@ -1229,27 +1323,57 @@ def lead_list(request):
             return fail('Invalid lead status')
 
         phone2_raw = str(request.data.get('phone2') or request.data.get('extra_phone') or '').strip()
-        phone2 = normalize_phone(phone2_raw) if phone2_raw else ''
+        if phone2_raw:
+            phone2 = normalize_phone(phone2_raw)
+            if len(phone2) < 9:
+                return fail('Secondary phone must contain at least 9 digits')
+        else:
+            phone2 = ''
+        phone2_owner = str(request.data.get('phone2_owner') or '').strip()
         address = str(request.data.get('address') or '').strip()
         comment = str(request.data.get('comment') or request.data.get('notes') or '').strip()
+        source = str(request.data.get('source') or '').strip()
+
+        branch = None
+        branch_id = request.data.get('branch_id')
+        if branch_id:
+            try:
+                branch = Branch.objects.get(pk=int(branch_id), company=company)
+            except (Branch.DoesNotExist, TypeError, ValueError):
+                pass
+
+        course = None
+        course_id = request.data.get('course_id')
+        if course_id:
+            try:
+                course = Course.objects.get(pk=int(course_id), company=company)
+            except (Course.DoesNotExist, TypeError, ValueError):
+                pass
 
         trial_date = parse_date_safe(request.data.get('trial_date')) or timezone.localdate()
+        school = str(request.data.get('school') or '').strip()
 
         lead = Lead.objects.create(
             company=company,
+            branch=branch,
+            course=course,
             first_name=first_name,
             last_name=last_name,
             phone=phone,
             phone2=phone2,
+            phone2_owner=phone2_owner,
             address=address,
+            school=school,
             comment=comment,
+            source=source,
+            level=str(request.data.get('level') or '').strip(),
             stage=stage,
             trial_date=trial_date,
             is_active=True,
         )
         return ok(_serialize_lead(lead), status_code=201)
 
-    qs = Lead.objects.filter(company=company).order_by('-created_at', '-id')
+    qs = Lead.objects.filter(company=company).select_related('branch', 'course').order_by('-created_at', '-id')
 
     archived = request.query_params.get('archived', '0')
     if archived == '1':
@@ -1261,6 +1385,28 @@ def lead_list(request):
     if stage and stage in VALID_LEAD_STAGES:
         qs = qs.filter(stage=stage)
 
+    branch_id = request.query_params.get('branch_id')
+    if branch_id:
+        try:
+            qs = qs.filter(branch_id=int(branch_id))
+        except (TypeError, ValueError):
+            pass
+
+    course_id = request.query_params.get('course_id')
+    if course_id:
+        try:
+            qs = qs.filter(course_id=int(course_id))
+        except (TypeError, ValueError):
+            pass
+
+    source = request.query_params.get('source')
+    if source:
+        qs = qs.filter(source__iexact=source.strip())
+
+    level = request.query_params.get('level')
+    if level:
+        qs = qs.filter(level__iexact=level.strip())
+
     query = (request.query_params.get('q') or '').strip()
     if query:
         qs = qs.filter(
@@ -1268,8 +1414,12 @@ def lead_list(request):
             | Q(last_name__icontains=query)
             | Q(phone__icontains=query)
             | Q(phone2__icontains=query)
+            | Q(phone2_owner__icontains=query)
             | Q(address__icontains=query)
+            | Q(school__icontains=query)
             | Q(comment__icontains=query)
+            | Q(source__icontains=query)
+            | Q(level__icontains=query)
         )
 
     # ✅ Пагинация
@@ -1330,15 +1480,53 @@ def lead_detail(request, lead_id: int):
 
     if 'phone2' in request.data or 'extra_phone' in request.data:
         p2_raw = str(request.data.get('phone2') or request.data.get('extra_phone') or '').strip()
-        lead.phone2 = normalize_phone(p2_raw) if p2_raw else ''
+        if p2_raw:
+            p2 = normalize_phone(p2_raw)
+            if len(p2) < 9:
+                return fail('Secondary phone must contain at least 9 digits')
+            lead.phone2 = p2
+        else:
+            lead.phone2 = ''
+
+    if 'phone2_owner' in request.data:
+        lead.phone2_owner = str(request.data.get('phone2_owner') or '').strip()
 
     if 'address' in request.data:
         lead.address = str(request.data.get('address') or '').strip()
+
+    if 'school' in request.data:
+        lead.school = str(request.data.get('school') or '').strip()
 
     if 'comment' in request.data:
         lead.comment = str(request.data.get('comment') or '').strip()
     elif 'notes' in request.data:
         lead.comment = str(request.data.get('notes') or '').strip()
+
+    if 'source' in request.data:
+        lead.source = str(request.data.get('source') or '').strip()
+
+    if 'level' in request.data:
+        lead.level = str(request.data.get('level') or '').strip()
+
+    if 'branch_id' in request.data:
+        bid = request.data.get('branch_id')
+        if not bid:
+            lead.branch = None
+        else:
+            try:
+                lead.branch = Branch.objects.get(pk=int(bid), company=company)
+            except (Branch.DoesNotExist, TypeError, ValueError):
+                pass
+
+    if 'course_id' in request.data:
+        cid = request.data.get('course_id')
+        if not cid:
+            lead.course = None
+        else:
+            try:
+                lead.course = Course.objects.get(pk=int(cid), company=company)
+            except (Course.DoesNotExist, TypeError, ValueError):
+                pass
 
     if 'trial_date' in request.data:
         lead.trial_date = parse_date_safe(request.data.get('trial_date'))
@@ -1347,7 +1535,14 @@ def lead_detail(request, lead_id: int):
         stage = str(stage).strip().lower()
         if stage not in VALID_LEAD_STAGES:
             return fail('Invalid lead stage')
+        if stage == Lead.Stage.CONVERTED and lead.stage != Lead.Stage.CONVERTED:
+            return fail('Для зачисления лида в студенты используйте кнопку перевода')
+        if lead.stage == Lead.Stage.CONVERTED and stage != Lead.Stage.CONVERTED:
+            if lead.converted_students.exists():
+                return fail('Нельзя сменить статус — студент уже зачислен')
         lead.stage = stage
+        if stage == Lead.Stage.ATTENDED:
+            lead.attended_trial = True
 
     if is_active is not None:
         lead.is_active = bool(is_active)
@@ -1380,103 +1575,139 @@ def lead_convert_to_student(request, lead_id: int):
     if company is None:
         return fail('Company not found', status_code=404)
 
-    try:
-        lead = Lead.objects.get(pk=lead_id, company=company)
-    except Lead.DoesNotExist:
-        return fail('Lead not found', status_code=404)
+    from accounts.rbac import user_has_permission, PERM_STUDENTS_WRITE, PERM_LEADS_WRITE
+    if not user_has_permission(request.user, PERM_LEADS_WRITE) or not user_has_permission(request.user, PERM_STUDENTS_WRITE):
+        return fail('You do not have permission to perform this action.', status_code=403)
 
-    first_name = (request.data.get('first_name') or '').strip()
-    last_name = (request.data.get('last_name') or '').strip()
-    if not first_name:
-        first_name = lead.first_name
-        last_name = lead.last_name
-    if not first_name and lead.full_name:
-        parts = lead.full_name.strip().split(None, 1)
-        first_name = parts[0]
-        last_name = parts[1] if len(parts) > 1 else ''
-    if not first_name:
-        return fail('First name is required')
-
-    phone = normalize_phone(request.data.get('phone') or lead.phone or '')
-    if len(phone) < 9:
-        return fail('Phone must contain at least 9 digits')
-
-    phone2_raw = str(request.data.get('phone2') or lead.phone2 or '').strip()
-    phone2 = normalize_phone(phone2_raw) if phone2_raw else ''
-    address = str(request.data.get('address') or lead.address or '').strip()
-    comment = str(request.data.get('comment') or lead.comment or '').strip()
-
-    branch_id = request.data.get('branch_id')
-    if not branch_id:
-        branch = Branch.objects.filter(company=company).order_by('id').first()
-        if not branch:
-            return fail('No branch available in company')
-    else:
+    with transaction.atomic():
         try:
-            branch = Branch.objects.get(pk=int(branch_id), company=company)
-        except (Branch.DoesNotExist, TypeError, ValueError):
-            return fail('Invalid branch')
+            lead = Lead.objects.get(pk=lead_id, company=company)
+        except Lead.DoesNotExist:
+            return fail('Lead not found', status_code=404)
 
-    group = None
-    group_id = request.data.get('group_id')
-    if group_id:
-        try:
-            group = Group.objects.get(pk=int(group_id), company=company)
-        except (Group.DoesNotExist, TypeError, ValueError):
-            return fail('Invalid group')
+        if lead.stage == Lead.Stage.CONVERTED and lead.converted_students.exists():
+            existing_student = lead.converted_students.first()
+            return fail(f'Этот лид уже зачислен как студент ({existing_student.full_name}).', status_code=400)
 
-    raw_status = request.data.get('status')
-    if raw_status is not None:
-        status = safe_int(raw_status, default=Student.Status.STUDYING)
-        if status in (5, 6):
+        first_name = (request.data.get('first_name') or '').strip()
+        last_name = (request.data.get('last_name') or '').strip()
+        if not first_name:
+            first_name = lead.first_name
+            last_name = lead.last_name
+        if not first_name and lead.full_name:
+            parts = lead.full_name.strip().split(None, 1)
+            first_name = parts[0]
+            last_name = parts[1] if len(parts) > 1 else ''
+        if not first_name:
+            return fail('First name is required')
+
+        phone = normalize_phone(request.data.get('phone') or lead.phone or '')
+        if len(phone) < 9:
+            return fail('Phone must contain at least 9 digits')
+
+        phone2_raw = str(request.data.get('phone2') if 'phone2' in request.data else (lead.phone2 or '')).strip()
+        if phone2_raw:
+            phone2 = normalize_phone(phone2_raw)
+            if len(phone2) < 9:
+                return fail('Secondary phone must contain at least 9 digits')
+        else:
+            phone2 = ''
+        phone2_owner = str(request.data.get('phone2_owner') or lead.phone2_owner or '').strip()
+        address = str(request.data.get('address') or lead.address or '').strip()
+        comment = str(request.data.get('comment') or lead.comment or '').strip()
+
+        group = None
+        group_id = request.data.get('group_id')
+        if group_id:
+            try:
+                group = Group.objects.select_related('branch', 'course').get(pk=int(group_id), company=company)
+            except (Group.DoesNotExist, TypeError, ValueError):
+                return fail('Invalid group')
+            branch = group.branch
+        else:
+            branch_id = request.data.get('branch_id')
+            if not branch_id:
+                branch = lead.branch
+                if not branch:
+                    branch = Branch.objects.filter(company=company).order_by('id').first()
+                if not branch:
+                    return fail('No branch available in company')
+            else:
+                try:
+                    branch = Branch.objects.get(pk=int(branch_id), company=company)
+                except (Branch.DoesNotExist, TypeError, ValueError):
+                    return fail('Invalid branch')
+
+        raw_status = request.data.get('status')
+        if raw_status is not None:
+            status = safe_int(raw_status, default=Student.Status.STUDYING)
+            if status in (5, 6):
+                status = Student.Status.STUDYING
+            elif status not in VALID_STUDENT_STATUSES:
+                status = Student.Status.STUDYING
+        else:
             status = Student.Status.STUDYING
-        elif status not in VALID_STUDENT_STATUSES:
-            status = Student.Status.STUDYING
-    else:
-        status = Student.Status.STUDYING
 
-    school = str(request.data.get('school') or '').strip()
-    telegram = str(request.data.get('telegram') or '').strip()
-    parent_telegram = str(request.data.get('parent_telegram') or '').strip()
-    trial_date = parse_date_safe(request.data.get('trial_date')) or lead.trial_date
+        school = str(request.data.get('school') if 'school' in request.data else (lead.school or '')).strip()
+        telegram = str(request.data.get('telegram') or '').strip()
+        parent_telegram = str(request.data.get('parent_telegram') or '').strip()
+        level = str(request.data.get('level') if 'level' in request.data else (lead.level or '')).strip()
+        trial_date = parse_date_safe(request.data.get('trial_date')) or lead.trial_date or timezone.localdate()
 
-    student = Student.objects.create(
-        company=company,
-        branch=branch,
-        group=group,
-        lead=None,
-        first_name=first_name,
-        last_name=last_name,
-        phone=phone,
-        phone2=phone2,
-        address=address,
-        comment=comment,
-        school=school,
-        telegram=telegram,
-        parent_telegram=parent_telegram,
-        status=status,
-        trial_date=trial_date,
-    )
-
-    lead_name = lead.full_name or f'{first_name} {last_name}'.strip()
-    lead_id_val = lead.id
-    lead.delete()
-
-    try:
-        ActivityLog.objects.create(
+        student = Student.objects.create(
             company=company,
-            action=f'Lead "{lead_name}" converted to student',
-            actor_name=request.user.display_name(),
+            branch=branch,
+            group=group,
+            lead=lead,
+            first_name=first_name,
+            last_name=last_name,
+            phone=phone,
+            phone2=phone2,
+            phone2_owner=phone2_owner,
+            address=address,
+            comment=comment,
+            level=level,
+            school=school,
+            telegram=telegram,
+            parent_telegram=parent_telegram,
+            status=status,
+            trial_date=trial_date,
         )
-    except Exception:
-        pass
 
-    student = Student.objects.select_related('group', 'branch').get(pk=student.pk)
-    return ok({
-        'student': _serialize_student(student, detailed=True),
-        'lead_id': lead_id_val,
-        'converted': True,
-    }, status_code=201)
+        lead_name = lead.full_name or f'{first_name} {last_name}'.strip()
+        lead_id_val = lead.id
+
+        lead.stage = Lead.Stage.CONVERTED
+        raw_attended = request.data.get('attended_trial')
+        if raw_attended is not None:
+            lead.attended_trial = str(raw_attended).lower() not in ('false', '0', '')
+        update_fields = ['stage', 'attended_trial']
+        if branch and lead.branch != branch:
+            lead.branch = branch
+            update_fields.append('branch')
+        if group and group.course and lead.course != group.course:
+            lead.course = group.course
+            update_fields.append('course')
+        if not lead.school and school:
+            lead.school = school
+            update_fields.append('school')
+        lead.save(update_fields=update_fields)
+
+        try:
+            ActivityLog.objects.create(
+                company=company,
+                action=f'Lead "{lead_name}" converted to student',
+                actor_name=request.user.display_name(),
+            )
+        except Exception:
+            pass
+
+        student = Student.objects.select_related('group', 'branch').get(pk=student.pk)
+        return ok({
+            'student': _serialize_student(student, detailed=True),
+            'lead_id': lead_id_val,
+            'converted': True,
+        }, status_code=201)
 
 
 def _serialize_course(course: Course) -> dict:

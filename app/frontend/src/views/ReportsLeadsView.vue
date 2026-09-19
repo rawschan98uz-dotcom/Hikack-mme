@@ -10,8 +10,17 @@ interface LeadRow {
   phone: string;
   stage: string;
   stage_label: string;
+  source?: string;
+  school?: string;
+  course_id?: number | null;
+  course_name?: string | null;
   is_active: boolean;
   created_at: string;
+}
+
+interface CourseOption {
+  id: number;
+  name: string;
 }
 
 interface LeadsReport {
@@ -27,18 +36,30 @@ const STAGES = [
   { value: '', label: 'Все статусы' },
   { value: 'trial_booked', label: 'Записан на пробный' },
   { value: 'attended', label: 'Был на уроке (Думает)' },
-  { value: 'rejected', label: 'Отказ / В архиве' },
+  { value: 'converted', label: 'Зачислен (Студент)' },
+  { value: 'rejected', label: 'Отказ' },
+] as const;
+
+const POPULAR_SOURCES = [
+  'Instagram',
+  'Telegram',
+  'Звонок',
+  'Рекомендация',
+  'Наружка',
+  'Сайт',
+  'Другое',
 ] as const;
 
 const router = useRouter();
 
 const report = ref<LeadsReport | null>(null);
+const courses = ref<CourseOption[]>([]);
 const loading = ref(true);
 const exporting = ref(false);
 const currentPage = ref(1);
 const totalPages = ref(1);
 
-const filters = reactive({ stage: '', date_from: '', date_to: '', q: '', active: '1' });
+const filters = reactive({ stage: '', course_id: '', source: '', date_from: '', date_to: '', q: '', active: '1' });
 
 const stageCards = computed(() => {
   if (!report.value) return [];
@@ -56,6 +77,8 @@ function applyFilters() {
 
 function resetFilters() {
   filters.stage = '';
+  filters.course_id = '';
+  filters.source = '';
   filters.date_from = '';
   filters.date_to = '';
   filters.q = '';
@@ -69,11 +92,22 @@ function changePage(delta: number) {
   loadReport();
 }
 
+async function loadCourses() {
+  try {
+    const res = await client.get<ApiEnvelope<CourseOption[]>>('/courses');
+    courses.value = res.data.data;
+  } catch {
+    // ignore
+  }
+}
+
 async function loadReport() {
   loading.value = true;
   try {
     const params: Record<string, string> = { page: String(currentPage.value) };
     if (filters.stage) params.stage = filters.stage;
+    if (filters.course_id) params.course_id = filters.course_id;
+    if (filters.source) params.source = filters.source;
     if (filters.date_from) params.date_from = filters.date_from;
     if (filters.date_to) params.date_to = filters.date_to;
     if (filters.q.trim()) params.q = filters.q.trim();
@@ -91,6 +125,8 @@ async function exportCsv() {
   try {
     const params: Record<string, string> = { export: '1' };
     if (filters.stage) params.stage = filters.stage;
+    if (filters.course_id) params.course_id = filters.course_id;
+    if (filters.source) params.source = filters.source;
     if (filters.date_from) params.date_from = filters.date_from;
     if (filters.date_to) params.date_to = filters.date_to;
     if (filters.q.trim()) params.q = filters.q.trim();
@@ -98,19 +134,22 @@ async function exportCsv() {
 
     const { data } = await client.get<ApiEnvelope<LeadsReport>>('/reports/leads', { params });
     const csvRows = [
-      ['ID', 'ФИО (Full Name)', 'Телефон (Phone)', 'Статус (Status)', 'Активен (Active)', 'Дата обращения (Created At)'],
+      ['ID', 'ФИО (Full Name)', 'Телефон (Phone)', 'Курс (Course)', 'Источник (Source)', 'Школа (School)', 'Статус (Status)', 'Активен (Active)', 'Дата обращения (Created At)'],
     ];
     for (const row of data.data.rows) {
       csvRows.push([
         String(row.id),
-        `"${row.full_name}"`,
-        `"${row.phone}"`,
-        `"${row.stage_label}"`,
+        `"${row.full_name || ''}"`,
+        `"${row.phone || ''}"`,
+        `"${row.course_name || '—'}"`,
+        `"${row.source || '—'}"`,
+        `"${row.school || '—'}"`,
+        `"${row.stage_label || ''}"`,
         row.is_active ? 'Да' : 'Нет',
-        `"${row.created_at}"`,
+        `"${row.created_at || ''}"`,
       ]);
     }
-    const csvContent = 'data:text/csv;charset=utf-8,﻿' + csvRows.map((e) => e.join(',')).join('\n');
+    const csvContent = 'data:text/csv;charset=utf-8,\uFEFF' + csvRows.map((e) => e.join(',')).join('\n');
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement('a');
     link.setAttribute('href', encodedUri);
@@ -127,10 +166,12 @@ async function exportCsv() {
 }
 
 function openLeads() {
-  router.push('/leads');
+  router.push({ path: '/leads', query: { stage: 'all' } });
 }
 
-onMounted(loadReport);
+onMounted(async () => {
+  await Promise.all([loadReport(), loadCourses()]);
+});
 
 let searchDebounce: ReturnType<typeof setTimeout> | null = null;
 watch(
@@ -180,6 +221,20 @@ watch(
         </select>
       </div>
       <div>
+        <label class="mb-1 block text-xs font-medium text-fb-secondary">Курс</label>
+        <select v-model="filters.course_id" class="rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none">
+          <option value="">Все курсы</option>
+          <option v-for="c in courses" :key="c.id" :value="String(c.id)">{{ c.name }}</option>
+        </select>
+      </div>
+      <div>
+        <label class="mb-1 block text-xs font-medium text-fb-secondary">Источник</label>
+        <select v-model="filters.source" class="rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none">
+          <option value="">Все источники</option>
+          <option v-for="src in POPULAR_SOURCES" :key="src" :value="src">{{ src }}</option>
+        </select>
+      </div>
+      <div>
         <label class="mb-1 block text-xs font-medium text-fb-secondary">С даты</label>
         <input v-model="filters.date_from" type="date" class="rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none" />
       </div>
@@ -192,7 +247,7 @@ watch(
         <input
           v-model="filters.q"
           type="search"
-          placeholder="Поиск по имени или телефону…"
+          placeholder="Поиск по имени, телефону, источнику…"
           class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none"
           @keydown.enter="applyFilters"
         />
@@ -256,6 +311,8 @@ watch(
               <tr>
                 <th class="px-5 py-3.5 text-left">ФИО лида</th>
                 <th class="px-5 py-3.5 text-left">Телефон</th>
+                <th class="px-5 py-3.5 text-left">Курс</th>
+                <th class="px-5 py-3.5 text-left">Источник</th>
                 <th class="px-5 py-3.5 text-left">Статус воронки</th>
                 <th class="px-5 py-3.5 text-left">Дата обращения</th>
               </tr>
@@ -264,6 +321,13 @@ watch(
               <tr v-for="row in report.rows" :key="row.id" class="hover:bg-fb-hover/40 transition-colors">
                 <td class="px-5 py-3.5 font-medium text-fb-text">{{ row.full_name }}</td>
                 <td class="px-5 py-3.5 text-fb-secondary">{{ row.phone }}</td>
+                <td class="px-5 py-3.5 text-fb-secondary">{{ row.course_name || '—' }}</td>
+                <td class="px-5 py-3.5">
+                  <span v-if="row.source" class="rounded bg-sky-50 px-2 py-0.5 text-xs text-sky-700 font-medium border border-sky-200">
+                    {{ row.source }}
+                  </span>
+                  <span v-else class="text-fb-secondary text-xs">—</span>
+                </td>
                 <td class="px-5 py-3.5">
                   <span class="rounded-full bg-fb-canvas border border-fb-line px-2.5 py-0.5 text-xs font-medium text-fb-text">
                     {{ row.stage_label }}

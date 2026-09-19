@@ -26,7 +26,7 @@ interface ArchivePayload {
   rows: ArchiveRow[];
 }
 
-const ROLE_OPTIONS = ['', 'student', 'teacher', 'staff', 'lead'];
+const ROLE_OPTIONS = ['', 'student', 'teacher', 'staff'];
 
 const rows = ref<ArchiveRow[]>([]);
 const auth = useAuthStore();

@@ -42,6 +42,7 @@ ROUTE_RULES: list[tuple[tuple[str, ...], str, str | None]] = [
     (('GET',), r'^leads/\d+$', P.PERM_LEADS_VIEW),
     (('PATCH',), r'^leads/\d+$', P.PERM_LEADS_WRITE),
     (('POST',), r'^leads/\d+/archive$', P.PERM_LEADS_WRITE),
+    (('POST',), r'^leads/\d+/convert$', P.PERM_LEADS_WRITE),
 
     (('GET',), r'^courses$', P.PERM_COURSES_VIEW),
     (('POST',), r'^courses$', P.PERM_COURSES_WRITE),

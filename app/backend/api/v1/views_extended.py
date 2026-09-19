@@ -945,7 +945,7 @@ def report_conversion(request):
     if company is None:
         return ok({'pipeline': {}, 'rows': [], 'total': 0, 'page': 1, 'total_pages': 1})
 
-    leads = Lead.objects.filter(company=company, is_active=True).order_by('-created_at')
+    leads = Lead.objects.filter(company=company, is_active=True).select_related('course', 'branch').order_by('-created_at')
     params = request.query_params
 
     date_from = params.get('date_from')
@@ -956,17 +956,40 @@ def report_conversion(request):
     if date_to:
         leads = leads.filter(created_at__date__lte=date_to)
 
+    source = params.get('source')
+    if source:
+        leads = leads.filter(source__iexact=source.strip())
+
+    course_id = params.get('course_id')
+    if course_id:
+        try:
+            leads = leads.filter(course_id=int(course_id))
+        except (TypeError, ValueError):
+            pass
+
+    branch_id = params.get('branch_id')
+    if branch_id:
+        try:
+            leads = leads.filter(branch_id=int(branch_id))
+        except (TypeError, ValueError):
+            pass
+
     query = (params.get('q') or '').strip()
     if query:
         leads = leads.filter(
             Q(first_name__icontains=query)
             | Q(last_name__icontains=query)
             | Q(phone__icontains=query)
+            | Q(source__icontains=query)
+            | Q(school__icontains=query)
         )
 
     stage_order = [choice[0] for choice in Lead.Stage.choices]
     stages = {stage: leads.filter(stage=stage).count() for stage in stage_order}
     total = leads.count()
+    attended_total = leads.filter(
+        Q(attended_trial=True) | Q(stage__in=[Lead.Stage.ATTENDED, Lead.Stage.CONVERTED])
+    ).distinct().count()
 
     def _serialize_conversion_lead(lead: Lead) -> dict:
         return {
@@ -975,16 +998,23 @@ def report_conversion(request):
             'phone': lead.phone,
             'stage': lead.stage,
             'stage_label': lead.get_stage_display(),
+            'source': lead.source,
+            'school': lead.school,
+            'course_id': lead.course_id,
+            'course_name': lead.course.name if lead.course else None,
+            'branch_id': lead.branch_id,
+            'branch_name': lead.branch.name if lead.branch else None,
             'created_at': lead.created_at.date().isoformat(),
             'trial_booked': True,
-            'attended': lead.stage == Lead.Stage.ATTENDED,
+            'attended': bool(getattr(lead, 'attended_trial', False) or lead.stage in (Lead.Stage.ATTENDED, Lead.Stage.CONVERTED)),
+            'converted': lead.stage == Lead.Stage.CONVERTED,
             'rejected': lead.stage == Lead.Stage.REJECTED,
         }
 
     export = params.get('export', '0') == '1'
     if export:
         rows = [_serialize_conversion_lead(lead) for lead in leads]
-        return ok({'pipeline': stages, 'rows': rows, 'total': total})
+        return ok({'pipeline': stages, 'attended_total': attended_total, 'rows': rows, 'total': total})
 
     try:
         page = int(params.get('page', 1))
@@ -998,6 +1028,7 @@ def report_conversion(request):
     rows = [_serialize_conversion_lead(lead) for lead in leads[offset:offset + page_size]]
     return ok({
         'pipeline': stages,
+        'attended_total': attended_total,
         'rows': rows,
         'total': total,
         'page': page,
@@ -1537,7 +1568,7 @@ def report_leads(request):
     if company is None:
         return ok({'total': 0, 'active': 0, 'by_stage': {}, 'rows': [], 'page': 1, 'total_pages': 1})
 
-    leads = Lead.objects.filter(company=company).order_by('-created_at')
+    leads = Lead.objects.filter(company=company).select_related('course', 'branch').order_by('-created_at')
     params = request.query_params
 
     if params.get('active') == '1':
@@ -1555,32 +1586,58 @@ def report_leads(request):
     if date_to:
         leads = leads.filter(created_at__date__lte=date_to)
 
+    source = params.get('source')
+    if source:
+        leads = leads.filter(source__iexact=source.strip())
+
+    course_id = params.get('course_id')
+    if course_id:
+        try:
+            leads = leads.filter(course_id=int(course_id))
+        except (TypeError, ValueError):
+            pass
+
+    branch_id = params.get('branch_id')
+    if branch_id:
+        try:
+            leads = leads.filter(branch_id=int(branch_id))
+        except (TypeError, ValueError):
+            pass
+
     query = (params.get('q') or '').strip()
     if query:
         leads = leads.filter(
             Q(first_name__icontains=query)
             | Q(last_name__icontains=query)
             | Q(phone__icontains=query)
+            | Q(source__icontains=query)
+            | Q(school__icontains=query)
         )
 
     by_stage = {stage: leads.filter(stage=stage).count() for stage, _ in Lead.Stage.choices}
     total = leads.count()
     active_count = leads.filter(is_active=True).count()
 
+    def _serialize_report_lead(lead: Lead) -> dict:
+        return {
+            'id': lead.id,
+            'full_name': lead.full_name,
+            'phone': lead.phone,
+            'stage': lead.stage,
+            'stage_label': lead.get_stage_display(),
+            'source': lead.source,
+            'school': lead.school,
+            'course_id': lead.course_id,
+            'course_name': lead.course.name if lead.course else None,
+            'branch_id': lead.branch_id,
+            'branch_name': lead.branch.name if lead.branch else None,
+            'is_active': lead.is_active,
+            'created_at': lead.created_at.date().isoformat(),
+        }
+
     export = params.get('export', '0') == '1'
     if export:
-        rows = [
-            {
-                'id': lead.id,
-                'full_name': lead.full_name,
-                'phone': lead.phone,
-                'stage': lead.stage,
-                'stage_label': lead.get_stage_display(),
-                'is_active': lead.is_active,
-                'created_at': lead.created_at.date().isoformat(),
-            }
-            for lead in leads
-        ]
+        rows = [_serialize_report_lead(lead) for lead in leads]
         return ok({
             'total': total,
             'active': active_count,
@@ -1597,18 +1654,7 @@ def report_leads(request):
     total_pages = max(1, (total + page_size - 1) // page_size)
     offset = (page - 1) * page_size
 
-    rows = [
-        {
-            'id': lead.id,
-            'full_name': lead.full_name,
-            'phone': lead.phone,
-            'stage': lead.stage,
-            'stage_label': lead.get_stage_display(),
-            'is_active': lead.is_active,
-            'created_at': lead.created_at.date().isoformat(),
-        }
-        for lead in leads[offset:offset + page_size]
-    ]
+    rows = [_serialize_report_lead(lead) for lead in leads[offset:offset + page_size]]
     return ok({
         'total': total,
         'active': active_count,

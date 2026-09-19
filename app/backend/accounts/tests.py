@@ -2,7 +2,7 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 
 from accounts.models import User
-from crm.models import Lead, Student
+from crm.models import Course, Lead, Student
 from finance.models import Payment
 from org.models import Company, Branch
 
@@ -103,6 +103,8 @@ class LeadFieldsTests(TestCase):
     def setUp(self):
         self.client = APIClient()
         self.company = Company.objects.create(name='Test Company', subdomain='testlead')
+        self.branch = Branch.objects.create(company=self.company, name='Chilanzar Branch')
+        self.course = Course.objects.create(company=self.company, name='Английский', price=600000)
         self.ceo = User.objects.create_user(
             phone='998909999999',
             password='password123',
@@ -120,6 +122,10 @@ class LeadFieldsTests(TestCase):
             'phone2': '998912345678',
             'address': 'Tashkent, Chilanzar 5',
             'comment': 'Interested in IELTS course, evenings',
+            'source': 'Instagram',
+            'level': 'Intermediate (B1)',
+            'branch_id': self.branch.id,
+            'course_id': self.course.id,
             'stage': 'trial_booked',
             'trial_date': '2025-05-15',
         }
@@ -133,12 +139,25 @@ class LeadFieldsTests(TestCase):
         self.assertEqual(data['phone2'], '912345678')
         self.assertEqual(data['address'], 'Tashkent, Chilanzar 5')
         self.assertEqual(data['comment'], 'Interested in IELTS course, evenings')
+        self.assertEqual(data['source'], 'Instagram')
+        self.assertEqual(data['level'], 'Intermediate (B1)')
+        self.assertEqual(data['branch_id'], self.branch.id)
+        self.assertEqual(data['course_id'], self.course.id)
+        self.assertEqual(data['course_name'], 'Английский')
         self.assertEqual(data['trial_date'], '2025-05-15')
 
         # Test search by first_name and address
         search_res = self.client.get('/v1/leads?q=Alisher')
         self.assertEqual(search_res.status_code, 200)
         self.assertEqual(len(search_res.json()['data']['results']), 1)
+
+        # Test filter by branch_id, course_id, and level
+        b_res = self.client.get(f'/v1/leads?branch_id={self.branch.id}')
+        self.assertEqual(len(b_res.json()['data']['results']), 1)
+        c_res = self.client.get(f'/v1/leads?course_id={self.course.id}')
+        self.assertEqual(len(c_res.json()['data']['results']), 1)
+        l_res = self.client.get('/v1/leads?level=Intermediate (B1)')
+        self.assertEqual(len(l_res.json()['data']['results']), 1)
 
         # Test update
         lead_id = data['id']
@@ -147,6 +166,8 @@ class LeadFieldsTests(TestCase):
             'last_name': 'Mirzo',
             'address': 'Tashkent, Yunusabad',
             'comment': 'Changed mind, wants morning group',
+            'source': 'Telegram',
+            'level': 'Advanced (C1)',
             'trial_date': '2025-05-20',
         })
         self.assertEqual(patch_res.status_code, 200)
@@ -156,6 +177,8 @@ class LeadFieldsTests(TestCase):
         self.assertEqual(updated['full_name'], 'Bobur Mirzo')
         self.assertEqual(updated['address'], 'Tashkent, Yunusabad')
         self.assertEqual(updated['comment'], 'Changed mind, wants morning group')
+        self.assertEqual(updated['source'], 'Telegram')
+        self.assertEqual(updated['level'], 'Advanced (C1)')
         self.assertEqual(updated['trial_date'], '2025-05-20')
 
 
@@ -181,6 +204,7 @@ class LeadToStudentConversionTests(TestCase):
             'phone2': '998934445566',
             'address': 'Tashkent, Mirzo-Ulugbek 12',
             'comment': 'Good English foundation',
+            'level': 'Beginner (A1)',
             'branch_id': self.branch.id,
             'trial_date': '2025-05-10',
         }
@@ -193,6 +217,7 @@ class LeadToStudentConversionTests(TestCase):
         self.assertEqual(data['phone2'], '934445566')
         self.assertEqual(data['address'], 'Tashkent, Mirzo-Ulugbek 12')
         self.assertEqual(data['comment'], 'Good English foundation')
+        self.assertEqual(data['level'], 'Beginner (A1)')
         self.assertEqual(data['trial_date'], '2025-05-10')
         self.assertEqual(data['next_payment_date'], '2025-05-10')
 
@@ -211,6 +236,7 @@ class LeadToStudentConversionTests(TestCase):
             'phone2': '998918889900',
             'address': 'Samarkand, Registan 3',
             'comment': 'Trial lesson passed successfully',
+            'level': 'Elementary (A2)',
             'stage': 'attended',
             'trial_date': '2025-05-12',
         }
@@ -235,17 +261,85 @@ class LeadToStudentConversionTests(TestCase):
         self.assertEqual(student_data['phone2'], '918889900')
         self.assertEqual(student_data['address'], 'Samarkand, Registan 3')
         self.assertEqual(student_data['comment'], 'Trial lesson passed successfully')
+        self.assertEqual(student_data['level'], 'Elementary (A2)')
         self.assertEqual(student_data['branch_id'], self.branch.id)
         self.assertEqual(student_data['status'], 1)  # STUDYING
         self.assertEqual(student_data['trial_date'], '2025-05-12')
         self.assertEqual(student_data['next_payment_date'], '2025-05-12')
 
-        # Check lead is completely removed from database
-        self.assertFalse(Lead.objects.filter(pk=lead_id).exists())
+        # Check lead is preserved in database with stage CONVERTED
+        lead = Lead.objects.get(pk=lead_id)
+        self.assertEqual(lead.stage, Lead.Stage.CONVERTED)
+        self.assertEqual(lead.branch_id, self.branch.id)
 
-        # Check lead is gone from leads list endpoint
-        lead_list_res = self.client.get('/v1/leads')
-        self.assertEqual(lead_list_res.json()['data']['count'], 0)
+        # Check student links to lead and has level copied
+        student = Student.objects.get(pk=student_data['id'])
+        self.assertEqual(student.lead_id, lead_id)
+        self.assertEqual(student.level, 'Elementary (A2)')
+
+    def test_convert_lead_rbac_forbidden(self):
+        teacher = User.objects.create_user(
+            phone='998905555555',
+            password='password123',
+            company=self.company,
+            user_type=User.UserType.TEACHER,
+        )
+        self.client.force_authenticate(user=teacher)
+        lead = Lead.objects.create(
+            company=self.company,
+            first_name='TestLead',
+            phone='901234567',
+        )
+        res = self.client.post(f'/v1/leads/{lead.id}/convert', {'branch_id': self.branch.id})
+        self.assertEqual(res.status_code, 403)
+
+    def test_secondary_phone_validation(self):
+        self.client.force_authenticate(user=self.ceo)
+        # 1. Lead creation with short phone2 (8 digits) should fail
+        res = self.client.post('/v1/leads', {
+            'first_name': 'Test',
+            'phone': '901234567',
+            'phone2': '23232323',
+        })
+        self.assertEqual(res.status_code, 400)
+        self.assertIn('Secondary phone must contain at least 9 digits', res.json()['message'])
+
+        # 2. Lead creation with valid phone2 (9 digits) should succeed
+        res = self.client.post('/v1/leads', {
+            'first_name': 'Test',
+            'phone': '901234567',
+            'phone2': '901234568',
+            'phone2_owner': 'Father',
+        })
+        self.assertEqual(res.status_code, 201)
+        lead_id = res.json()['data']['id']
+
+        # 3. Lead update with short phone2 should fail
+        res = self.client.patch(f'/v1/leads/{lead_id}', {
+            'phone2': '12345678',
+        })
+        self.assertEqual(res.status_code, 400)
+        self.assertIn('Secondary phone must contain at least 9 digits', res.json()['message'])
+
+        # 4. Student creation with short phone2 should fail
+        res = self.client.post('/v1/students', {
+            'first_name': 'StudentTest',
+            'phone': '909998877',
+            'phone2': '99812345',
+            'trial_date': '2026-05-10',
+            'branch_id': self.branch.id,
+        })
+        self.assertEqual(res.status_code, 400)
+        self.assertIn('Secondary phone must contain at least 9 digits', res.json()['message'])
+
+        # 5. Student creation without trial_date should fail
+        res = self.client.post('/v1/students', {
+            'first_name': 'StudentNoDate',
+            'phone': '909998877',
+            'branch_id': self.branch.id,
+        })
+        self.assertEqual(res.status_code, 400)
+        self.assertIn('Trial / start date is required', res.json()['message'])
 
     def test_anchor_date_advance_and_debtor_status(self):
         self.client.force_authenticate(user=self.ceo)
@@ -697,6 +791,82 @@ class SubscriptionBillingAndCategoryTests(TestCase):
         self.client.force_authenticate(user=self.ceo)
         sres = self.client.get(f'/v1/students/{student.id}')
         self.assertEqual(sres.json()['data']['next_payment_date'], '2026-05-15')
+
+    def test_leads_school_duplicate_prevention_and_auto_linking(self):
+        self.client.force_authenticate(user=self.ceo)
+
+        # 1. Create lead with school
+        res = self.client.post('/v1/leads', {
+            'first_name': 'Азиз',
+            'last_name': 'Каримов',
+            'phone': '909991122',
+            'school': 'Школа № 178',
+            'trial_date': '2026-09-20',
+        })
+        self.assertEqual(res.status_code, 201)
+        lead_data = res.json()['data']
+        lead_id = lead_data['id']
+        self.assertEqual(lead_data['school'], 'Школа № 178')
+
+        # 2. Convert lead to student and verify school is transferred
+        c_res = self.client.post(f'/v1/leads/{lead_id}/convert', {
+            'branch_id': self.branch.id,
+            'trial_date': '2026-09-20',
+        })
+        self.assertEqual(c_res.status_code, 201)
+        student_data = c_res.json()['data']['student']
+        self.assertEqual(student_data['school'], 'Школа № 178')
+
+        # 3. Attempt duplicate conversion -> must fail with 400
+        c_dup = self.client.post(f'/v1/leads/{lead_id}/convert', {
+            'branch_id': self.branch.id,
+            'trial_date': '2026-09-20',
+        })
+        self.assertEqual(c_dup.status_code, 400)
+        self.assertIn('уже зачислен как студент', c_dup.json()['message'])
+
+        # 4. Check serialized lead has converted_student_id
+        lead_get = self.client.get(f'/v1/leads/{lead_id}')
+        self.assertEqual(lead_get.json()['data']['converted_student_id'], student_data['id'])
+
+        # 5. Direct student creation links existing lead instead of deleting it
+        l2_res = self.client.post('/v1/leads', {
+            'first_name': 'Дильноза',
+            'phone': '908887766',
+            'school': 'Гимназия № 5',
+            'trial_date': '2026-09-21',
+        })
+        l2_id = l2_res.json()['data']['id']
+
+        s_direct = self.client.post('/v1/students', {
+            'first_name': 'Дильноза',
+            'phone': '908887766',
+            'trial_date': '2026-09-21',
+            'branch_id': self.branch.id,
+        })
+        self.assertEqual(s_direct.status_code, 201)
+        created_student_id = s_direct.json()['data']['id']
+
+        # Lead should still exist, with stage = CONVERTED
+        lead2 = Lead.objects.filter(pk=l2_id).first()
+        self.assertIsNotNone(lead2)
+        self.assertEqual(lead2.stage, Lead.Stage.CONVERTED)
+        student2 = Student.objects.get(pk=created_student_id)
+        self.assertEqual(student2.lead_id, l2_id)
+
+        # 6. Dashboard active_leads counts only pipeline leads (TRIAL_BOOKED, ATTENDED)
+        # Create an active lead in pipeline
+        self.client.post('/v1/leads', {
+            'first_name': 'Активный',
+            'phone': '901110099',
+            'stage': 'trial_booked',
+            'trial_date': '2026-09-22',
+        })
+        dash_res = self.client.get('/v1/dashboard')
+        self.assertEqual(dash_res.status_code, 200)
+        # Both converted leads (lead_id and l2_id) must NOT be in active_leads!
+        self.assertEqual(dash_res.json()['data']['active_leads'], 1)
+
 
 
 

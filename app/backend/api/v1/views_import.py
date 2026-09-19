@@ -581,8 +581,28 @@ def student_import(request):
         })
 
     for item in valid_students_to_create:
-        Student.objects.create(**item)
-        Lead.objects.filter(company=company, phone=item['phone']).delete()
+        student = Student.objects.create(**item)
+        # Link matching lead instead of deleting (brothers-safe: match by phone+name)
+        _raw_phone = str(item.get('phone') or '').strip()
+        _phone_variants = [_raw_phone]
+        if _raw_phone.startswith('998') and len(_raw_phone) == 12:
+            _phone_variants.append(_raw_phone[3:])
+            _phone_variants.append('+' + _raw_phone)
+        elif len(_raw_phone) == 9:
+            _phone_variants.append('998' + _raw_phone)
+            _phone_variants.append('+998' + _raw_phone)
+
+        _exact_lead = Lead.objects.filter(
+            company=company,
+            phone__in=_phone_variants,
+            first_name__iexact=item.get('first_name', '')
+        ).order_by('-created_at').first()
+        if _exact_lead:
+            student.lead = _exact_lead
+            student.save(update_fields=['lead'])
+            if _exact_lead.stage != Lead.Stage.CONVERTED:
+                _exact_lead.stage = Lead.Stage.CONVERTED
+                _exact_lead.save(update_fields=['stage'])
         created += 1
 
     return ok(_import_result(created, skipped, errors))

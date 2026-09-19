@@ -3,9 +3,9 @@
 
 $ErrorActionPreference = "Stop"
 
-$workspaceRoot = "c:\Users\user\Desktop\Hijack-lms"
-$installedAppRoot = "C:\Users\user\AppData\Local\Programs\HiJack-LMS"
-$pythonExe = "$installedAppRoot\runtime\python\python.exe"
+$workspaceRoot = "G:\MME"
+$installedAppRoot = "C:\Users\acer\AppData\Local\Programs\HiJack-LMS"
+$pythonExe = "$workspaceRoot\app\backend\.venv\Scripts\python.exe"
 
 Write-Host "=== 1. Building Frontend ===" -ForegroundColor Cyan
 $env:PATH = "C:\Program Files\nodejs;$env:PATH"
@@ -39,10 +39,18 @@ Set-Location "$installedAppRoot\app\backend"
 & $pythonExe manage.py migrate
 
 Write-Host "=== 5. Restarting Background Server (Port 8000) ===" -ForegroundColor Cyan
-# Terminate old server processes
-Get-Process -Name "python*" -ErrorAction SilentlyContinue | Where-Object {
-    $_.Path -like "*HiJack-LMS*"
-} | Stop-Process -Force
+# Terminate old server processes (port 8000 or running manage.py runserver)
+$portProcesses = Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique
+foreach ($p in $portProcesses) {
+    if ($p -and $p -ne 0) {
+        Stop-Process -Id $p -Force -ErrorAction SilentlyContinue
+    }
+}
+Get-CimInstance Win32_Process -Filter "Name LIKE 'python%.exe'" | Where-Object {
+    $_.CommandLine -like "*manage.py runserver*"
+} | ForEach-Object {
+    Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+}
 Start-Sleep -Seconds 1
 
 # Start fresh server completely detached from the console / job object

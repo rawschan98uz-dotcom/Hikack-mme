@@ -84,7 +84,7 @@ def normalize_phone(phone):
     digits = ''.join(ch for ch in str(phone) if ch.isdigit())
     
     # Убираем код страны Узбекистан (998)
-    if len(digits) == 12 and digits.startswith('998'):
+    if digits.startswith('998') and len(digits) >= 10:
         digits = digits[3:]
     
     return digits

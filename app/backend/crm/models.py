@@ -86,8 +86,10 @@ class Student(models.Model):
     last_name = models.CharField(max_length=150, blank=True)
     phone = models.CharField(max_length=15)
     phone2 = models.CharField(max_length=15, blank=True, default='')
+    phone2_owner = models.CharField(max_length=64, blank=True, default='')
     address = models.CharField(max_length=255, blank=True, default='')
     comment = models.TextField(blank=True, default='')
+    level = models.CharField(max_length=64, blank=True, default='')
     lead = models.ForeignKey('crm.Lead', on_delete=models.SET_NULL, null=True, blank=True, related_name='converted_students')
     photo = models.ImageField(upload_to='students/photos/', null=True, blank=True)
     school = models.CharField(max_length=255, blank=True)
@@ -136,16 +138,24 @@ class Lead(models.Model):
     class Stage(models.TextChoices):
         TRIAL_BOOKED = 'trial_booked', 'Записан на пробный'
         ATTENDED = 'attended', 'Был на уроке (Думает)'
-        REJECTED = 'rejected', 'Отказ / Архив'
+        REJECTED = 'rejected', 'Отказ'
+        CONVERTED = 'converted', 'Зачислен (Студент)'
 
     company = models.ForeignKey('org.Company', on_delete=models.CASCADE, related_name='leads')
+    branch = models.ForeignKey('org.Branch', on_delete=models.SET_NULL, null=True, blank=True, related_name='leads')
+    course = models.ForeignKey('crm.Course', on_delete=models.SET_NULL, null=True, blank=True, related_name='leads')
     first_name = models.CharField(max_length=150, default='')
     last_name = models.CharField(max_length=150, blank=True, default='')
     phone = models.CharField(max_length=15)
     phone2 = models.CharField(max_length=15, blank=True, default='')
+    phone2_owner = models.CharField(max_length=64, blank=True, default='')
     address = models.CharField(max_length=255, blank=True, default='')
+    school = models.CharField(max_length=255, blank=True, default='')
     comment = models.TextField(blank=True, default='')
+    source = models.CharField(max_length=64, blank=True, default='')
+    level = models.CharField(max_length=64, blank=True, default='')
     stage = models.CharField(max_length=20, choices=Stage.choices, default=Stage.TRIAL_BOOKED)
+    attended_trial = models.BooleanField(default=False)
     trial_date = models.DateField(null=True, blank=True)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -161,6 +171,11 @@ class Lead(models.Model):
     @status.setter
     def status(self, value: str):
         self.stage = value
+
+    def save(self, *args, **kwargs):
+        if self.stage == self.Stage.ATTENDED:
+            self.attended_trial = True
+        super().save(*args, **kwargs)
 
     def __str__(self) -> str:
         return self.full_name

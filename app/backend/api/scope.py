@@ -29,3 +29,24 @@ def teacher_can_access_student(user: User, student: Student) -> bool:
     if student.group_id is None:
         return False
     return student.group.teacher_id == user.id
+
+
+def filter_attendance_queryset(qs, user: User):
+    if user_is_teacher(user):
+        return qs.filter(group__teacher=user)
+    return qs
+
+
+def teacher_can_access_attendance(user: User, record) -> bool:
+    if not user_is_teacher(user):
+        return True
+    if record.group_id is None:
+        return False
+    return record.group.teacher_id == user.id
+
+
+def filter_teacher_attendance_queryset(qs, user: User):
+    if user_is_teacher(user):
+        return qs.filter(teacher=user)
+    return qs
+

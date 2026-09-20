@@ -195,3 +195,66 @@ class PlatformPayment(models.Model):
     company = models.ForeignKey('org.Company', on_delete=models.CASCADE, related_name='platform_payments')
     amount = models.IntegerField()
     created_at = models.DateTimeField(auto_now_add=True)
+
+
+class AuditLogRecord(models.Model):
+    company = models.ForeignKey('org.Company', on_delete=models.CASCADE, related_name='audit_log_records')
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='audit_log_records',
+    )
+    actor_name = models.CharField(max_length=255, blank=True)
+    entity_type = models.CharField(max_length=64)
+    entity_id = models.PositiveIntegerField()
+    action = models.CharField(max_length=32)
+    old_values = models.JSONField(default=dict, blank=True)
+    new_values = models.JSONField(default=dict, blank=True)
+    reason = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['company', 'entity_type', 'created_at']),
+            models.Index(fields=['entity_type', 'entity_id']),
+        ]
+
+    def __str__(self) -> str:
+        return f'{self.actor_name or "System"} {self.action} {self.entity_type}#{self.entity_id}'
+
+
+def log_audit(
+    company,
+    actor=None,
+    entity_type: str = '',
+    entity_id: int = 0,
+    action: str = '',
+    old_values: dict | None = None,
+    new_values: dict | None = None,
+    reason: str = '',
+) -> AuditLogRecord:
+    actor_name = ''
+    actual_actor = None
+    if actor and getattr(actor, 'is_authenticated', False) and getattr(actor, 'pk', None):
+        actual_actor = actor
+        if hasattr(actor, 'display_name'):
+            actor_name = actor.display_name()
+        elif hasattr(actor, 'get_full_name'):
+            actor_name = actor.get_full_name() or getattr(actor, 'phone', '')
+        else:
+            actor_name = str(actor)
+
+    return AuditLogRecord.objects.create(
+        company=company,
+        actor=actual_actor,
+        actor_name=actor_name,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        action=action,
+        old_values=old_values or {},
+        new_values=new_values or {},
+        reason=reason,
+    )
+

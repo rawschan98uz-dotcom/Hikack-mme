@@ -710,17 +710,34 @@ async function submitStudent() {
   }
 }
 
-async function deleteStudent() {
+async function deleteStudent(hard = false) {
   if (!detailStudent.value) return;
-  if (!window.confirm(`Delete ${detailStudent.value.full_name}?`)) return;
+
+  if (hard) {
+    if (
+      !window.confirm(
+        `ВНИМАНИЕ: Безвозвратно удалить ученика "${detailStudent.value.full_name}" из базы данных?\n\nВся история посещаемости и оценок будет УНИЧТОЖЕНА! Действие необратимо.`
+      )
+    ) {
+      return;
+    }
+  } else {
+    if (
+      !window.confirm(
+        `Отчислить ученика "${detailStudent.value.full_name}"?\n\nУченик будет переведен в статус «Отчислен / Ушел». История посещаемости и платежей сохранится.`
+      )
+    ) {
+      return;
+    }
+  }
 
   deleting.value = true;
   try {
-    await client.delete(`/students/${detailStudent.value.id}`);
+    await client.delete(`/students/${detailStudent.value.id}${hard ? '?hard=1' : ''}`);
     closePanel();
     await loadStudents();
   } catch (error) {
-    window.alert(apiErrorMessage(error, 'Could not delete student'));
+    window.alert(apiErrorMessage(error, hard ? 'Could not delete student permanently' : 'Could not archive student'));
   } finally {
     deleting.value = false;
   }
@@ -1526,9 +1543,20 @@ onMounted(async () => {
                 type="button"
                 class="rounded-lg border border-red-300 px-5 py-2 text-sm font-medium text-fb-danger hover:bg-red-50 disabled:opacity-50"
                 :disabled="deleting"
-                @click="deleteStudent"
+                title="Перевести в статус «Отчислен / Ушел» с сохранением истории"
+                @click="deleteStudent(false)"
               >
-                Delete
+                Отчислить
+              </button>
+              <button
+                v-if="auth.isCeo"
+                type="button"
+                class="rounded-lg border border-red-600 px-3 py-2 text-xs font-semibold text-red-700 hover:bg-red-100 disabled:opacity-50"
+                :disabled="deleting"
+                title="Только CEO: Полное физическое удаление записи из базы"
+                @click="deleteStudent(true)"
+              >
+                Hard Delete
               </button>
             </template>
             <template v-else>

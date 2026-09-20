@@ -18,6 +18,7 @@ interface ConversionRow {
   attended?: boolean;
   converted?: boolean;
   rejected?: boolean;
+  is_active?: boolean;
   [key: string]: unknown;
 }
 
@@ -59,7 +60,7 @@ const currentPage = ref(1);
 const totalPages = ref(1);
 const totalCount = ref(0);
 
-const filters = reactive({ course_id: '', source: '', date_from: '', date_to: '', q: '' });
+const filters = reactive({ course_id: '', source: '', date_from: '', date_to: '', q: '', is_active: '' });
 
 const pipelineCards = computed(() => {
   if (!data.value) return [];
@@ -92,6 +93,7 @@ function resetFilters() {
   filters.date_from = '';
   filters.date_to = '';
   filters.q = '';
+  filters.is_active = '';
   currentPage.value = 1;
   loadData();
 }
@@ -118,6 +120,7 @@ async function loadData() {
     if (filters.source) params.source = filters.source;
     if (filters.date_from) params.date_from = filters.date_from;
     if (filters.date_to) params.date_to = filters.date_to;
+    if (filters.is_active) params.is_active = filters.is_active;
     if (filters.q.trim()) params.q = filters.q.trim();
     const res = await client.get<ApiEnvelope<ConversionData>>('/reports/conversion', { params });
     data.value = res.data.data;
@@ -136,11 +139,12 @@ async function exportCsv() {
     if (filters.source) params.source = filters.source;
     if (filters.date_from) params.date_from = filters.date_from;
     if (filters.date_to) params.date_to = filters.date_to;
+    if (filters.is_active) params.is_active = filters.is_active;
     if (filters.q.trim()) params.q = filters.q.trim();
 
     const res = await client.get<ApiEnvelope<ConversionData>>('/reports/conversion', { params });
     const csvRows = [
-      ['ID', 'ФИО (Full Name)', 'Телефон (Phone)', 'Курс (Course)', 'Источник (Source)', 'Школа (School)', 'Текущий этап (Stage)', 'Записан на пробный', 'Был на уроке', 'Зачислен (Студент)', 'Отказ', 'Дата создания'],
+      ['ID', 'ФИО (Full Name)', 'Телефон (Phone)', 'Курс (Course)', 'Источник (Source)', 'Школа (School)', 'Текущий этап (Stage)', 'Статус', 'Записан на пробный', 'Был на уроке', 'Зачислен (Студент)', 'Отказ', 'Дата создания'],
     ];
     for (const row of res.data.data.rows) {
       csvRows.push([
@@ -151,6 +155,7 @@ async function exportCsv() {
         `"${row.source || '—'}"`,
         `"${row.school || '—'}"`,
         `"${row.stage_label || ''}"`,
+        row.is_active === false ? 'В архиве' : 'Активный',
         row.trial_booked ? 'Да' : 'Нет',
         row.attended ? 'Да' : 'Нет',
         row.converted ? 'Да' : 'Нет',
@@ -231,6 +236,14 @@ watch(
       <div>
         <label class="mb-1 block text-xs font-medium text-fb-secondary">По дату</label>
         <input v-model="filters.date_to" type="date" class="rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none" />
+      </div>
+      <div>
+        <label class="mb-1 block text-xs font-medium text-fb-secondary">Статус</label>
+        <select v-model="filters.is_active" class="rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none">
+          <option value="">Все (включая архив)</option>
+          <option value="true">Только активные</option>
+          <option value="false">Только архив</option>
+        </select>
       </div>
       <div class="min-w-[180px] flex-1">
         <label class="mb-1 block text-xs font-medium text-fb-secondary">Поиск</label>
@@ -361,7 +374,18 @@ watch(
             </thead>
             <tbody class="divide-y divide-fb-line">
               <tr v-for="row in data.rows" :key="row.id" class="hover:bg-fb-hover/40 transition-colors">
-                <td class="px-5 py-3.5 font-medium text-fb-text">{{ row.full_name }}</td>
+                <td class="px-5 py-3.5 font-medium text-fb-text">
+                  <div class="flex items-center gap-2">
+                    <span>{{ row.full_name }}</span>
+                    <span
+                      v-if="row.is_active === false"
+                      class="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 border border-amber-200"
+                      title="Лид находится в архиве"
+                    >
+                      Архив
+                    </span>
+                  </div>
+                </td>
                 <td class="px-5 py-3.5 text-fb-secondary">{{ row.phone }}</td>
                 <td class="px-4 py-3.5 text-fb-secondary text-xs">{{ row.course_name || '—' }}</td>
                 <td class="px-4 py-3.5">

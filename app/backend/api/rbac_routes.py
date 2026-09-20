@@ -64,6 +64,7 @@ ROUTE_RULES: list[tuple[tuple[str, ...], str, str | None]] = [
     (('POST',), r'^user/staff/import$', P.PERM_STAFF_WRITE),
     (('GET',), r'^replenishments$', P.PERM_FINANCE_VIEW),
     (('POST',), r'^replenishments$', P.PERM_FINANCE_WRITE),
+    (('POST',), r'^(?:replenishments|payments)/\d+/refund$', P.PERM_FINANCE_WRITE),
     (('GET',), r'^replenishments/\d+$', P.PERM_FINANCE_VIEW),
     (('PATCH', 'DELETE'), r'^replenishments/\d+$', P.PERM_FINANCE_WRITE),
 
@@ -91,11 +92,14 @@ ROUTE_RULES: list[tuple[tuple[str, ...], str, str | None]] = [
     (('GET',), r'^reports/left-students$', P.PERM_REPORTS_VIEW),
     (('GET',), r'^reports/attendance$', P.PERM_ATTENDANCE_VIEW),
     (('POST',), r'^reports/attendance$', P.PERM_ATTENDANCE_WRITE),
-    (('GET', 'PATCH', 'DELETE'), r'^reports/attendance/\d+$', P.PERM_ATTENDANCE_WRITE),
+    (('GET',), r'^reports/attendance/\d+$', P.PERM_ATTENDANCE_VIEW),
+    (('PATCH', 'DELETE'), r'^reports/attendance/\d+$', P.PERM_ATTENDANCE_WRITE),
 
     (('GET',), r'^reports/teacher-attendance$', P.PERM_TEACHER_ATTENDANCE_VIEW),
     (('POST',), r'^reports/teacher-attendance$', P.PERM_TEACHER_ATTENDANCE_WRITE),
-    (('GET', 'PATCH', 'DELETE'), r'^reports/teacher-attendance/\d+$', P.PERM_TEACHER_ATTENDANCE_WRITE),
+    (('GET',), r'^reports/teacher-attendance/\d+$', P.PERM_TEACHER_ATTENDANCE_VIEW),
+    (('PATCH', 'DELETE'), r'^reports/teacher-attendance/\d+$', P.PERM_TEACHER_ATTENDANCE_WRITE),
+    (('POST',), r'^teacher-attendance/self-checkin$', P.PERM_TEACHER_ATTENDANCE_VIEW),
 
     (('GET',), r'^reports/workly$', P.PERM_REPORTS_VIEW),
     (('POST',), r'^reports/workly$', P.PERM_REPORTS_WRITE),

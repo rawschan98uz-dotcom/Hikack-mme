@@ -31,6 +31,7 @@ interface LeadRow {
   status_label?: string;
   trial_date?: string | null;
   converted_student_id?: number | null;
+  student_is_active?: boolean;
   student_deleted?: boolean;
   is_active: boolean;
   created_at: string;

@@ -1,6 +1,15 @@
 from django.contrib import admin
 
-from crm.models import AttendanceRecord, Course, Group, Lead, Student
+from crm.models import (
+    AttendanceRecord,
+    Course,
+    Group,
+    GroupEnrollment,
+    GroupScheduleSlot,
+    Lead,
+    Student,
+)
+
 
 
 @admin.register(Course)
@@ -12,6 +21,18 @@ class CourseAdmin(admin.ModelAdmin):
 @admin.register(Group)
 class GroupAdmin(admin.ModelAdmin):
     list_display = ('name', 'branch', 'course', 'status')
+    list_filter = ('company', 'status')
+
+
+@admin.register(GroupScheduleSlot)
+class GroupScheduleSlotAdmin(admin.ModelAdmin):
+    list_display = ('group', 'weekday', 'start_time', 'end_time', 'room')
+    list_filter = ('weekday',)
+
+
+@admin.register(GroupEnrollment)
+class GroupEnrollmentAdmin(admin.ModelAdmin):
+    list_display = ('student', 'group', 'status', 'joined_date', 'left_date')
     list_filter = ('company', 'status')
 
 
@@ -29,3 +50,4 @@ class LeadAdmin(admin.ModelAdmin):
 @admin.register(AttendanceRecord)
 class AttendanceRecordAdmin(admin.ModelAdmin):
     list_display = ('student', 'group', 'attend_date', 'status')
+

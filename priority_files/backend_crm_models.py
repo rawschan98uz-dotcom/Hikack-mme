@@ -56,14 +56,6 @@ class Group(models.Model):
     group_start_date = models.DateField(null=True, blank=True)
     group_end_date = models.DateField(null=True, blank=True)
     tags = models.ManyToManyField('operations.Tag', blank=True, related_name='groups')
-    archived_at = models.DateTimeField(null=True, blank=True)
-    archived_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name='archived_groups',
-    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -203,18 +195,6 @@ class AttendanceRecord(models.Model):
     note = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
-    class Meta:
-        constraints = [
-            models.UniqueConstraint(
-                fields=['company', 'student', 'group', 'attend_date'],
-                name='uniq_student_attendance_per_group_day',
-            ),
-        ]
-        indexes = [
-            models.Index(fields=['company', 'attend_date']),
-            models.Index(fields=['group', 'attend_date']),
-        ]
-
     def clean(self):
         super().clean()
         from django.core.exceptions import ValidationError
@@ -226,63 +206,3 @@ class AttendanceRecord(models.Model):
 
     def __str__(self) -> str:
         return f'{self.student.full_name} — {self.attend_date}'
-
-
-class GroupScheduleSlot(models.Model):
-    group = models.ForeignKey(Group, on_delete=models.CASCADE, related_name='schedule_slots')
-    weekday = models.SmallIntegerField(
-        choices=[
-            (0, 'Monday'),
-            (1, 'Tuesday'),
-            (2, 'Wednesday'),
-            (3, 'Thursday'),
-            (4, 'Friday'),
-            (5, 'Saturday'),
-            (6, 'Sunday'),
-        ],
-    )
-    start_time = models.TimeField()
-    end_time = models.TimeField()
-    room = models.ForeignKey(
-        'org.Room',
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name='schedule_slots',
-    )
-
-    class Meta:
-        indexes = [
-            models.Index(fields=['group', 'weekday']),
-        ]
-
-    def __str__(self) -> str:
-        return f'{self.group.name} - Day {self.weekday} ({self.start_time}-{self.end_time})'
-
-
-class GroupEnrollment(models.Model):
-    class Status(models.TextChoices):
-        ACTIVE = 'active', 'Active'
-        FROZEN = 'frozen', 'Frozen'
-        TRANSFERRED = 'transferred', 'Transferred'
-        GRADUATED = 'graduated', 'Graduated'
-        LEFT = 'left', 'Left'
-
-    company = models.ForeignKey('org.Company', on_delete=models.CASCADE, related_name='group_enrollments')
-    student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name='enrollments')
-    group = models.ForeignKey(Group, on_delete=models.CASCADE, related_name='enrollments')
-    status = models.CharField(max_length=20, choices=Status.choices, default=Status.ACTIVE)
-    joined_date = models.DateField()
-    left_date = models.DateField(null=True, blank=True)
-    note = models.TextField(blank=True, default='')
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        indexes = [
-            models.Index(fields=['company', 'student']),
-            models.Index(fields=['group', 'status']),
-        ]
-
-    def __str__(self) -> str:
-        return f'{self.student.full_name} in {self.group.name} ({self.status})'
-

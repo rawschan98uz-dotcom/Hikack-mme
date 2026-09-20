@@ -215,8 +215,14 @@ def click_webhook(request):
         payment = Payment.objects.create(
             company=company,
             student=student,
+            group=student.group if student else None,
+            course=student.group.course if (student and student.group) else None,
+            teacher=student.group.teacher if (student and student.group) else None,
+            teacher_name=student.group.teacher.display_name() if (student and student.group and student.group.teacher) else '',
             student_name=student.full_name,
             amount=amount,
+            gross_amount=amount,
+            net_amount=amount,
             months_covered=months_covered,
             method=Payment.Method.CARD,
             comment=f'Click trans #{click_trans_id}',
@@ -227,11 +233,8 @@ def click_webhook(request):
         tx.save()
 
         # Update paid_this_month
-        now = timezone.localtime(payment.created_at)
-        today = timezone.localdate()
-        if now.year == today.year and now.month == today.month:
-            student.paid_this_month = True
-            student.save(update_fields=['paid_this_month'])
+        from crm.services import sync_student_paid_this_month
+        sync_student_paid_this_month(student)
 
         # Instant Telegram receipt
         send_payment_receipt_telegram(payment)
@@ -429,8 +432,14 @@ def payme_webhook(request):
         payment = Payment.objects.create(
             company=company,
             student=student,
+            group=student.group if student else None,
+            course=student.group.course if (student and student.group) else None,
+            teacher=student.group.teacher if (student and student.group) else None,
+            teacher_name=student.group.teacher.display_name() if (student and student.group and student.group.teacher) else '',
             student_name=student.full_name,
             amount=tx.amount,
+            gross_amount=tx.amount,
+            net_amount=tx.amount,
             months_covered=months_covered,
             method=Payment.Method.CARD,
             comment=f'Payme trans #{trans_id}',
@@ -441,11 +450,8 @@ def payme_webhook(request):
         tx.save()
 
         # Update paid_this_month
-        now = timezone.localtime(payment.created_at)
-        today = timezone.localdate()
-        if now.year == today.year and now.month == today.month:
-            student.paid_this_month = True
-            student.save(update_fields=['paid_this_month'])
+        from crm.services import sync_student_paid_this_month
+        sync_student_paid_this_month(student)
 
         # Instant Telegram receipt
         send_payment_receipt_telegram(payment)

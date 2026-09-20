@@ -5,8 +5,10 @@ from __future__ import annotations
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 
+from django.utils import timezone
 from accounts.models import TeacherBranch, User
 from api.csv_utils import normalize_phone, parse_csv_upload
+from api.utils import is_valid_phone, parse_date_safe
 from api.responses import fail, ok
 from api.v1.views_extended import _company, _generate_password, teacher_create
 from crm.models import Group, Lead, Student
@@ -295,27 +297,43 @@ def student_import(request):
     default_branch = Branch.objects.filter(company=company).order_by('id').first()
 
     status_map = {
-        'trial': Student.Status.TRIAL,
-        'active': Student.Status.ACTIVE,
-        'debtor': Student.Status.DEBTOR,
+        'trial': Student.Status.STUDYING,
+        'active': Student.Status.STUDYING,
+        'debtor': Student.Status.STUDYING,
+        'studying': Student.Status.STUDYING,
+        'обучается': Student.Status.STUDYING,
+        'пробный': Student.Status.STUDYING,
+        'активный': Student.Status.STUDYING,
+        'должник': Student.Status.STUDYING,
+        "o'qiydi": Student.Status.STUDYING,
+        '1': Student.Status.STUDYING,
+        '5': Student.Status.STUDYING,
+        '6': Student.Status.STUDYING,
+        'frozen': Student.Status.FROZEN,
+        'заморозка': Student.Status.FROZEN,
+        'muzlatilgan': Student.Status.FROZEN,
+        '2': Student.Status.FROZEN,
         'left_trial': Student.Status.LEFT_TRIAL,
-        'left_active': Student.Status.LEFT_ACTIVE,
-        'пробный': Student.Status.TRIAL,
-        'активный': Student.Status.ACTIVE,
-        'должник': Student.Status.DEBTOR,
-        '1': Student.Status.TRIAL,
-        '5': Student.Status.ACTIVE,
-        '6': Student.Status.DEBTOR,
+        'ушел_пробный': Student.Status.LEFT_TRIAL,
         '7': Student.Status.LEFT_TRIAL,
-        '8': Student.Status.LEFT_ACTIVE,
+        'left': Student.Status.LEFT,
+        'left_active': Student.Status.LEFT,
+        'ушел': Student.Status.LEFT,
+        'отчислен': Student.Status.LEFT,
+        'кетган': Student.Status.LEFT,
+        '8': Student.Status.LEFT,
+        'graduated': Student.Status.GRADUATED,
+        'завершил': Student.Status.GRADUATED,
+        'bitirgan': Student.Status.GRADUATED,
+        '9': Student.Status.GRADUATED,
     }
 
     status_label_map = {
-        Student.Status.TRIAL: 'Пробный',
-        Student.Status.ACTIVE: 'Активный',
-        Student.Status.DEBTOR: 'Должник',
+        Student.Status.STUDYING: 'Обучается',
+        Student.Status.FROZEN: 'Заморозка',
         Student.Status.LEFT_TRIAL: 'Ушел (пробный)',
-        Student.Status.LEFT_ACTIVE: 'Ушел (активный)',
+        Student.Status.LEFT: 'Отчислен / Ушел',
+        Student.Status.GRADUATED: 'Завершил курс',
     }
 
     for row in rows:
@@ -425,9 +443,9 @@ def student_import(request):
             })
             continue
 
-        if len(phone) < 9:
+        if not is_valid_phone(phone):
             skipped += 1
-            msg = f'Не найден номер телефона для "{first_name}"'
+            msg = f'Не найден или некорректный номер телефона для "{first_name}" (требуется 9 цифр)'
             errors.append({'row': row_num, 'message': msg})
             preview_rows.append({
                 'row': row_num,
@@ -506,7 +524,20 @@ def student_import(request):
             or row.get('holat')
             or ''
         ).lower().strip()
-        status = status_map.get(status_raw, Student.Status.ACTIVE if status_raw in ('active', 'активный') else Student.Status.TRIAL)
+        status = status_map.get(status_raw, Student.Status.STUDYING)
+
+        trial_date_raw = (
+            row.get('trial_date')
+            or row.get('start_date')
+            or row.get('дата_начала')
+            or row.get('дата_пробного')
+            or row.get('дата')
+            or row.get('date')
+            or row.get('sana')
+            or row.get('boshlanish_sana')
+            or ''
+        )
+        trial_date = parse_date_safe(str(trial_date_raw).strip()) or timezone.localdate()
 
         balance = 0
         balance_raw = row.get('balance') or row.get('баланс') or row.get('balans')
@@ -524,12 +555,8 @@ def student_import(request):
             or row.get('телеграм_родителя')
             or ''
         ).strip()
-        paid_this_month = str(
-            row.get('paid_this_month')
-            or row.get('оплачено_в_этом_месяце')
-            or row.get('оплачено')
-            or ''
-        ).lower().strip() in ('true', '1', 'yes', 'да', 'ha')
+        # paid_this_month is computed from Payment records only (sync_student_paid_this_month).
+        # CSV import no longer sets this flag directly to prevent inconsistency.
 
         if len(phone) == 9 and phone.isdigit():
             formatted_phone = f"+998 ({phone[:2]}) {phone[2:5]}-{phone[5:7]}-{phone[7:9]}"
@@ -547,7 +574,8 @@ def student_import(request):
             'formatted_phone': formatted_phone,
             'branch_name': branch.name if branch else 'Основной',
             'group_name': group.name if group else (str(group_raw) if group_raw else '—'),
-            'status_label': status_label_map.get(status, 'Активный'),
+            'status_label': status_label_map.get(status, 'Обучается'),
+            'trial_date': trial_date.isoformat(),
             'balance': balance,
             'school': school or '—',
             'parent_telegram': parent_telegram or '—',
@@ -563,11 +591,11 @@ def student_import(request):
             'last_name': last_name,
             'phone': phone,
             'status': status,
+            'trial_date': trial_date,
             'balance': balance,
             'school': school,
             'telegram': telegram,
             'parent_telegram': parent_telegram,
-            'paid_this_month': paid_this_month,
         })
 
     if dry_run:
@@ -580,29 +608,16 @@ def student_import(request):
             'rows': preview_rows,
         })
 
+    from crm.services import match_student_to_lead, enrich_student_from_lead, update_lead_on_conversion
     for item in valid_students_to_create:
         student = Student.objects.create(**item)
-        # Link matching lead instead of deleting (brothers-safe: match by phone+name)
-        _raw_phone = str(item.get('phone') or '').strip()
-        _phone_variants = [_raw_phone]
-        if _raw_phone.startswith('998') and len(_raw_phone) == 12:
-            _phone_variants.append(_raw_phone[3:])
-            _phone_variants.append('+' + _raw_phone)
-        elif len(_raw_phone) == 9:
-            _phone_variants.append('998' + _raw_phone)
-            _phone_variants.append('+998' + _raw_phone)
-
-        _exact_lead = Lead.objects.filter(
-            company=company,
-            phone__in=_phone_variants,
-            first_name__iexact=item.get('first_name', '')
-        ).order_by('-created_at').first()
-        if _exact_lead:
-            student.lead = _exact_lead
-            student.save(update_fields=['lead'])
-            if _exact_lead.stage != Lead.Stage.CONVERTED:
-                _exact_lead.stage = Lead.Stage.CONVERTED
-                _exact_lead.save(update_fields=['stage'])
+        # Match and enrich from lead IN MEMORY
+        matched_lead = match_student_to_lead(student)
+        enrich_student_from_lead(student, matched_lead)
+        student.save(update_fields=['lead', 'school', 'address', 'phone2', 'phone2_owner'])
+        # Update lead AFTER student is saved
+        if matched_lead:
+            update_lead_on_conversion(student, matched_lead)
         created += 1
 
     return ok(_import_result(created, skipped, errors))

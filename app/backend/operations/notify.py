@@ -205,15 +205,12 @@ def send_payment_receipt_telegram(payment) -> bool:
 
         student = payment.student
         if not student and payment.student_name:
-            from django.db.models import Q
-            student = Student.objects.filter(company=payment.company).filter(
-                Q(first_name=payment.student_name) | Q(last_name=payment.student_name)
-            ).first()
-            if not student:
-                for s in Student.objects.filter(company=payment.company):
-                    if s.full_name.strip().lower() == payment.student_name.strip().lower():
-                        student = s
-                        break
+            candidates = [
+                s for s in Student.objects.filter(company=payment.company)
+                if s.full_name.strip().lower() == payment.student_name.strip().lower()
+            ]
+            if len(candidates) == 1:
+                student = candidates[0]
         if not student:
             return False
 
@@ -332,6 +329,14 @@ def _add_months(d: date, num_months: int) -> date:
 
 
 def _payments_summary(company) -> dict:
+    from collections import Counter
+    names = [
+        f"{fn} {ln}".strip().lower()
+        for fn, ln in Student.objects.filter(company=company).values_list('first_name', 'last_name')
+    ]
+    name_counts = Counter(names)
+    ambiguous_names = {name for name, count in name_counts.items() if count > 1}
+
     rows = (
         Payment.objects.filter(company=company)
         .values('student_id', 'student_name')
@@ -361,22 +366,25 @@ def _payments_summary(company) -> dict:
                     summary[sid]['first_date'] = item['first_date']
             else:
                 summary[sid] = dict(item)
-        if r['student_name']:
-            sname = r['student_name']
-            if sname in summary:
-                summary[sname]['count'] += item['count']
-                summary[sname]['months_covered'] += item['months_covered']
-                if item['last_date'] and (not summary[sname]['last_date'] or item['last_date'] > summary[sname]['last_date']):
-                    summary[sname]['last_date'] = item['last_date']
-                if item['first_date'] and (not summary[sname]['first_date'] or item['first_date'] < summary[sname]['first_date']):
-                    summary[sname]['first_date'] = item['first_date']
+        elif r['student_name']:
+            p_name = r['student_name'].strip().lower()
+            if p_name in ambiguous_names:
+                continue
+            key = f"legacy:{r['student_name']}"
+            if key in summary:
+                summary[key]['count'] += item['count']
+                summary[key]['months_covered'] += item['months_covered']
+                if item['last_date'] and (not summary[key]['last_date'] or item['last_date'] > summary[key]['last_date']):
+                    summary[key]['last_date'] = item['last_date']
+                if item['first_date'] and (not summary[key]['first_date'] or item['first_date'] < summary[key]['first_date']):
+                    summary[key]['first_date'] = item['first_date']
             else:
-                summary[sname] = dict(item)
+                summary[key] = dict(item)
     return summary
 
 
 def _student_due(student, payments: dict):
-    info = payments.get(student.id) or payments.get(student.full_name) or {}
+    info = payments.get(student.id) or payments.get(f"legacy:{student.full_name}") or {}
     months_covered = info.get('months_covered', info.get('count', 0))
     last_date = info.get('last_date')
     first_date = info.get('first_date')

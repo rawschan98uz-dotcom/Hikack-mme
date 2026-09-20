@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 
 import { ref } from 'vue';
 
@@ -25,29 +25,17 @@ interface DemoAccount {
 
 
 const demoAccounts: DemoAccount[] = [
-
-  { label: 'CEO', role: 'Full access', phone: '903708242', password: '50608991Zz!' },
-
-  { label: 'Teacher', role: 'Own groups & students', phone: '901001001', password: 'demo1234' },
-
-  { label: 'Administrator', role: 'Office operations', phone: '901002001', password: 'demo1234' },
-
-  { label: 'Marketer', role: 'Leads only', phone: '901002002', password: 'demo1234' },
-
-  { label: 'Cashier', role: 'Students & finance', phone: '901002003', password: 'demo1234' },
-
+  { label: 'CEO', role: 'Full access', phone: '946263200', password: '946263200' },
+  { label: 'Teacher', role: 'Own groups & students', phone: '901001001', password: '946263200' },
+  { label: 'Administrator', role: 'Office operations', phone: '901002001', password: '946263200' },
+  { label: 'Marketer', role: 'Leads only', phone: '901002002', password: '946263200' },
+  { label: 'Cashier', role: 'Students & finance', phone: '901002003', password: '946263200' },
 ];
 
-
-
 const auth = useAuthStore();
-
 const router = useRouter();
-
-const phone = ref('903708242');
-
-const password = ref('50608991Zz!');
-
+const phone = ref('946263200');
+const password = ref('946263200');
 const selectedDemo = ref('CEO');
 
 

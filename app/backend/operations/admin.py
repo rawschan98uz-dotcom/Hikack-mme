@@ -3,6 +3,7 @@ from django.contrib import admin
 from operations.models import (
     ActivityLog,
     ArchivedPerson,
+    AuditLogRecord,
     CallLog,
     Holiday,
     LeadForm,
@@ -16,5 +17,7 @@ from operations.models import (
 for model in (
     Reminder, Holiday, StudentScore, Tag, LeadForm,
     ArchivedPerson, SmsLog, CallLog, ActivityLog, PlatformPayment,
+    AuditLogRecord,
 ):
     admin.site.register(model)
+

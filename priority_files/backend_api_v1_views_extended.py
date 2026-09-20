@@ -1,25 +1,18 @@
 from datetime import date as date_cls, datetime, time
 
-from django.db import transaction
 from django.db.models import Count, F, Q, Sum
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 
 from accounts.models import TeacherBranch, User
-from accounts.rbac import ROLE_CEO, get_effective_role, user_is_teacher
+from accounts.rbac import ROLE_CEO, get_effective_role
 from api.responses import fail, ok
-from api.scope import (
-    filter_attendance_queryset,
-    filter_teacher_attendance_queryset,
-    teacher_can_access_attendance,
-    teacher_can_access_group,
-)
-from api.utils import normalize_phone, safe_int, parse_date_safe
+from api.utils import normalize_phone
 from crm.models import AttendanceRecord, Group, Lead, Student
-from operations.models import TeacherAttendanceRecord, WorklyRecord, log_audit
+from operations.models import TeacherAttendanceRecord, WorklyRecord
 from org.models import Branch
-from finance.models import Expense, ExpenseCategory, Payment, PayrollPayment, SalarySetting, Withdrawal
+from finance.models import Expense, ExpenseCategory, Payment, SalarySetting, Withdrawal
 from org.models import Company
 
 
@@ -120,15 +113,6 @@ def teacher_detail_view(request, teacher_id: int):
             return fail('Only CEO/owner can delete users', status_code=403)
         if request.user.pk == teacher.pk:
             return fail('Cannot delete your own account', status_code=400)
-
-        has_history = (
-            TeacherAttendanceRecord.objects.filter(teacher=teacher).exists() or
-            AttendanceRecord.objects.filter(group__teacher=teacher).exists()
-        )
-        if has_history:
-            teacher.is_active = False
-            teacher.save(update_fields=['is_active'])
-            return ok({'deleted': True, 'archived': True})
 
         Group.objects.filter(teacher=teacher).update(teacher=None)
         teacher.delete()
@@ -415,18 +399,10 @@ def _serialize_payment(payment: Payment) -> dict:
         'id': payment.id,
         'date': payment.created_at.strftime('%Y-%m-%d'),
         'student_id': payment.student_id,
-        'group_id': payment.group_id,
-        'course_id': payment.course_id,
-        'teacher_id': payment.teacher_id,
         'name': payment.student_name,
         'student_name': payment.student_name,
         'sum': payment.amount,
         'amount': payment.amount,
-        'discount_amount': getattr(payment, 'discount_amount', 0) or 0,
-        'gross_amount': getattr(payment, 'gross_amount', None) or payment.amount,
-        'net_amount': getattr(payment, 'net_amount', None) or payment.amount,
-        'transaction_type': getattr(payment, 'transaction_type', 'payment') or 'payment',
-        'reverses_payment_id': payment.reverses_payment_id,
         'months_covered': getattr(payment, 'months_covered', 1) or 1,
         'method': payment.method,
         'method_pay': payment.get_method_display(),
@@ -495,41 +471,15 @@ def replenishments(request):
         if method not in {choice[0] for choice in Payment.Method.choices}:
             return fail('Invalid payment method')
 
-        group = None
-        course = None
-        teacher = None
-        if student and student.group:
-            group = student.group
-            course = student.group.course
-            teacher = student.group.teacher
-        elif request.data.get('group_id'):
-            try:
-                group = Group.objects.get(pk=int(request.data.get('group_id')), company=company)
-                course = group.course
-                teacher = group.teacher
-            except (Group.DoesNotExist, TypeError, ValueError):
-                pass
-
         teacher_name = str(request.data.get('teacher_name') or request.data.get('teacher') or '').strip()
-        if not teacher_name and teacher:
-            teacher_name = teacher.display_name()
-
-        discount_amount = max(0, safe_int(request.data.get('discount_amount'), default=0))
-        gross_amount = amount + discount_amount
-        net_amount = amount
+        if not teacher_name and student and student.group and student.group.teacher:
+            teacher_name = student.group.teacher.display_name()
 
         payment = Payment.objects.create(
             company=company,
             student=student,
-            group=group,
-            course=course,
-            teacher=teacher,
             student_name=student_name,
             amount=amount,
-            gross_amount=gross_amount,
-            net_amount=net_amount,
-            discount_amount=discount_amount,
-            transaction_type=Payment.TransactionType.PAYMENT,
             months_covered=months_covered,
             method=method,
             teacher_name=teacher_name,
@@ -549,72 +499,6 @@ def replenishments(request):
             pass
 
         return ok(_serialize_payment(payment), status_code=201)
-
-
-@api_view(['POST'])
-def payment_refund(request, payment_id: int):
-    company = _company(request)
-    if company is None:
-        return fail('Company not found', status_code=404)
-
-    try:
-        original = Payment.objects.get(pk=payment_id, company=company)
-    except Payment.DoesNotExist:
-        return fail('Payment not found', status_code=404)
-
-    if original.transaction_type == Payment.TransactionType.REFUND:
-        return fail('Cannot refund a refund record', status_code=400)
-
-    already_refunded = Payment.objects.filter(
-        reverses_payment=original,
-        transaction_type=Payment.TransactionType.REFUND,
-    ).aggregate(total=Sum('amount'))['total'] or 0
-
-    available_to_refund = original.amount - already_refunded
-    if available_to_refund <= 0:
-        return fail('Payment has already been fully refunded', status_code=400)
-
-    raw_amount = request.data.get('amount')
-    if raw_amount is not None:
-        try:
-            refund_amount = int(raw_amount)
-            if refund_amount <= 0:
-                raise ValueError()
-        except (ValueError, TypeError):
-            return fail('Valid positive refund amount is required', status_code=400)
-        if refund_amount > available_to_refund:
-            return fail(f'Refund amount exceeds available refundable amount ({available_to_refund})', status_code=400)
-    else:
-        refund_amount = available_to_refund
-
-    comment = str(request.data.get('comment') or f'Возврат по платежу #{original.id}').strip()
-
-    refund = Payment.objects.create(
-        company=company,
-        student=original.student,
-        group=original.group,
-        course=original.course,
-        teacher=original.teacher,
-        student_name=original.student_name,
-        amount=refund_amount,
-        gross_amount=refund_amount,
-        net_amount=refund_amount,
-        discount_amount=0,
-        transaction_type=Payment.TransactionType.REFUND,
-        reverses_payment=original,
-        months_covered=original.months_covered,
-        method=original.method,
-        teacher_name=original.teacher_name,
-        comment=comment,
-        created_by=request.user,
-    )
-
-    if original.student:
-        from crm.services import sync_student_paid_this_month
-        sync_student_paid_this_month(original.student)
-
-    return ok(_serialize_payment(refund), status_code=201)
-
 
     qs = Payment.objects.filter(company=company).select_related('created_by', 'student').order_by('-created_at')
     qs = _finance_date_filter(qs, request.query_params)
@@ -979,26 +863,18 @@ def expense_type_detail(request, category_id: int):
 
 
 def _serialize_salary(setting: SalarySetting) -> dict:
-    teacher_name = setting.teacher.display_name() if setting.teacher else setting.teacher_name
-    course_name = setting.course.name if setting.course else setting.course_name
-    group_name = setting.group.name if setting.group else setting.group_name
     return {
         'id': setting.id,
         'calc_setting': 'Fixed',
         'salary_type': setting.salary_type,
         'salary_type_label': setting.get_salary_type_display(),
         'amount': setting.amount,
-        'teacher_id': setting.teacher_id,
-        'teacher_name': teacher_name,
-        'teacher': teacher_name,
-        'course_id': setting.course_id,
-        'course_name': course_name,
-        'course': course_name or '—',
-        'group_id': setting.group_id,
-        'group_name': group_name,
-        'group': group_name or '—',
-        'effective_from': setting.effective_from.isoformat() if setting.effective_from else None,
-        'effective_to': setting.effective_to.isoformat() if setting.effective_to else None,
+        'teacher_name': setting.teacher_name,
+        'teacher': setting.teacher_name,
+        'course_name': setting.course_name,
+        'course': setting.course_name or '—',
+        'group_name': setting.group_name,
+        'group': setting.group_name or '—',
         'student': '—',
         'created_by': _creator_name(setting.created_by),
         'updated_by': _creator_name(setting.updated_by),
@@ -1007,30 +883,14 @@ def _serialize_salary(setting: SalarySetting) -> dict:
 
 
 @api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
 def salary_settings(request):
     company = _company(request)
     if company is None:
         return ok([])
 
     if request.method == 'POST':
-        teacher = None
-        teacher_id = request.data.get('teacher_id')
-        if teacher_id:
-            try:
-                teacher = User.objects.get(pk=int(teacher_id), company=company, user_type=User.UserType.TEACHER)
-            except (User.DoesNotExist, TypeError, ValueError):
-                return fail('Invalid teacher')
-
         teacher_name = str(request.data.get('teacher_name') or request.data.get('teacher') or '').strip()
-        if not teacher and teacher_name:
-            for t in User.objects.filter(company=company, user_type=User.UserType.TEACHER):
-                if teacher_name.lower() in (t.display_name().lower(), f"{t.first_name} {t.last_name}".strip().lower()):
-                    teacher = t
-                    break
-
-        if teacher and not teacher_name:
-            teacher_name = teacher.display_name()
-
         salary_type = str(request.data.get('salary_type') or SalarySetting.SalaryType.FIXED).strip().lower()
         if salary_type not in {choice[0] for choice in SalarySetting.SalaryType.choices}:
             return fail('Invalid salary type')
@@ -1039,52 +899,24 @@ def salary_settings(request):
         except (TypeError, ValueError):
             return fail('Valid amount is required')
 
-        effective_from = parse_date_safe(request.data.get('effective_from'))
-        effective_to = parse_date_safe(request.data.get('effective_to'))
-        if effective_from and effective_to and effective_from > effective_to:
-            return fail('Effective from date cannot be later than effective to date')
-
-        course = None
-        course_id = request.data.get('course_id')
-        if course_id:
-            try:
-                course = Course.objects.get(pk=int(course_id), company=company)
-            except (Course.DoesNotExist, TypeError, ValueError):
-                return fail('Invalid course')
-
-        group = None
-        group_id = request.data.get('group_id')
-        if group_id:
-            try:
-                group = Group.objects.get(pk=int(group_id), company=company)
-            except (Group.DoesNotExist, TypeError, ValueError):
-                return fail('Invalid group')
-
         setting = SalarySetting.objects.create(
             company=company,
-            teacher=teacher,
             teacher_name=teacher_name or '—',
-            course=course,
-            course_name=course.name if course else str(request.data.get('course_name') or request.data.get('course') or '').strip(),
-            group=group,
-            group_name=group.name if group else str(request.data.get('group_name') or request.data.get('group') or '').strip(),
-            effective_from=effective_from,
-            effective_to=effective_to,
             salary_type=salary_type,
             amount=amount,
+            course_name=str(request.data.get('course_name') or request.data.get('course') or '').strip(),
+            group_name=str(request.data.get('group_name') or request.data.get('group') or '').strip(),
             created_by=request.user,
             updated_by=request.user,
         )
-        setting = SalarySetting.objects.select_related('created_by', 'updated_by', 'teacher', 'course', 'group').get(pk=setting.pk)
+        setting = SalarySetting.objects.select_related('created_by', 'updated_by').get(pk=setting.pk)
         return ok(_serialize_salary(setting), status_code=201)
 
-    qs = SalarySetting.objects.filter(company=company).select_related('created_by', 'updated_by', 'teacher', 'course', 'group')
+    qs = SalarySetting.objects.filter(company=company).select_related('created_by', 'updated_by')
     query = (request.query_params.get('q') or '').strip()
     if query:
         qs = qs.filter(
             Q(teacher_name__icontains=query)
-            | Q(teacher__first_name__icontains=query)
-            | Q(teacher__last_name__icontains=query)
             | Q(course_name__icontains=query)
             | Q(group_name__icontains=query),
         )
@@ -1093,13 +925,14 @@ def salary_settings(request):
 
 
 @api_view(['GET', 'PATCH', 'DELETE'])
+@permission_classes([IsAuthenticated])
 def salary_setting_detail(request, setting_id: int):
     company = _company(request)
     if company is None:
         return fail('Company not found', status_code=404)
 
     try:
-        setting = SalarySetting.objects.select_related('created_by', 'updated_by', 'teacher', 'course', 'group').get(
+        setting = SalarySetting.objects.select_related('created_by', 'updated_by').get(
             pk=setting_id,
             company=company,
         )
@@ -1113,76 +946,26 @@ def salary_setting_detail(request, setting_id: int):
         setting.delete()
         return ok({'deleted': True})
 
-    if 'teacher_id' in request.data:
-        t_id = request.data.get('teacher_id')
-        if t_id in ('', None):
-            setting.teacher = None
-        else:
-            try:
-                setting.teacher = User.objects.get(pk=int(t_id), company=company, user_type=User.UserType.TEACHER)
-                setting.teacher_name = setting.teacher.display_name()
-            except (User.DoesNotExist, TypeError, ValueError):
-                return fail('Invalid teacher')
-
     if 'teacher_name' in request.data or 'teacher' in request.data:
-        t_name = str(request.data.get('teacher_name') or request.data.get('teacher') or '').strip()
-        setting.teacher_name = t_name or '—'
-        if not setting.teacher and t_name:
-            for t in User.objects.filter(company=company, user_type=User.UserType.TEACHER):
-                if t_name.lower() in (t.display_name().lower(), f"{t.first_name} {t.last_name}".strip().lower()):
-                    setting.teacher = t
-                    break
-
+        setting.teacher_name = str(request.data.get('teacher_name') or request.data.get('teacher') or '').strip() or '—'
     if 'salary_type' in request.data:
         salary_type = str(request.data.get('salary_type')).strip().lower()
         if salary_type not in {choice[0] for choice in SalarySetting.SalaryType.choices}:
             return fail('Invalid salary type')
         setting.salary_type = salary_type
-
     if 'amount' in request.data:
         try:
             setting.amount = int(request.data.get('amount'))
         except (TypeError, ValueError):
             return fail('Valid amount is required')
-
-    if 'effective_from' in request.data:
-        setting.effective_from = parse_date_safe(request.data.get('effective_from'))
-    if 'effective_to' in request.data:
-        setting.effective_to = parse_date_safe(request.data.get('effective_to'))
-    if setting.effective_from and setting.effective_to and setting.effective_from > setting.effective_to:
-        return fail('Effective from date cannot be later than effective to date')
-
-    if 'course_id' in request.data:
-        c_id = request.data.get('course_id')
-        if c_id in ('', None):
-            setting.course = None
-            setting.course_name = ''
-        else:
-            try:
-                setting.course = Course.objects.get(pk=int(c_id), company=company)
-                setting.course_name = setting.course.name
-            except (Course.DoesNotExist, TypeError, ValueError):
-                return fail('Invalid course')
-    elif 'course_name' in request.data or 'course' in request.data:
+    if 'course_name' in request.data or 'course' in request.data:
         setting.course_name = str(request.data.get('course_name') or request.data.get('course') or '').strip()
-
-    if 'group_id' in request.data:
-        g_id = request.data.get('group_id')
-        if g_id in ('', None):
-            setting.group = None
-            setting.group_name = ''
-        else:
-            try:
-                setting.group = Group.objects.get(pk=int(g_id), company=company)
-                setting.group_name = setting.group.name
-            except (Group.DoesNotExist, TypeError, ValueError):
-                return fail('Invalid group')
-    elif 'group_name' in request.data or 'group' in request.data:
+    if 'group_name' in request.data or 'group' in request.data:
         setting.group_name = str(request.data.get('group_name') or request.data.get('group') or '').strip()
 
     setting.updated_by = request.user
     setting.save()
-    setting = SalarySetting.objects.select_related('created_by', 'updated_by', 'teacher', 'course', 'group').get(pk=setting.pk)
+    setting = SalarySetting.objects.select_related('created_by', 'updated_by').get(pk=setting.pk)
     return ok(_serialize_salary(setting))
 
 
@@ -1311,15 +1094,12 @@ def _serialize_attendance(record: AttendanceRecord) -> dict:
     }
 
 
-def _attendance_queryset(company, params, user=None):
+def _attendance_queryset(company, params):
     qs = AttendanceRecord.objects.filter(company=company).select_related(
         'student',
         'group',
         'group__branch',
     ).order_by('-attend_date', 'student__first_name')
-
-    if user is not None:
-        qs = filter_attendance_queryset(qs, user)
 
     group_id = params.get('group_id')
     if group_id:
@@ -1372,6 +1152,7 @@ def _attendance_summary(qs) -> dict:
 
 
 @api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
 def report_attendance(request):
     company = _company(request)
     if company is None:
@@ -1386,9 +1167,6 @@ def report_attendance(request):
         except ValueError:
             return fail('Invalid date')
 
-        if attend_date > timezone.localdate():
-            return fail('Attendance date cannot be in the future', 400)
-
         records_data = request.data.get('records')
         if isinstance(records_data, list):
             try:
@@ -1396,9 +1174,6 @@ def report_attendance(request):
                 group = Group.objects.select_related('branch').get(pk=group_id, company=company)
             except (TypeError, ValueError, Group.DoesNotExist):
                 return fail('Valid group is required')
-
-            if user_is_teacher(request.user) and group.teacher_id != request.user.id:
-                return fail('Group not found', 404)
 
             saved_count = 0
             for item in records_data:
@@ -1451,9 +1226,6 @@ def report_attendance(request):
         except Group.DoesNotExist:
             return fail('Group not found')
 
-        if user_is_teacher(request.user) and group.teacher_id != request.user.id:
-            return fail('Group not found', 404)
-
         if student.company_id != group.company_id:
             return fail('Student and group belong to different companies')
         if student.group_id != group.id:
@@ -1475,7 +1247,7 @@ def report_attendance(request):
         ).get(pk=record.pk)
         return ok(_serialize_attendance(record), status_code=201)
 
-    qs = _attendance_queryset(company, request.query_params, user=request.user)
+    qs = _attendance_queryset(company, request.query_params)
     summary = _attendance_summary(qs)
 
     export = request.query_params.get('export', '0') == '1'
@@ -1505,6 +1277,7 @@ def report_attendance(request):
 
 
 @api_view(['GET', 'PATCH', 'DELETE'])
+@permission_classes([IsAuthenticated])
 def attendance_detail(request, record_id: int):
     company = _company(request)
     if company is None:
@@ -1519,39 +1292,12 @@ def attendance_detail(request, record_id: int):
     except AttendanceRecord.DoesNotExist:
         return fail('Attendance record not found', status_code=404)
 
-    if user_is_teacher(request.user) and (record.group is None or record.group.teacher_id != request.user.id):
-        return fail('Attendance record not found', status_code=404)
-
     if request.method == 'GET':
         return ok(_serialize_attendance(record))
 
     if request.method == 'DELETE':
-        old_val = {
-            'student_id': record.student_id,
-            'group_id': record.group_id,
-            'attend_date': record.attend_date.isoformat(),
-            'status': record.status,
-            'note': record.note,
-        }
-        rec_id = record.pk
         record.delete()
-        log_audit(
-            company=company,
-            actor=request.user,
-            entity_type='attendance',
-            entity_id=rec_id,
-            action='delete',
-            old_values=old_val,
-        )
         return ok({'deleted': True})
-
-    old_val = {
-        'student_id': record.student_id,
-        'group_id': record.group_id,
-        'attend_date': record.attend_date.isoformat(),
-        'status': record.status,
-        'note': record.note,
-    }
 
     status = request.data.get('status')
     if status is not None:
@@ -1566,25 +1312,19 @@ def attendance_detail(request, record_id: int):
     attend_date_raw = request.data.get('date') or request.data.get('attend_date')
     if attend_date_raw is not None:
         try:
-            new_date = date_cls.fromisoformat(str(attend_date_raw)[:10])
+            record.attend_date = date_cls.fromisoformat(str(attend_date_raw)[:10])
         except ValueError:
             return fail('Invalid date')
-        if new_date > timezone.localdate():
-            return fail('Attendance date cannot be in the future', 400)
-        record.attend_date = new_date
 
     group_id = request.data.get('group_id')
     if group_id is not None:
         try:
-            target_group = Group.objects.select_related('branch').get(
+            record.group = Group.objects.select_related('branch').get(
                 pk=int(group_id),
                 company=company,
             )
         except (Group.DoesNotExist, TypeError, ValueError):
             return fail('Group not found')
-        if user_is_teacher(request.user) and target_group.teacher_id != request.user.id:
-            return fail('Group not found', 404)
-        record.group = target_group
 
     student_id = request.data.get('student_id')
     if student_id is not None:
@@ -1596,39 +1336,13 @@ def attendance_detail(request, record_id: int):
     if 'note' in request.data:
         record.note = str(request.data['note']).strip()
 
-    # Core invariant checks
-    if record.student.company_id != company.id or record.group.company_id != company.id:
-        return fail('Student and group belong to different companies', 400)
-    if record.student.group_id != record.group_id:
-        return fail('Student does not belong to this group', 400)
-    if user_is_teacher(request.user) and record.group.teacher_id != request.user.id:
-        return fail('Group not found', 404)
-
     record.save()
-    new_val = {
-        'student_id': record.student_id,
-        'group_id': record.group_id,
-        'attend_date': record.attend_date.isoformat(),
-        'status': record.status,
-        'note': record.note,
-    }
-    log_audit(
-        company=company,
-        actor=request.user,
-        entity_type='attendance',
-        entity_id=record.pk,
-        action='update',
-        old_values=old_val,
-        new_values=new_val,
-    )
-
     record = AttendanceRecord.objects.select_related(
         'student',
         'group',
         'group__branch',
     ).get(pk=record.pk)
     return ok(_serialize_attendance(record))
-
 
 
 VALID_TEACHER_ATTENDANCE_STATUSES = {choice[0] for choice in TeacherAttendanceRecord.Status.choices}
@@ -1651,15 +1365,12 @@ def _serialize_teacher_attendance(record: TeacherAttendanceRecord) -> dict:
     }
 
 
-def _teacher_attendance_queryset(company, params, user=None):
+def _teacher_attendance_queryset(company, params):
     qs = TeacherAttendanceRecord.objects.filter(company=company).select_related(
         'teacher',
         'group',
         'group__branch',
     ).order_by('-attend_date', 'teacher__first_name')
-
-    if user is not None:
-        qs = filter_teacher_attendance_queryset(qs, user)
 
     group_id = params.get('group_id')
     if group_id:
@@ -1712,6 +1423,7 @@ def _teacher_attendance_summary(qs) -> dict:
 
 
 @api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
 def report_teacher_attendance(request):
     company = _company(request)
     if company is None:
@@ -1749,11 +1461,30 @@ def report_teacher_attendance(request):
         except Group.DoesNotExist:
             return fail('Group not found')
 
-        if group.teacher_id != teacher.id:
-            return fail('Teacher is not the assigned teacher for this group', 400)
-
-        if status is None:
-            status = TeacherAttendanceRecord.Status.PRESENT
+        # Auto-calculate status for today if the user is a teacher marking themselves
+        is_self_teacher = request.user.user_type == User.UserType.TEACHER and request.user.id == teacher_id
+        
+        from django.utils import timezone
+        import datetime
+        
+        if is_self_teacher:
+            local_now = timezone.localtime(timezone.now())
+            if attend_date == local_now.date():
+                if group.lesson_start_time:
+                    lesson_dt = timezone.make_aware(datetime.datetime.combine(local_now.date(), group.lesson_start_time))
+                    threshold_dt = lesson_dt + datetime.timedelta(minutes=5)
+                    if local_now > threshold_dt:
+                        status = TeacherAttendanceRecord.Status.LATE
+                    else:
+                        status = TeacherAttendanceRecord.Status.PRESENT
+                else:
+                    status = TeacherAttendanceRecord.Status.PRESENT
+            else:
+                if status is None:
+                    status = TeacherAttendanceRecord.Status.PRESENT
+        else:
+            if status is None:
+                status = TeacherAttendanceRecord.Status.PRESENT
 
         if status not in VALID_TEACHER_ATTENDANCE_STATUSES:
             return fail('Invalid status')
@@ -1773,7 +1504,7 @@ def report_teacher_attendance(request):
         ).get(pk=record.pk)
         return ok(_serialize_teacher_attendance(record), status_code=201)
 
-    qs = _teacher_attendance_queryset(company, request.query_params, user=request.user)
+    qs = _teacher_attendance_queryset(company, request.query_params)
     summary = _teacher_attendance_summary(qs)
 
     export = request.query_params.get('export', '0') == '1'
@@ -1803,6 +1534,7 @@ def report_teacher_attendance(request):
 
 
 @api_view(['GET', 'PATCH', 'DELETE'])
+@permission_classes([IsAuthenticated])
 def teacher_attendance_detail(request, record_id: int):
     company = _company(request)
     if company is None:
@@ -1817,39 +1549,12 @@ def teacher_attendance_detail(request, record_id: int):
     except TeacherAttendanceRecord.DoesNotExist:
         return fail('Teacher attendance record not found', status_code=404)
 
-    if user_is_teacher(request.user) and record.teacher_id != request.user.id:
-        return fail('Teacher attendance record not found', status_code=404)
-
     if request.method == 'GET':
         return ok(_serialize_teacher_attendance(record))
 
     if request.method == 'DELETE':
-        old_val = {
-            'teacher_id': record.teacher_id,
-            'group_id': record.group_id,
-            'attend_date': record.attend_date.isoformat(),
-            'status': record.status,
-            'note': record.note,
-        }
-        rec_id = record.pk
         record.delete()
-        log_audit(
-            company=company,
-            actor=request.user,
-            entity_type='teacher_attendance',
-            entity_id=rec_id,
-            action='delete',
-            old_values=old_val,
-        )
         return ok({'deleted': True})
-
-    old_val = {
-        'teacher_id': record.teacher_id,
-        'group_id': record.group_id,
-        'attend_date': record.attend_date.isoformat(),
-        'status': record.status,
-        'note': record.note,
-    }
 
     status = request.data.get('status')
     if status is not None:
@@ -1892,91 +1597,13 @@ def teacher_attendance_detail(request, record_id: int):
         except (User.DoesNotExist, TypeError, ValueError):
             return fail('Teacher not found')
 
-    if record.group.company_id != company.id or record.teacher.company_id != company.id:
-        return fail('Group and teacher belong to different companies', 400)
-    if record.group.teacher_id != record.teacher_id:
-        return fail('Teacher is not the assigned teacher for this group', 400)
-
     record.save()
-    new_val = {
-        'teacher_id': record.teacher_id,
-        'group_id': record.group_id,
-        'attend_date': record.attend_date.isoformat(),
-        'status': record.status,
-        'note': record.note,
-    }
-    log_audit(
-        company=company,
-        actor=request.user,
-        entity_type='teacher_attendance',
-        entity_id=record.pk,
-        action='update',
-        old_values=old_val,
-        new_values=new_val,
-    )
-
     record = TeacherAttendanceRecord.objects.select_related(
         'teacher',
         'group',
         'group__branch',
     ).get(pk=record.pk)
     return ok(_serialize_teacher_attendance(record))
-
-
-
-@api_view(['POST'])
-def teacher_attendance_self_checkin(request):
-    company = _company(request)
-    if company is None:
-        return fail('Company not found', status_code=404)
-
-    if not user_is_teacher(request.user):
-        return fail('Only teachers can perform self check-in', status_code=403)
-
-    teacher = request.user
-    group_id = request.data.get('group_id')
-    if not group_id:
-        return fail('Group is required')
-
-    try:
-        group = Group.objects.select_related('branch').get(
-            pk=int(group_id),
-            company=company,
-        )
-    except (Group.DoesNotExist, TypeError, ValueError):
-        return fail('Group not found', status_code=404)
-
-    if group.teacher_id != teacher.id:
-        return fail('You are not assigned to this group', status_code=404)
-
-    local_now = timezone.localtime(timezone.now())
-    attend_date = local_now.date()
-
-    if group.lesson_start_time:
-        import datetime
-        lesson_dt = timezone.make_aware(datetime.datetime.combine(attend_date, group.lesson_start_time))
-        threshold_dt = lesson_dt + datetime.timedelta(minutes=5)
-        if local_now > threshold_dt:
-            status = TeacherAttendanceRecord.Status.LATE
-        else:
-            status = TeacherAttendanceRecord.Status.PRESENT
-    else:
-        status = TeacherAttendanceRecord.Status.PRESENT
-
-    note = str(request.data.get('note') or '').strip()
-    record, _created = TeacherAttendanceRecord.objects.update_or_create(
-        company=company,
-        teacher=teacher,
-        group=group,
-        attend_date=attend_date,
-        defaults={'status': status, 'note': note},
-    )
-    record = TeacherAttendanceRecord.objects.select_related(
-        'teacher',
-        'group',
-        'group__branch',
-    ).get(pk=record.pk)
-    return ok(_serialize_teacher_attendance(record), status_code=200 if not _created else 201)
 
 
 @api_view(['GET'])
@@ -2538,6 +2165,7 @@ def report_pnl(request):
 
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def payroll_summary(request):
     import calendar
     company = _company(request)
@@ -2597,56 +2225,24 @@ def payroll_summary(request):
             status=Student.Status.STUDYING,
         ).count()
 
-        # Payments received from these students in month:
-        # 1. Snapshotted payments allocated to this teacher
-        snap_payments = Payment.objects.filter(
+        # Payments received from these students in month
+        group_payments = Payment.objects.filter(
             company=company,
-            teacher=t,
-            transaction_type=Payment.TransactionType.PAYMENT,
-            created_at__date__gte=start_date,
-            created_at__date__lte=end_date,
-        ).aggregate(total=Sum('amount'))['total'] or 0
-
-        # 2. Minus snapshotted refunds for this teacher
-        snap_refunds = Payment.objects.filter(
-            company=company,
-            teacher=t,
-            transaction_type=Payment.TransactionType.REFUND,
-            created_at__date__gte=start_date,
-            created_at__date__lte=end_date,
-        ).aggregate(total=Sum('amount'))['total'] or 0
-
-        # 3. Plus legacy payments with teacher IS NULL that belonged to this teacher's groups
-        legacy_payments = Payment.objects.filter(
-            company=company,
-            teacher__isnull=True,
             student__group__in=groups,
-            transaction_type=Payment.TransactionType.PAYMENT,
             created_at__date__gte=start_date,
             created_at__date__lte=end_date,
         ).aggregate(total=Sum('amount'))['total'] or 0
 
-        group_payments = max(0, snap_payments - snap_refunds + legacy_payments)
-
-        # Setting resolution: prefer teacher FK matching effective dates
-        settings_qs = SalarySetting.objects.filter(company=company, teacher=t)
-        effective_settings = [
-            s for s in settings_qs
-            if (s.effective_from is None or s.effective_from <= end_date) and
-               (s.effective_to is None or s.effective_to >= start_date)
-        ]
-        setting = effective_settings[0] if effective_settings else None
-
-        # Fallback to teacher_name matching for legacy settings
+        # Setting
+        setting = SalarySetting.objects.filter(
+            company=company,
+            teacher_name=t_name,
+        ).first()
         if not setting:
             for s in SalarySetting.objects.filter(company=company):
                 if s.teacher_name.strip().lower() == t_name.lower():
-                    if (s.effective_from is None or s.effective_from <= end_date) and \
-                       (s.effective_to is None or s.effective_to >= start_date):
-                        setting = s
-                        break
-            if not setting:
-                setting = settings_qs.first()
+                    setting = s
+                    break
 
         accrued = 0
         salary_type_label = 'Не настроена'
@@ -2661,23 +2257,15 @@ def payroll_summary(request):
             elif setting.salary_type == SalarySetting.SalaryType.PER_STUDENT:
                 accrued = setting.amount * students_count
 
-        # Paid in month (from PayrollPayment + legacy Expense)
-        paid_from_payroll = PayrollPayment.objects.filter(
-            company=company,
-            teacher=t,
-            payroll_period=month_str,
-        ).aggregate(total=Sum('amount'))['total'] or 0
-
-        paid_from_legacy_expense = Expense.objects.filter(
+        # Paid in month
+        paid = Expense.objects.filter(
             company=company,
             payee=t_name,
             category__name__icontains='Зарплата',
             created_at__date__gte=start_date,
             created_at__date__lte=end_date,
-            payroll_payments__isnull=True,
         ).aggregate(total=Sum('amount'))['total'] or 0
 
-        paid = paid_from_payroll + paid_from_legacy_expense
         balance = max(0, accrued - paid)
         total_accrued += accrued
         total_paid += paid
@@ -2715,8 +2303,8 @@ def payroll_summary(request):
 
 
 @api_view(['POST'])
+@permission_classes([IsAuthenticated])
 def payroll_pay(request):
-    import calendar
     company = _company(request)
     if company is None:
         return fail('Company not found', status_code=404)
@@ -2738,164 +2326,28 @@ def payroll_pay(request):
     month = str(request.data.get('month') or timezone.localdate().strftime('%Y-%m')).strip()
     comment = str(request.data.get('comment') or f'Зарплата за {month}: {teacher.display_name()}').strip()
 
-    # Calculate accrued and paid for overpayment validation
-    try:
-        parts = month.split('-')
-        year, m_num = int(parts[0]), int(parts[1])
-        num_days = calendar.monthrange(year, m_num)[1]
-        start_date = date_cls(year, m_num, 1)
-        end_date = date_cls(year, m_num, num_days)
-    except Exception:
-        today = timezone.localdate()
-        year, m_num = today.year, today.month
-        num_days = calendar.monthrange(year, m_num)[1]
-        start_date = date_cls(year, m_num, 1)
-        end_date = date_cls(year, m_num, num_days)
-
-    t_groups = Group.objects.filter(company=company, teacher=teacher)
-    students_count = Student.objects.filter(company=company, group__in=t_groups, status=Student.Status.STUDYING).count()
-
-    snap_payments = Payment.objects.filter(
-        company=company,
-        teacher=teacher,
-        transaction_type=Payment.TransactionType.PAYMENT,
-        created_at__date__gte=start_date,
-        created_at__date__lte=end_date,
-    ).aggregate(total=Sum('amount'))['total'] or 0
-
-    snap_refunds = Payment.objects.filter(
-        company=company,
-        teacher=teacher,
-        transaction_type=Payment.TransactionType.REFUND,
-        created_at__date__gte=start_date,
-        created_at__date__lte=end_date,
-    ).aggregate(total=Sum('amount'))['total'] or 0
-
-    legacy_payments = Payment.objects.filter(
-        company=company,
-        teacher__isnull=True,
-        student__group__in=t_groups,
-        transaction_type=Payment.TransactionType.PAYMENT,
-        created_at__date__gte=start_date,
-        created_at__date__lte=end_date,
-    ).aggregate(total=Sum('amount'))['total'] or 0
-
-    g_payments = max(0, snap_payments - snap_refunds + legacy_payments)
-
-    setting = SalarySetting.objects.filter(
-        company=company, teacher=teacher
-    ).filter(
-        Q(effective_from__isnull=True) | Q(effective_from__lte=end_date)
-    ).filter(
-        Q(effective_to__isnull=True) | Q(effective_to__gte=start_date)
-    ).first()
-
-    if not setting:
-        for s in SalarySetting.objects.filter(company=company):
-            if s.teacher_name.strip().lower() == teacher.display_name().lower():
-                setting = s
-                break
-
-    accrued = 0
-    if setting:
-        if setting.salary_type == SalarySetting.SalaryType.FIXED:
-            accrued = setting.amount
-        elif setting.salary_type == SalarySetting.SalaryType.PERCENT:
-            accrued = int(g_payments * (setting.amount / 100.0))
-        elif setting.salary_type == SalarySetting.SalaryType.PER_STUDENT:
-            accrued = setting.amount * students_count
-
-    already_paid = (PayrollPayment.objects.filter(
-        company=company, teacher=teacher, payroll_period=month
-    ).aggregate(total=Sum('amount'))['total'] or 0) + (Expense.objects.filter(
-        company=company, payee=teacher.display_name(), category__name__icontains='Зарплата',
-        created_at__date__gte=start_date, created_at__date__lte=end_date,
-        payroll_payments__isnull=True,
-    ).aggregate(total=Sum('amount'))['total'] or 0)
-
-    is_elevated = (get_effective_role(request.user) == ROLE_CEO or request.user.is_superuser)
-    force = bool(request.data.get('force'))
-
-    if (already_paid + amount > accrued) and not (force and is_elevated):
-        return fail(
-            f'Payment exceeds accrued balance for this period ({max(0, accrued - already_paid)} remaining)',
-            status_code=400,
-            code='overpayment',
-            accrued=accrued,
-            already_paid=already_paid,
-            balance=max(0, accrued - already_paid),
-        )
-
     salary_cat, _ = ExpenseCategory.objects.get_or_create(
         company=company,
         name='Зарплата',
     )
 
-    with transaction.atomic():
-        expense = Expense.objects.create(
-            company=company,
-            category=salary_cat,
-            description=comment,
-            payee=teacher.display_name(),
-            method=method if method in {c[0] for c in Expense.Method.choices} else Expense.Method.CASH,
-            amount=amount,
-            created_by=request.user,
-        )
-
-        payroll_payment = PayrollPayment.objects.create(
-            company=company,
-            teacher=teacher,
-            payroll_period=month,
-            amount=amount,
-            method=expense.method,
-            comment=comment,
-            expense=expense,
-            created_by=request.user,
-        )
-
-        if (already_paid + amount > accrued):
-            log_audit(
-                company=company,
-                actor=request.user,
-                entity_type='payroll',
-                entity_id=payroll_payment.id,
-                action='force_overpayment',
-                new_values={
-                    'teacher_id': teacher.id,
-                    'period': month,
-                    'amount': amount,
-                    'accrued': accrued,
-                    'already_paid': already_paid,
-                    'overpayment_amount': (already_paid + amount - accrued),
-                },
-                reason=comment or 'Forced payroll payout exceeding accrued balance',
-            )
-        else:
-            log_audit(
-                company=company,
-                actor=request.user,
-                entity_type='payroll',
-                entity_id=payroll_payment.id,
-                action='payout',
-                new_values={
-                    'teacher_id': teacher.id,
-                    'period': month,
-                    'amount': amount,
-                },
-                reason=comment,
-            )
-
+    expense = Expense.objects.create(
+        company=company,
+        category=salary_cat,
+        description=comment,
+        payee=teacher.display_name(),
+        method=method if method in {c[0] for c in Expense.Method.choices} else Expense.Method.CASH,
+        amount=amount,
+        created_by=request.user,
+    )
 
     return ok({
-        'id': payroll_payment.id,
         'expense_id': expense.id,
         'teacher_id': teacher.id,
         'teacher_name': teacher.display_name(),
         'amount': amount,
         'method': expense.method,
         'comment': expense.description,
-        'payroll_period': month,
         'date': expense.created_at.date().isoformat(),
     }, status_code=201)
-
 

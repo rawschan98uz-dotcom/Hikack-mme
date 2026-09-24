@@ -48,7 +48,6 @@ def _import_result(created: int, skipped: int, errors: list[dict]) -> dict:
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
 def teacher_import(request):
     company = _company(request)
     if company is None:
@@ -211,7 +210,6 @@ def teacher_import(request):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
 def staff_import(request):
     company = _company(request)
     if company is None:
@@ -273,7 +271,6 @@ def staff_import(request):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
 def student_import(request):
     company = _company(request)
     if company is None:

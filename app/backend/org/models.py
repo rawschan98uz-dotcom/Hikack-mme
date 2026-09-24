@@ -2,17 +2,8 @@ from django.db import models
 
 
 class Company(models.Model):
-    class PaymentMode(models.IntegerChoices):
-        DAILY = 1, 'Daily'
-        MONTHLY = 2, 'Monthly'
-        GROUP_START = 3, 'Group start'
-        FULL_COURSE = 4, 'Full course'
-        MODULE = 5, 'Module'
-        INDIVIDUAL = 6, 'Individual'
-
     name = models.CharField(max_length=255)
     subdomain = models.SlugField(max_length=64, unique=True)
-    balance_mode = models.IntegerField(choices=PaymentMode.choices, default=PaymentMode.DAILY)
     phone = models.CharField(max_length=15, blank=True)
     address = models.CharField(max_length=500, blank=True)
     work_start_time = models.TimeField(null=True, blank=True)

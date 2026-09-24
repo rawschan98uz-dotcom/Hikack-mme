@@ -77,6 +77,7 @@ ROUTE_RULES: list[tuple[tuple[str, ...], str, str | None]] = [
     (('POST',), r'^expense$', P.PERM_FINANCE_WRITE),
     (('GET',), r'^expense_types$', P.PERM_FINANCE_VIEW),
     (('POST',), r'^expense_types$', P.PERM_FINANCE_WRITE),
+    (('GET',), r'^expense_types/\d+$', P.PERM_FINANCE_VIEW),
     (('PATCH', 'DELETE'), r'^expense_types/\d+$', P.PERM_FINANCE_WRITE),
     (('GET', 'PATCH', 'DELETE'), r'^expense/\d+$', P.PERM_FINANCE_WRITE),
 
@@ -157,7 +158,6 @@ ROUTE_RULES: list[tuple[tuple[str, ...], str, str | None]] = [
     (('GET',), r'^history/logs$', P.PERM_LOGS_VIEW),
 
     (('GET', 'POST'), r'^company/settings$', P.PERM_SETTINGS_COMPANY),
-    (('POST',), r'^company/settings$', P.PERM_SETTINGS_COMPANY),
 
     (('GET',), r'^company/\d+$', P.PERM_SETTINGS_COMPANY),
     (('GET',), r'^company/\d+/payments$', P.PERM_BILLING_VIEW),
@@ -197,5 +197,5 @@ def resolve_permission(method: str, path: str) -> str | None:
             break
 
     if not matched:
-        return P.PERM_DASHBOARD_VIEW
+        return P.PERM_DENIED
     return matched_perm

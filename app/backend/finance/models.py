@@ -22,6 +22,7 @@ class Payment(models.Model):
         related_name='payments',
     )
     student_name = models.CharField(max_length=255)
+    payment_date = models.DateField(null=True, blank=True, db_index=True)
     amount = models.IntegerField()
     months_covered = models.PositiveIntegerField(default=1)
     method = models.CharField(max_length=20, choices=Method.choices, default=Method.CASH)
@@ -214,7 +215,13 @@ class PaymentTransaction(models.Model):
         CANCELLED = 'cancelled', 'Cancelled'
 
     company = models.ForeignKey('org.Company', on_delete=models.CASCADE, related_name='payment_transactions')
-    student = models.ForeignKey('crm.Student', on_delete=models.CASCADE, related_name='payment_transactions')
+    student = models.ForeignKey(
+        'crm.Student',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='payment_transactions',
+    )
     provider = models.CharField(max_length=20, choices=Provider.choices)
     trans_id = models.CharField(max_length=255)
     amount = models.IntegerField()
@@ -225,8 +232,8 @@ class PaymentTransaction(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        indexes = [
-            models.Index(fields=['company', 'provider', 'trans_id']),
+        constraints = [
+            models.UniqueConstraint(fields=['company', 'provider', 'trans_id'], name='uniq_provider_transaction'),
         ]
 
     def __str__(self) -> str:

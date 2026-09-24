@@ -11,7 +11,7 @@ class RbacPermission(BasePermission):
 
     def has_permission(self, request, view) -> bool:
         if not request.user or not request.user.is_authenticated:
-            return True
+            return False
 
         permission = resolve_permission(request.method, request.path)
         return user_has_permission(request.user, permission)

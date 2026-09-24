@@ -156,13 +156,17 @@ def sync_student_paid_this_month(student: Student | int | None) -> bool:
         if not student:
             return False
 
+    from django.db.models import Q
     from django.utils import timezone
     from finance.models import Payment
     today = timezone.localdate()
     has_payment_this_month = Payment.objects.filter(
         student=student,
-        created_at__year=today.year,
-        created_at__month=today.month,
+        transaction_type=Payment.TransactionType.PAYMENT,
+        reversals__isnull=True,
+    ).filter(
+        Q(payment_date__year=today.year, payment_date__month=today.month)
+        | Q(payment_date__isnull=True, created_at__year=today.year, created_at__month=today.month)
     ).exists()
 
     if student.paid_this_month != has_payment_this_month:

@@ -11,7 +11,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from accounts.models import TeacherBranch, User
-from accounts.rbac import get_effective_role, get_role_label, get_user_permissions
+from accounts.rbac import ROLE_CEO, get_effective_role, get_role_label, get_user_permissions
 from api.responses import fail, ok
 from api.scope import filter_groups_queryset, filter_students_queryset, teacher_can_access_group, teacher_can_access_student
 from api.utils import (
@@ -377,17 +377,21 @@ def _get_student_payments_queryset(student: Student, company: Company):
         payment_filter = Q(student=student) | Q(student__isnull=True, student_name=student.full_name)
     else:
         payment_filter = Q(student=student)
-    return Payment.objects.filter(Q(company=company) & payment_filter)
+    return Payment.objects.filter(
+        Q(company=company) & payment_filter,
+        transaction_type=Payment.TransactionType.PAYMENT,
+        reversals__isnull=True,
+    )
 
 
 def _get_student_payment_info(student: Student, info: dict | None = None) -> dict:
     if info is None:
         payments = _get_student_payments_queryset(student, student.company)
         months_covered = payments.aggregate(total=Sum('months_covered'))['total'] or 0
-        last = payments.order_by('-created_at').first()
-        first = payments.order_by('created_at').first()
-        last_date = timezone.localtime(last.created_at).date() if last else None
-        first_date = timezone.localtime(first.created_at).date() if first else None
+        last = payments.order_by('-payment_date', '-created_at').first()
+        first = payments.order_by('payment_date', 'created_at').first()
+        last_date = (last.payment_date or timezone.localtime(last.created_at).date()) if last else None
+        first_date = (first.payment_date or timezone.localtime(first.created_at).date()) if first else None
     else:
         months_covered = info.get('months_covered', info.get('count', 0))
         last_date = info.get('last_date')
@@ -423,7 +427,11 @@ def _company_payments_summary(company: Company) -> dict:
     ambiguous_names = {name for name, count in name_counts.items() if count > 1}
 
     rows = (
-        Payment.objects.filter(company=company)
+        Payment.objects.filter(
+            company=company,
+            transaction_type=Payment.TransactionType.PAYMENT,
+            reversals__isnull=True,
+        )
         .values('student_id', 'student_name')
         .annotate(
             count=Count('id'),
@@ -529,11 +537,38 @@ def _serialize_student(student: Student, *, payment_info: dict | None = None, de
         'group_teacher': student.group.teacher.display_name() if (student.group and student.group.teacher) else '',
         'course_price': student.group.course.price if (student.group and student.group.course) else 0,
         'course_name': student.group.course.name if (student.group and student.group.course) else '',
+        'frozen_at': student.frozen_at.isoformat() if student.frozen_at else None,
+        'left_at': student.left_at.isoformat() if student.left_at else None,
         'created_at': student.created_at.isoformat(),
     }
     if detailed:
         payload['telegram_code'] = student.telegram_code
     return payload
+
+
+def _calculate_unfreeze_offset(student: Student, company: Company) -> int:
+    """
+    B4: Offset consumes only months actually studied between anchor_date and frozen_at,
+    preserving unused prepaid months.
+    """
+    current_paid_months = _get_student_payments_queryset(student, company).aggregate(
+        total=Sum('months_covered')
+    )['total'] or 0
+
+    first_pay = _get_student_payments_queryset(student, company).order_by('payment_date', 'created_at').first()
+    first_pay_date = (first_pay.payment_date or timezone.localtime(first_pay.created_at).date()) if first_pay else None
+    anchor = student.trial_date or first_pay_date or student.created_at.date()
+    freeze_date = timezone.localtime(student.frozen_at).date() if student.frozen_at else timezone.localdate()
+
+    consumed_months = 0
+    if freeze_date > anchor:
+        # Floor rounding: student is charged for full completed months studied
+        consumed_months = (freeze_date.year - anchor.year) * 12 + (freeze_date.month - anchor.month)
+        if freeze_date.day < anchor.day:
+            consumed_months -= 1
+        consumed_months = max(0, consumed_months)
+
+    return min(current_paid_months, consumed_months)
 
 
 def _apply_student_fields(student: Student, company: Company, data: dict) -> str | None:
@@ -593,10 +628,7 @@ def _apply_student_fields(student: Student, company: Company, data: dict) -> str
         if status is None or status not in VALID_STUDENT_STATUSES:
             return 'Invalid status'
         if was_frozen and status == Student.Status.STUDYING:
-            current_paid_months = _get_student_payments_queryset(student, company).aggregate(
-                total=Sum('months_covered')
-            )['total'] or 0
-            student.payment_offset = current_paid_months
+            student.payment_offset = _calculate_unfreeze_offset(student, company)
             if 'trial_date' in data:
                 student.trial_date = parse_date_safe(data.get('trial_date')) or timezone.localdate()
             else:
@@ -604,10 +636,7 @@ def _apply_student_fields(student: Student, company: Company, data: dict) -> str
         student.status = status
     elif data.get('unfreeze'):
         if was_frozen:
-            current_paid_months = _get_student_payments_queryset(student, company).aggregate(
-                total=Sum('months_covered')
-            )['total'] or 0
-            student.payment_offset = current_paid_months
+            student.payment_offset = _calculate_unfreeze_offset(student, company)
             if 'trial_date' in data:
                 student.trial_date = parse_date_safe(data.get('trial_date')) or timezone.localdate()
             else:
@@ -679,8 +708,8 @@ def _serialize_company(company: Company) -> dict:
         'id': company.id,
         'name': company.name,
         'subdomain': company.subdomain,
-        'balance_mode': company.balance_mode,
-        'payment_mode_label': _payment_mode_label(company.balance_mode),
+        'balance_mode': 1,
+        'payment_mode_label': 'Daily',
         'phone': company.phone,
     }
 
@@ -747,7 +776,6 @@ def company_by_subdomain(request, subdomain: str):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
 def company_detail(request, company_id: int):
     # ✅ ИСПРАВЛЕНО: 2 строки — проверяем что это своя компания
     if company_id != request.user.company_id:
@@ -791,35 +819,46 @@ def auth_login(request):
 
 
 @api_view(['GET', 'POST', 'PATCH'])
-@permission_classes([IsAuthenticated])
 def auth_me(request):
     user = request.user
 
     if request.method == 'PATCH':
-        first_name = request.data.get('first_name')
-        if first_name is not None:
-            first_name = str(first_name).strip()
-            if not first_name:
-                return fail('First name is required')
-            user.first_name = first_name
+        is_ceo = (get_effective_role(user) == ROLE_CEO or user.is_superuser)
 
-        if 'last_name' in request.data:
-            user.last_name = str(request.data.get('last_name') or '').strip()
+        # Self-editing restrictions: non-CEO can only change phone (and password if old_password verified)
+        if not is_ceo:
+            forbidden = {'first_name', 'last_name', 'job_title'} & set(request.data.keys())
+            if forbidden:
+                return fail('Только CEO может изменять имя, фамилию и должность', status_code=403)
+        else:
+            first_name = request.data.get('first_name')
+            if first_name is not None:
+                first_name = str(first_name).strip()
+                if not first_name:
+                    return fail('First name is required')
+                user.first_name = first_name
 
-        if 'job_title' in request.data:
-            user.job_title = str(request.data.get('job_title') or '').strip()
+            if 'last_name' in request.data:
+                user.last_name = str(request.data.get('last_name') or '').strip()
+
+            if 'job_title' in request.data:
+                user.job_title = str(request.data.get('job_title') or '').strip()
 
         phone = request.data.get('phone')
         if phone is not None:
-            phone = ''.join(ch for ch in str(phone) if ch.isdigit())
-            if len(phone) < 9:
-                return fail('Phone must contain at least 9 digits')
-            if User.objects.filter(phone=phone).exclude(pk=user.pk).exists():
+            norm_phone = normalize_phone(phone)
+            if len(norm_phone) != 9:
+                return fail('Valid 9-digit phone is required (e.g. 901234567)')
+            if User.objects.filter(phone=norm_phone).exclude(pk=user.pk).exists():
                 return fail('Phone already exists')
-            user.phone = phone
+            user.phone = norm_phone
 
         password = request.data.get('password')
         if password:
+            if not is_ceo:
+                old_password = request.data.get('old_password') or request.data.get('current_password')
+                if not old_password or not user.check_password(str(old_password)):
+                    return fail('Текущий пароль указан неверно', status_code=400)
             user.set_password(str(password))
 
         user.save()
@@ -829,7 +868,6 @@ def auth_me(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
 def branch_list(request):
     company = request.user.company
     if company is None:
@@ -840,7 +878,6 @@ def branch_list(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
 def dashboard(request):
     company = request.user.company
     if company is None:
@@ -860,13 +897,16 @@ def dashboard(request):
         Payment.objects.filter(company=company, created_at__gte=six_months_ago)
         .annotate(month=TruncMonth('created_at'))
         .values('month')
-        .annotate(total=Sum('amount'))
+        .annotate(
+            paid=Sum('amount', filter=Q(transaction_type=Payment.TransactionType.PAYMENT)),
+            refunded=Sum('amount', filter=Q(transaction_type=Payment.TransactionType.REFUND)),
+        )
         .order_by('month')
     )
     finance_chart = [
         {
             'label': row['month'].strftime('%b %Y'),
-            'value': int(row['total'] or 0),
+            'value': max(0, int((row['paid'] or 0) - (row['refunded'] or 0))),
         }
         for row in monthly_payments
     ]
@@ -911,7 +951,6 @@ def dashboard(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
 def schedule_list(request):
     company = request.user.company
     if company is None:
@@ -923,7 +962,6 @@ def schedule_list(request):
 
 
 @api_view(['GET', 'POST'])
-@permission_classes([IsAuthenticated])
 def group_list(request):
     company = request.user.company
     if company is None:
@@ -1069,7 +1107,6 @@ def group_list(request):
 
 
 @api_view(['GET', 'PATCH', 'DELETE'])
-@permission_classes([IsAuthenticated])
 def group_detail(request, group_id: int):
     company = request.user.company
     if company is None:
@@ -1155,7 +1192,6 @@ def group_detail(request, group_id: int):
 
 
 @api_view(['GET', 'POST'])
-@permission_classes([IsAuthenticated])
 def student_list(request):
     company = request.user.company
     if company is None:
@@ -1317,7 +1353,6 @@ def student_list(request):
 
 
 @api_view(['GET', 'PATCH', 'DELETE'])
-@permission_classes([IsAuthenticated])
 def student_detail(request, student_id: int):
     company = request.user.company
     if company is None:
@@ -1394,7 +1429,6 @@ def student_detail(request, student_id: int):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
 def telegram_config(request):
     config = notifications.load_config()
     enabled = bool(config.get('enabled'))
@@ -1421,7 +1455,6 @@ def _delete_photo_file(student: Student) -> None:
 
 
 @api_view(['POST', 'DELETE'])
-@permission_classes([IsAuthenticated])
 def student_photo(request, student_id: int):
     company = request.user.company
     if company is None:
@@ -1462,7 +1495,6 @@ def student_photo(request, student_id: int):
 
 
 @api_view(['GET', 'POST'])
-@permission_classes([IsAuthenticated])
 def lead_list(request):
     company = request.user.company
     if company is None:
@@ -1645,7 +1677,6 @@ def lead_list(request):
 
 
 @api_view(['GET', 'PATCH'])
-@permission_classes([IsAuthenticated])
 def lead_detail(request, lead_id: int):
     company = request.user.company
     if company is None:
@@ -1788,7 +1819,6 @@ def lead_detail(request, lead_id: int):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
 def lead_archive(request, lead_id: int):
     company = request.user.company
     if company is None:
@@ -1805,7 +1835,6 @@ def lead_archive(request, lead_id: int):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
 def lead_convert_to_student(request, lead_id: int):
     company = request.user.company
     if company is None:
@@ -1960,7 +1989,6 @@ def _serialize_course(course: Course) -> dict:
 
 
 @api_view(['GET', 'POST'])
-@permission_classes([IsAuthenticated])
 def course_list(request):
     company = request.user.company
     if company is None:
@@ -2007,7 +2035,6 @@ def course_list(request):
 
 
 @api_view(['GET', 'PATCH', 'DELETE'])
-@permission_classes([IsAuthenticated])
 def course_detail(request, course_id: int):
     company = request.user.company
     if company is None:

@@ -414,6 +414,8 @@ class LeadToStudentConversionTests(TestCase):
         self.client.patch(f'/v1/students/{student.id}', {'status': Student.Status.FROZEN})
         student.refresh_from_db()
         self.assertEqual(student.status, Student.Status.FROZEN)
+        student.frozen_at = timezone.datetime(2026, 11, 15, 12, 0, tzinfo=timezone.get_current_timezone())
+        student.save(update_fields=['frozen_at'])
 
         # 3. Student returns from freeze on 2026-12-05 with new anchor date
         patch_res = self.client.patch(f'/v1/students/{student.id}', {
@@ -1070,7 +1072,7 @@ class CoreAuditedFeaturesTests(TestCase):
 
     def test_paid_this_month_lifecycle_sync(self):
         """Creating/deleting payments should immediately update student.paid_this_month."""
-        self.client.force_authenticate(user=self.admin)
+        self.client.force_authenticate(user=self.ceo)
         student = Student.objects.create(
             company=self.company,
             branch=self.branch,
@@ -1345,6 +1347,8 @@ class P0RegressionTests(TestCase):
             status=Student.Status.FROZEN,
             trial_date='2026-07-01',
         )
+        student.frozen_at = timezone.datetime(2026, 10, 1, 12, 0, tzinfo=timezone.get_current_timezone())
+        student.save(update_fields=['frozen_at'])
         # 2 payments: one covering 2 months, one covering 1 month = total 3
         Payment.objects.create(
             company=self.company,
@@ -2972,6 +2976,366 @@ class Phase4HardeningAndRbacTests(TestCase):
             handler = getattr(self.client, method)
             res = handler(url)
             self.assertIn(res.status_code, [401, 403], f"Route {url} should be protected but returned {res.status_code}")
+
+
+class Block2FinanceRemediationTests(TestCase):
+    """
+    Comprehensive tests for Block 2 (Priority P1: Finance, money, P&L,
+    replenishments list, unfreeze prepaid month preservation, refund rules).
+    """
+
+    def setUp(self):
+        self.client = APIClient()
+        self.company = Company.objects.create(name='Finance Co', subdomain='finco')
+        self.branch = Branch.objects.create(company=self.company, name='Central')
+        self.ceo = User.objects.create_user(
+            phone='998909001122',
+            password='password123',
+            first_name='Fin',
+            last_name='CEO',
+            company=self.company,
+            user_type=User.UserType.STAFF,
+            staff_role=User.StaffRole.CEO,
+        )
+        self.student = Student.objects.create(
+            company=self.company,
+            branch=self.branch,
+            first_name='Alisher',
+            last_name='Navoiy',
+            phone='901239876',
+            status=Student.Status.STUDYING,
+            trial_date='2026-06-01',
+        )
+
+    def test_p1_1_refunds_and_reversals_excluded_from_paid_this_month(self):
+        from crm.services import sync_student_paid_this_month
+        self.client.force_authenticate(user=self.ceo)
+
+        # 1. Sole transaction in month is a REFUND -> must NOT mark student as paid
+        today = timezone.localdate()
+        refund = Payment.objects.create(
+            company=self.company,
+            student=self.student,
+            student_name=self.student.full_name,
+            amount=500000,
+            transaction_type=Payment.TransactionType.REFUND,
+            payment_date=today,
+        )
+        is_paid = sync_student_paid_this_month(self.student)
+        self.assertFalse(is_paid)
+
+        # 2. Add legitimate payment -> marks paid
+        pay = Payment.objects.create(
+            company=self.company,
+            student=self.student,
+            student_name=self.student.full_name,
+            amount=500000,
+            transaction_type=Payment.TransactionType.PAYMENT,
+            payment_date=today,
+        )
+        is_paid = sync_student_paid_this_month(self.student)
+        self.assertTrue(is_paid)
+
+        # 3. If that payment is reversed -> must no longer mark paid
+        refund.reverses_payment = pay
+        refund.save(update_fields=['reverses_payment'])
+        is_paid = sync_student_paid_this_month(self.student)
+        self.assertFalse(is_paid)
+
+    def test_p1_2_dashboard_and_pnl_net_revenue(self):
+        self.client.force_authenticate(user=self.ceo)
+        today = timezone.localdate()
+
+        # Payment of 1,000,000
+        pay = Payment.objects.create(
+            company=self.company,
+            student=self.student,
+            student_name=self.student.full_name,
+            amount=1000000,
+            transaction_type=Payment.TransactionType.PAYMENT,
+            payment_date=today,
+            method='cash',
+        )
+        # Refund of 300,000
+        Payment.objects.create(
+            company=self.company,
+            student=self.student,
+            student_name=self.student.full_name,
+            amount=300000,
+            transaction_type=Payment.TransactionType.REFUND,
+            reverses_payment=pay,
+            payment_date=today,
+            method='cash',
+        )
+
+        # P&L total_revenue should be net: 700,000
+        res_pnl = self.client.get('/v1/reports/pnl')
+        self.assertEqual(res_pnl.status_code, 200)
+        pnl_data = res_pnl.json()['data']
+        self.assertEqual(pnl_data['summary']['total_revenue'], 700000)
+        cash_row = next(r for r in pnl_data['revenue_by_method'] if r['method'] == 'cash')
+        self.assertEqual(cash_row['amount'], 700000)
+
+        # Dashboard finance_chart should reflect net amount: 700,000
+        res_dash = self.client.get('/v1/dashboard')
+        self.assertEqual(res_dash.status_code, 200)
+        dash_chart = res_dash.json()['data']['finance_chart']
+        self.assertTrue(len(dash_chart) > 0)
+        self.assertEqual(dash_chart[-1]['value'], 700000)
+
+    def test_p1_3_replenishments_get_list_and_filters(self):
+        self.client.force_authenticate(user=self.ceo)
+
+        # Create two payments
+        p1 = Payment.objects.create(
+            company=self.company,
+            student=self.student,
+            student_name='Alisher Navoiy',
+            amount=600000,
+            method='cash',
+            comment='Cash payment',
+            payment_date=timezone.datetime(2026, 6, 1).date(),
+        )
+        s2 = Student.objects.create(
+            company=self.company,
+            branch=self.branch,
+            first_name='Bobur',
+            last_name='Zahir',
+            phone='909991122',
+            status=Student.Status.STUDYING,
+        )
+        p2 = Payment.objects.create(
+            company=self.company,
+            student=s2,
+            student_name='Bobur Zahir',
+            amount=400000,
+            method='card',
+            comment='Card transfer',
+            payment_date=timezone.datetime(2026, 6, 15).date(),
+        )
+
+        # GET /v1/replenishments must return list of payments
+        res = self.client.get('/v1/replenishments')
+        self.assertEqual(res.status_code, 200)
+        items = res.json()['data']
+        self.assertTrue(len(items) >= 2)
+
+        # Filter by method
+        res_cash = self.client.get('/v1/replenishments?method=cash')
+        self.assertEqual(res_cash.status_code, 200)
+        cash_items = res_cash.json()['data']
+        self.assertTrue(all(item['method'] == 'cash' for item in cash_items))
+
+        # Filter by student_id
+        res_s2 = self.client.get(f'/v1/replenishments?student_id={s2.id}')
+        self.assertEqual(res_s2.status_code, 200)
+        self.assertEqual(len(res_s2.json()['data']), 1)
+        self.assertEqual(res_s2.json()['data'][0]['name'], 'Bobur Zahir')
+
+        # Filter by search q
+        res_q = self.client.get('/v1/replenishments?q=Bobur')
+        self.assertEqual(res_q.status_code, 200)
+        self.assertEqual(len(res_q.json()['data']), 1)
+
+    def test_p1_4_unfreeze_preserves_prepaid_months(self):
+        """
+        B4: Student pays 3 months starting 2026-06-01.
+        Freezes on 2026-07-01 (studied 1 month).
+        Unfreezes on 2026-10-01.
+        Consumed months = 1.
+        Prepaid months remaining = 3 - 1 = 2 months.
+        Next payment due = 2026-10-01 + 2 months = 2026-12-01!
+        """
+        self.client.force_authenticate(user=self.ceo)
+        student = Student.objects.create(
+            company=self.company,
+            branch=self.branch,
+            first_name='Jasur',
+            last_name='Umarov',
+            phone='901235566',
+            status=Student.Status.STUDYING,
+            trial_date='2026-06-01',
+        )
+        Payment.objects.create(
+            company=self.company,
+            student=student,
+            student_name=student.full_name,
+            amount=1500000,
+            months_covered=3,
+            payment_date='2026-06-01',
+        )
+
+        # Freeze after 1 month of study
+        self.client.patch(f'/v1/students/{student.id}', {'status': Student.Status.FROZEN})
+        student.refresh_from_db()
+        self.assertEqual(student.status, Student.Status.FROZEN)
+        student.frozen_at = timezone.datetime(2026, 7, 1, 12, 0, tzinfo=timezone.get_current_timezone())
+        student.save(update_fields=['frozen_at'])
+
+        # Unfreeze on 2026-10-01
+        res = self.client.patch(f'/v1/students/{student.id}', {
+            'status': Student.Status.STUDYING,
+            'trial_date': '2026-10-01',
+        })
+        self.assertEqual(res.status_code, 200)
+        data = res.json()['data']
+
+        # Offset consumes ONLY 1 month, NOT 3!
+        self.assertEqual(data['payment_offset'], 1)
+        # Paid count remaining = 3 - 1 = 2
+        self.assertEqual(data['paid_count'], 2)
+        # Next payment date is 2 months from new anchor: 2026-12-01!
+        self.assertEqual(data['next_payment_date'], '2026-12-01')
+
+    def test_p1_4_prepayment_while_frozen_not_wiped_on_unfreeze(self):
+        """
+        B4: If parent pays 2 months while student is already frozen,
+        unfreezing must NOT wipe out those prepaid months.
+        """
+        self.client.force_authenticate(user=self.ceo)
+        student = Student.objects.create(
+            company=self.company,
+            branch=self.branch,
+            first_name='Nodir',
+            last_name='Karimov',
+            phone='907776655',
+            status=Student.Status.FROZEN,
+            trial_date='2026-06-01',
+        )
+        # Frozen immediately upon start
+        student.frozen_at = timezone.datetime(2026, 6, 1, 12, 0, tzinfo=timezone.get_current_timezone())
+        student.save(update_fields=['frozen_at'])
+
+        # Parent pays for 2 months while student is frozen
+        Payment.objects.create(
+            company=self.company,
+            student=student,
+            student_name=student.full_name,
+            amount=1000000,
+            months_covered=2,
+            payment_date='2026-07-01',
+        )
+
+        # Unfreeze on 2026-10-01
+        res = self.client.patch(f'/v1/students/{student.id}', {
+            'status': Student.Status.STUDYING,
+            'trial_date': '2026-10-01',
+        })
+        self.assertEqual(res.status_code, 200)
+        data = res.json()['data']
+
+        # Consumed months = 0 -> offset = 0!
+        self.assertEqual(data['payment_offset'], 0)
+        self.assertEqual(data['paid_count'], 2)
+        self.assertEqual(data['next_payment_date'], '2026-12-01')
+
+    def test_p1_5_refund_validation_and_months_covered_zero(self):
+        self.client.force_authenticate(user=self.ceo)
+        pay = Payment.objects.create(
+            company=self.company,
+            student=self.student,
+            student_name=self.student.full_name,
+            amount=600000,
+            months_covered=2,
+            transaction_type=Payment.TransactionType.PAYMENT,
+        )
+
+        # 1. Partial refund of 200,000
+        ref1 = self.client.post(f'/v1/replenishments/{pay.id}/refund', {'amount': 200000})
+        self.assertEqual(ref1.status_code, 201)
+        ref1_data = ref1.json()['data']
+        # Refund record must have months_covered = 0
+        self.assertEqual(ref1_data['months_covered'], 0)
+        self.assertEqual(ref1_data['transaction_type'], 'refund')
+
+        # 2. Cannot refund amount exceeding available balance (400,001 > 400,000 remaining)
+        ref_fail = self.client.post(f'/v1/replenishments/{pay.id}/refund', {'amount': 400001})
+        self.assertEqual(ref_fail.status_code, 400)
+
+        # 3. Cannot refund a refund record
+        ref1_id = ref1_data['id']
+        ref_of_ref = self.client.post(f'/v1/replenishments/{ref1_id}/refund', {'amount': 100000})
+        self.assertEqual(ref_of_ref.status_code, 400)
+
+        # 4. Complete remaining refund of 400,000
+        ref2 = self.client.post(f'/v1/replenishments/{pay.id}/refund', {'amount': 400000})
+        self.assertEqual(ref2.status_code, 201)
+
+        # 5. Subsequent refund attempt fails (fully refunded)
+        ref_empty = self.client.post(f'/v1/replenishments/{pay.id}/refund', {'amount': 10000})
+        self.assertEqual(ref_empty.status_code, 400)
+
+    def test_p1_6_payment_date_in_replenishments(self):
+        self.client.force_authenticate(user=self.ceo)
+        res = self.client.post('/v1/replenishments', {
+            'student_id': self.student.id,
+            'amount': 500000,
+            'payment_date': '2026-05-15',
+            'method': 'cash',
+        })
+        self.assertEqual(res.status_code, 201)
+        data = res.json()['data']
+        self.assertEqual(data['payment_date'], '2026-05-15')
+        self.assertEqual(data['date'], '2026-05-15')
+
+    def test_p1_7_payment_transaction_unique_constraint(self):
+        from finance.models import PaymentTransaction
+        PaymentTransaction.objects.create(
+            company=self.company,
+            student=self.student,
+            provider=PaymentTransaction.Provider.CLICK,
+            trans_id='click_trans_unique_123',
+            amount=500000,
+        )
+        # Duplicate transaction with identical (company, provider, trans_id) must raise IntegrityError
+        with self.assertRaises(IntegrityError):
+            PaymentTransaction.objects.create(
+                company=self.company,
+                student=self.student,
+                provider=PaymentTransaction.Provider.CLICK,
+                trans_id='click_trans_unique_123',
+                amount=500000,
+            )
+
+    def test_p1_8_negative_or_zero_amounts_rejected(self):
+        self.client.force_authenticate(user=self.ceo)
+
+        # Replenishment amount <= 0
+        res_rep_zero = self.client.post('/v1/replenishments', {
+            'student_id': self.student.id,
+            'amount': 0,
+            'method': 'cash',
+        })
+        self.assertEqual(res_rep_zero.status_code, 400)
+
+        res_rep_neg = self.client.post('/v1/replenishments', {
+            'student_id': self.student.id,
+            'amount': -100000,
+            'method': 'cash',
+        })
+        self.assertEqual(res_rep_neg.status_code, 400)
+
+        # Withdrawal amount <= 0
+        res_with = self.client.post('/v1/withdraws', {
+            'name': 'Test Withdraw',
+            'amount': -50000,
+        })
+        self.assertEqual(res_with.status_code, 400)
+
+        # Expense amount <= 0
+        res_exp = self.client.post('/v1/expense', {
+            'amount': 0,
+            'description': 'Supplies',
+        })
+        self.assertEqual(res_exp.status_code, 400)
+
+    def test_p1_9_balance_mode_removed_gracefully(self):
+        self.client.force_authenticate(user=self.ceo)
+        # Settings endpoint returns balance_mode 1 for backwards compatibility
+        res = self.client.get('/v1/company/settings')
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()['data']['balance_mode'], 1)
+
 
 
 

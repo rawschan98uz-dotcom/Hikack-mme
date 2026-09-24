@@ -7,7 +7,17 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 
 from accounts.models import TeacherBranch, User
-from accounts.rbac import ROLE_CEO, get_effective_role, user_is_teacher
+from accounts.rbac import (
+    ROLE_CEO,
+    PERM_FINANCE_VIEW,
+    PERM_FINANCE_WRITE,
+    PERM_SETTINGS_COMPANY,
+    PERM_STAFF_WRITE,
+    PERM_TEACHERS_WRITE,
+    get_effective_role,
+    user_has_permission,
+    user_is_teacher,
+)
 from api.responses import fail, ok
 from api.scope import (
     filter_attendance_queryset,
@@ -69,7 +79,6 @@ def _serialize_teacher(user: User, *, groups_count: int | None = None) -> dict:
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
 def teacher_create_view(request):
     company = _company(request)
     if company is None:
@@ -99,7 +108,6 @@ def _get_teacher(company: Company, teacher_id: int) -> User:
 
 
 @api_view(['GET', 'PATCH', 'DELETE'])
-@permission_classes([IsAuthenticated])
 def teacher_detail_view(request, teacher_id: int):
     company = _company(request)
     if company is None:
@@ -197,7 +205,6 @@ def teacher_detail_view(request, teacher_id: int):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
 def user_list(request):
     company = _company(request)
     if company is None:
@@ -249,11 +256,14 @@ def _get_staff(company: Company, staff_id: int) -> User:
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
 def staff_create_view(request):
     company = _company(request)
     if company is None:
         return fail('Company not found', status_code=404)
+
+    is_ceo = (get_effective_role(request.user) == ROLE_CEO or request.user.is_superuser)
+    if not is_ceo and not user_has_permission(request.user, PERM_STAFF_WRITE):
+        return fail('Permission denied', status_code=403)
 
     first_name = (request.data.get('first_name') or request.data.get('name') or '').strip()
     if ' ' in first_name and not request.data.get('first_name'):
@@ -263,12 +273,19 @@ def staff_create_view(request):
     else:
         last_name = (request.data.get('last_name') or '').strip()
 
-    phone = ''.join(ch for ch in str(request.data.get('phone') or '') if ch.isdigit())
-    password = request.data.get('password') or '946263200'
+    phone = normalize_phone(request.data.get('phone') or '')
+    password = request.data.get('password')
+    generated = False
+    if not password:
+        password = _generate_password()
+        generated = True
     job_title = (request.data.get('job_title') or '').strip()
 
     if not first_name or not phone:
         return fail('First name and phone are required')
+
+    if len(phone) != 9:
+        return fail('Valid 9-digit phone is required (e.g. 901234567)')
 
     if User.objects.filter(phone=phone).exists():
         return fail('Phone already exists')
@@ -282,15 +299,21 @@ def staff_create_view(request):
         user_type=User.UserType.STAFF,
         job_title=job_title,
     )
-    return ok(_serialize_staff(user), status_code=201)
+    payload = _serialize_staff(user)
+    payload['generated_password'] = password if generated else None
+    return ok(payload, status_code=201)
 
 
 @api_view(['GET', 'PATCH', 'DELETE'])
-@permission_classes([IsAuthenticated])
 def staff_detail_view(request, staff_id: int):
     company = _company(request)
     if company is None:
         return fail('Company not found', status_code=404)
+
+    is_ceo = (get_effective_role(request.user) == ROLE_CEO or request.user.is_superuser)
+    if request.method in ('PATCH', 'DELETE'):
+        if not is_ceo and not user_has_permission(request.user, PERM_STAFF_WRITE):
+            return fail('Permission denied', status_code=403)
 
     try:
         staff = _get_staff(company, staff_id)
@@ -301,7 +324,7 @@ def staff_detail_view(request, staff_id: int):
         return ok(_serialize_staff(staff))
 
     if request.method == 'DELETE':
-        if not (get_effective_role(request.user) == ROLE_CEO or request.user.is_superuser):
+        if not is_ceo:
             return fail('Only CEO/owner can delete users', status_code=403)
         if request.user.pk == staff.pk:
             return fail('Cannot delete your own account', status_code=400)
@@ -324,15 +347,17 @@ def staff_detail_view(request, staff_id: int):
 
     phone = request.data.get('phone')
     if phone is not None:
-        phone = ''.join(ch for ch in str(phone) if ch.isdigit())
-        if not phone:
-            return fail('Valid phone is required')
+        phone = normalize_phone(phone)
+        if len(phone) != 9:
+            return fail('Valid 9-digit phone is required (e.g. 901234567)')
         if User.objects.filter(phone=phone).exclude(pk=staff.pk).exists():
             return fail('Phone already exists')
         staff.phone = phone
 
     password = request.data.get('password')
     if password:
+        if not is_ceo and request.user.pk != staff.pk:
+            return fail('Only CEO can change passwords for other staff members', status_code=403)
         staff.set_password(str(password))
 
     staff.save()
@@ -371,6 +396,8 @@ def teacher_create(request, company: Company):
         return fail('Phone already exists')
 
     is_ceo = (get_effective_role(request.user) == ROLE_CEO or request.user.is_superuser)
+    if not is_ceo and not user_has_permission(request.user, PERM_TEACHERS_WRITE):
+        return fail('Permission denied', status_code=403)
     if not is_ceo and len(branch_ids) > 1:
         return fail('Only CEO can assign multiple branches to a teacher', status_code=403)
 
@@ -382,18 +409,19 @@ def teacher_create(request, company: Company):
         if default_branch:
             valid_branch_ids = [default_branch.id]
 
-    user = User.objects.create_user(
-        phone=phone,
-        password=password,
-        first_name=first_name,
-        last_name=last_name,
-        company=company,
-        user_type=User.UserType.TEACHER,
-        job_title=job_title,
-        honorific=honorific,
-    )
-    for branch_id in valid_branch_ids:
-        TeacherBranch.objects.create(teacher=user, branch_id=branch_id)
+    with transaction.atomic():
+        user = User.objects.create_user(
+            phone=phone,
+            password=password,
+            first_name=first_name,
+            last_name=last_name,
+            company=company,
+            user_type=User.UserType.TEACHER,
+            job_title=job_title,
+            honorific=honorific,
+        )
+        for branch_id in valid_branch_ids:
+            TeacherBranch.objects.create(teacher=user, branch_id=branch_id)
 
     payload = _serialize_teacher(user)
     payload['generated_password'] = password if generated else None
@@ -411,9 +439,11 @@ def _finance_date_filter(qs, params, field='created_at'):
 
 
 def _serialize_payment(payment: Payment) -> dict:
+    pay_date = payment.payment_date or timezone.localtime(payment.created_at).date()
     return {
         'id': payment.id,
-        'date': payment.created_at.strftime('%Y-%m-%d'),
+        'date': pay_date.strftime('%Y-%m-%d'),
+        'payment_date': pay_date.isoformat(),
         'student_id': payment.student_id,
         'group_id': payment.group_id,
         'course_id': payment.course_id,
@@ -427,7 +457,7 @@ def _serialize_payment(payment: Payment) -> dict:
         'net_amount': getattr(payment, 'net_amount', None) or payment.amount,
         'transaction_type': getattr(payment, 'transaction_type', 'payment') or 'payment',
         'reverses_payment_id': payment.reverses_payment_id,
-        'months_covered': getattr(payment, 'months_covered', 1) or 1,
+        'months_covered': getattr(payment, 'months_covered', 1) if getattr(payment, 'months_covered', None) is not None else 1,
         'method': payment.method,
         'method_pay': payment.get_method_display(),
         'teacher': payment.teacher_name or '—',
@@ -439,7 +469,6 @@ def _serialize_payment(payment: Payment) -> dict:
 
 
 @api_view(['GET', 'POST'])
-@permission_classes([IsAuthenticated])
 def replenishments(request):
     company = _company(request)
     if company is None:
@@ -485,8 +514,10 @@ def replenishments(request):
             return fail('Student name is required')
         try:
             amount = int(request.data.get('amount') or request.data.get('sum'))
+            if amount <= 0:
+                raise ValueError()
         except (TypeError, ValueError):
-            return fail('Valid amount is required')
+            return fail('Valid positive amount is required')
         try:
             months_covered = max(1, int(request.data.get('months_covered') or 1))
         except (TypeError, ValueError):
@@ -494,6 +525,12 @@ def replenishments(request):
         method = str(request.data.get('method') or Payment.Method.CASH).strip().lower()
         if method not in {choice[0] for choice in Payment.Method.choices}:
             return fail('Invalid payment method')
+
+        raw_payment_date = request.data.get('payment_date') or request.data.get('date')
+        if raw_payment_date:
+            payment_date = parse_date_safe(raw_payment_date) or timezone.localdate()
+        else:
+            payment_date = timezone.localdate()
 
         group = None
         course = None
@@ -531,6 +568,7 @@ def replenishments(request):
             discount_amount=discount_amount,
             transaction_type=Payment.TransactionType.PAYMENT,
             months_covered=months_covered,
+            payment_date=payment_date,
             method=method,
             teacher_name=teacher_name,
             comment=str(request.data.get('comment') or '').strip(),
@@ -550,74 +588,14 @@ def replenishments(request):
 
         return ok(_serialize_payment(payment), status_code=201)
 
-
-@api_view(['POST'])
-def payment_refund(request, payment_id: int):
-    company = _company(request)
-    if company is None:
-        return fail('Company not found', status_code=404)
-
-    try:
-        original = Payment.objects.get(pk=payment_id, company=company)
-    except Payment.DoesNotExist:
-        return fail('Payment not found', status_code=404)
-
-    if original.transaction_type == Payment.TransactionType.REFUND:
-        return fail('Cannot refund a refund record', status_code=400)
-
-    already_refunded = Payment.objects.filter(
-        reverses_payment=original,
-        transaction_type=Payment.TransactionType.REFUND,
-    ).aggregate(total=Sum('amount'))['total'] or 0
-
-    available_to_refund = original.amount - already_refunded
-    if available_to_refund <= 0:
-        return fail('Payment has already been fully refunded', status_code=400)
-
-    raw_amount = request.data.get('amount')
-    if raw_amount is not None:
-        try:
-            refund_amount = int(raw_amount)
-            if refund_amount <= 0:
-                raise ValueError()
-        except (ValueError, TypeError):
-            return fail('Valid positive refund amount is required', status_code=400)
-        if refund_amount > available_to_refund:
-            return fail(f'Refund amount exceeds available refundable amount ({available_to_refund})', status_code=400)
-    else:
-        refund_amount = available_to_refund
-
-    comment = str(request.data.get('comment') or f'Возврат по платежу #{original.id}').strip()
-
-    refund = Payment.objects.create(
-        company=company,
-        student=original.student,
-        group=original.group,
-        course=original.course,
-        teacher=original.teacher,
-        student_name=original.student_name,
-        amount=refund_amount,
-        gross_amount=refund_amount,
-        net_amount=refund_amount,
-        discount_amount=0,
-        transaction_type=Payment.TransactionType.REFUND,
-        reverses_payment=original,
-        months_covered=original.months_covered,
-        method=original.method,
-        teacher_name=original.teacher_name,
-        comment=comment,
-        created_by=request.user,
-    )
-
-    if original.student:
-        from crm.services import sync_student_paid_this_month
-        sync_student_paid_this_month(original.student)
-
-    return ok(_serialize_payment(refund), status_code=201)
-
-
-    qs = Payment.objects.filter(company=company).select_related('created_by', 'student').order_by('-created_at')
-    qs = _finance_date_filter(qs, request.query_params)
+    # GET: return list of payments
+    qs = Payment.objects.filter(company=company).select_related('created_by', 'student').order_by('-payment_date', '-created_at')
+    date_from = request.query_params.get('date_from')
+    if date_from:
+        qs = qs.filter(Q(payment_date__gte=date_from) | Q(payment_date__isnull=True, created_at__date__gte=date_from))
+    date_to = request.query_params.get('date_to')
+    if date_to:
+        qs = qs.filter(Q(payment_date__lte=date_to) | Q(payment_date__isnull=True, created_at__date__lte=date_to))
     method = request.query_params.get('method')
     if method:
         qs = qs.filter(method=method)
@@ -634,12 +612,86 @@ def payment_refund(request, payment_id: int):
     return ok([_serialize_payment(payment) for payment in qs[:200]])
 
 
+@api_view(['POST'])
+def payment_refund(request, payment_id: int):
+    company = _company(request)
+    if company is None:
+        return fail('Company not found', status_code=404)
+
+    with transaction.atomic():
+        try:
+            original = Payment.objects.select_for_update().get(pk=payment_id, company=company)
+        except Payment.DoesNotExist:
+            return fail('Payment not found', status_code=404)
+
+        if original.transaction_type == Payment.TransactionType.REFUND:
+            return fail('Cannot refund a refund record', status_code=400)
+
+        already_refunded = Payment.objects.filter(
+            reverses_payment=original,
+            transaction_type=Payment.TransactionType.REFUND,
+        ).aggregate(total=Sum('amount'))['total'] or 0
+
+        available_to_refund = original.amount - already_refunded
+        if available_to_refund <= 0:
+            return fail('Payment has already been fully refunded', status_code=400)
+
+        raw_amount = request.data.get('amount')
+        if raw_amount is not None:
+            try:
+                refund_amount = int(raw_amount)
+                if refund_amount <= 0:
+                    raise ValueError()
+            except (ValueError, TypeError):
+                return fail('Valid positive refund amount is required', status_code=400)
+            if refund_amount > available_to_refund:
+                return fail(f'Refund amount exceeds available refundable amount ({available_to_refund})', status_code=400)
+        else:
+            refund_amount = available_to_refund
+
+        comment = str(request.data.get('comment') or f'Возврат по платежу #{original.id}').strip()
+
+        refund = Payment.objects.create(
+            company=company,
+            student=original.student,
+            group=original.group,
+            course=original.course,
+            teacher=original.teacher,
+            student_name=original.student_name,
+            amount=refund_amount,
+            gross_amount=refund_amount,
+            net_amount=refund_amount,
+            discount_amount=0,
+            transaction_type=Payment.TransactionType.REFUND,
+            reverses_payment=original,
+            months_covered=0,
+            payment_date=timezone.localdate(),
+            method=original.method,
+            teacher_name=original.teacher_name,
+            comment=comment,
+            created_by=request.user,
+        )
+
+        if original.student:
+            from crm.services import sync_student_paid_this_month
+            sync_student_paid_this_month(original.student)
+
+        return ok(_serialize_payment(refund), status_code=201)
+
+
 @api_view(['GET', 'PATCH', 'DELETE'])
-@permission_classes([IsAuthenticated])
 def payment_detail(request, payment_id: int):
     company = _company(request)
     if company is None:
         return fail('Company not found', status_code=404)
+
+    is_ceo = (get_effective_role(request.user) == ROLE_CEO or request.user.is_superuser)
+    if request.method in ('PATCH', 'DELETE'):
+        if not is_ceo and not user_has_permission(request.user, PERM_FINANCE_WRITE):
+            return fail('Permission denied', status_code=403)
+    else:
+        if not is_ceo and not user_has_permission(request.user, PERM_FINANCE_VIEW):
+            return fail('Permission denied', status_code=403)
 
     try:
         payment = Payment.objects.select_related('created_by', 'student').get(pk=payment_id, company=company)
@@ -650,11 +702,14 @@ def payment_detail(request, payment_id: int):
         return ok(_serialize_payment(payment))
 
     if request.method == 'DELETE':
-        student = payment.student
-        payment.delete()
-        if student:
-            from crm.services import sync_student_paid_this_month
-            sync_student_paid_this_month(student)
+        if payment.reversals.exists():
+            return fail('Cannot delete a payment that has reversals or refunds', status_code=400)
+        with transaction.atomic():
+            student = payment.student
+            payment.delete()
+            if student:
+                from crm.services import sync_student_paid_this_month
+                sync_student_paid_this_month(student)
         return ok({'deleted': True})
 
     old_student = payment.student
@@ -677,7 +732,10 @@ def payment_detail(request, payment_id: int):
         payment.student_name = student_name
     if 'amount' in request.data or 'sum' in request.data:
         try:
-            payment.amount = int(request.data.get('amount') or request.data.get('sum'))
+            amt = int(request.data.get('amount') or request.data.get('sum'))
+            if amt <= 0:
+                return fail('Valid positive amount is required')
+            payment.amount = amt
         except (TypeError, ValueError):
             return fail('Valid amount is required')
     if 'months_covered' in request.data:
@@ -695,20 +753,20 @@ def payment_detail(request, payment_id: int):
     if 'comment' in request.data:
         payment.comment = str(request.data.get('comment') or '').strip()
 
-    payment.save()
-    payment.refresh_from_db()
+    with transaction.atomic():
+        payment.save()
+        payment.refresh_from_db()
 
-    from crm.services import sync_student_paid_this_month
-    if old_student and old_student != payment.student:
-        sync_student_paid_this_month(old_student)
-    if payment.student:
-        sync_student_paid_this_month(payment.student)
+        from crm.services import sync_student_paid_this_month
+        if old_student and old_student != payment.student:
+            sync_student_paid_this_month(old_student)
+        if payment.student:
+            sync_student_paid_this_month(payment.student)
 
     return ok(_serialize_payment(payment))
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
 def student_payments(request, student_id: int):
     company = _company(request)
     if company is None:
@@ -750,7 +808,6 @@ def _serialize_withdrawal(withdrawal: Withdrawal) -> dict:
 
 
 @api_view(['GET', 'POST'])
-@permission_classes([IsAuthenticated])
 def withdraws(request):
     company = _company(request)
     if company is None:
@@ -762,8 +819,10 @@ def withdraws(request):
             return fail('Name is required')
         try:
             amount = int(request.data.get('amount') or request.data.get('sum'))
+            if amount <= 0:
+                raise ValueError()
         except (TypeError, ValueError):
-            return fail('Valid amount is required')
+            return fail('Valid positive amount is required')
 
         withdrawal = Withdrawal.objects.create(
             company=company,
@@ -784,7 +843,6 @@ def withdraws(request):
 
 
 @api_view(['GET', 'PATCH', 'DELETE'])
-@permission_classes([IsAuthenticated])
 def withdrawal_detail(request, withdrawal_id: int):
     company = _company(request)
     if company is None:
@@ -809,9 +867,12 @@ def withdrawal_detail(request, withdrawal_id: int):
         withdrawal.name = name
     if 'amount' in request.data or 'sum' in request.data:
         try:
-            withdrawal.amount = int(request.data.get('amount') or request.data.get('sum'))
+            amount = int(request.data.get('amount') or request.data.get('sum'))
+            if amount <= 0:
+                raise ValueError()
+            withdrawal.amount = amount
         except (TypeError, ValueError):
-            return fail('Valid amount is required')
+            return fail('Valid positive amount is required')
     if 'comment' in request.data:
         withdrawal.comment = str(request.data.get('comment') or '').strip()
 
@@ -838,7 +899,6 @@ def _serialize_expense(expense: Expense) -> dict:
 
 
 @api_view(['GET', 'POST'])
-@permission_classes([IsAuthenticated])
 def expense_list(request):
     company = _company(request)
     if company is None:
@@ -847,8 +907,10 @@ def expense_list(request):
     if request.method == 'POST':
         try:
             amount = int(request.data.get('amount') or request.data.get('sum'))
+            if amount <= 0:
+                raise ValueError()
         except (TypeError, ValueError):
-            return fail('Valid amount is required')
+            return fail('Valid positive amount is required')
         method = str(request.data.get('method') or Expense.Method.CASH).strip().lower()
         if method not in {choice[0] for choice in Expense.Method.choices}:
             return fail('Invalid payment method')
@@ -888,7 +950,6 @@ def expense_list(request):
 
 
 @api_view(['GET', 'PATCH', 'DELETE'])
-@permission_classes([IsAuthenticated])
 def expense_detail(request, expense_id: int):
     company = _company(request)
     if company is None:
@@ -908,9 +969,12 @@ def expense_detail(request, expense_id: int):
 
     if 'amount' in request.data or 'sum' in request.data:
         try:
-            expense.amount = int(request.data.get('amount') or request.data.get('sum'))
+            amount = int(request.data.get('amount') or request.data.get('sum'))
+            if amount <= 0:
+                raise ValueError()
+            expense.amount = amount
         except (TypeError, ValueError):
-            return fail('Valid amount is required')
+            return fail('Valid positive amount is required')
     if 'method' in request.data:
         method = str(request.data.get('method')).strip().lower()
         if method not in {choice[0] for choice in Expense.Method.choices}:
@@ -936,7 +1000,6 @@ def expense_detail(request, expense_id: int):
 
 
 @api_view(['GET', 'POST'])
-@permission_classes([IsAuthenticated])
 def expense_types(request):
     company = _company(request)
     if company is None:
@@ -954,7 +1017,6 @@ def expense_types(request):
 
 
 @api_view(['PATCH', 'DELETE'])
-@permission_classes([IsAuthenticated])
 def expense_type_detail(request, category_id: int):
     company = _company(request)
     if company is None:
@@ -1187,7 +1249,6 @@ def salary_setting_detail(request, setting_id: int):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
 def report_conversion(request):
     company = _company(request)
     if company is None:
@@ -1980,7 +2041,6 @@ def teacher_attendance_self_checkin(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
 def report_leads(request):
     company = _company(request)
     if company is None:
@@ -2163,7 +2223,6 @@ def _left_students_summary(qs) -> dict:
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
 def report_left_students(request):
     company = _company(request)
     if company is None:
@@ -2280,7 +2339,6 @@ VALID_WORKLY_STATUSES = {choice[0] for choice in WorklyRecord.Status.choices}
 
 
 @api_view(['GET', 'POST'])
-@permission_classes([IsAuthenticated])
 def report_workly(request):
     company = _company(request)
     if company is None:
@@ -2354,7 +2412,6 @@ def report_workly(request):
 
 
 @api_view(['GET', 'PATCH', 'DELETE'])
-@permission_classes([IsAuthenticated])
 def workly_detail(request, record_id: int):
     company = _company(request)
     if company is None:
@@ -2392,13 +2449,17 @@ def workly_detail(request, record_id: int):
 
 
 @api_view(['GET', 'POST'])
-@permission_classes([IsAuthenticated])
 def company_settings(request):
     company = _company(request)
     if company is None:
         return fail('No company', 400)
 
+    is_ceo = (get_effective_role(request.user) == ROLE_CEO or request.user.is_superuser)
+
     if request.method == 'POST':
+        if not is_ceo and not user_has_permission(request.user, PERM_SETTINGS_COMPANY):
+            return fail('Only administrators can update company settings', status_code=403)
+
         for field in ('name', 'phone', 'address', 'timezone', 'currency'):
             if field in request.data:
                 setattr(company, field, request.data[field])
@@ -2406,8 +2467,6 @@ def company_settings(request):
             company.sms_enabled = bool(request.data['sms_enabled'])
         if 'sms_advance_text' in request.data:
             company.sms_advance_text = str(request.data['sms_advance_text'] or '').strip()
-        if 'balance_mode' in request.data:
-            company.balance_mode = int(request.data['balance_mode'])
         if 'voip_enabled' in request.data:
             company.voip_enabled = bool(request.data['voip_enabled'])
         if 'voip_gateway' in request.data:
@@ -2420,8 +2479,15 @@ def company_settings(request):
             company.grade_scale_max = max(1, int(request.data['grade_scale_max']))
         for gw_field in ('click_service_id', 'click_merchant_id', 'click_secret_key', 'payme_merchant_id', 'payme_secret_key', 'uzum_merchant_id'):
             if gw_field in request.data:
-                setattr(company, gw_field, str(request.data[gw_field] or '').strip())
+                if 'secret' in gw_field and not is_ceo:
+                    continue
+                val = str(request.data[gw_field] or '').strip()
+                if val and val != '***':
+                    setattr(company, gw_field, val)
         company.save()
+
+    click_secret_key = company.click_secret_key if is_ceo else ('***' if company.click_secret_key else '')
+    payme_secret_key = company.payme_secret_key if is_ceo else ('***' if company.payme_secret_key else '')
 
     return ok({
         'id': company.id,
@@ -2433,7 +2499,7 @@ def company_settings(request):
         'work_end_time': str(company.work_end_time) if company.work_end_time else None,
         'timezone': company.timezone,
         'currency': company.currency,
-        'balance_mode': company.balance_mode,
+        'balance_mode': 1,
         'sms_enabled': company.sms_enabled,
         'sms_advance_text': company.sms_advance_text,
         'voip_enabled': company.voip_enabled,
@@ -2443,9 +2509,9 @@ def company_settings(request):
         'grade_scale_max': company.grade_scale_max,
         'click_service_id': company.click_service_id,
         'click_merchant_id': company.click_merchant_id,
-        'click_secret_key': company.click_secret_key,
+        'click_secret_key': click_secret_key,
         'payme_merchant_id': company.payme_merchant_id,
-        'payme_secret_key': company.payme_secret_key,
+        'payme_secret_key': payme_secret_key,
         'uzum_merchant_id': company.uzum_merchant_id,
         'tabs': [
             'General settings', 'Payment methods', 'Sign in', 'Lead form',
@@ -2456,7 +2522,6 @@ def company_settings(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
 def report_pnl(request):
     company = _company(request)
     if company is None:
@@ -2471,11 +2536,15 @@ def report_pnl(request):
     withdrawals_qs = Withdrawal.objects.filter(company=company)
 
     if date_from:
-        payments_qs = payments_qs.filter(created_at__date__gte=date_from)
+        payments_qs = payments_qs.filter(
+            Q(payment_date__gte=date_from) | Q(payment_date__isnull=True, created_at__date__gte=date_from)
+        )
         expenses_qs = expenses_qs.filter(created_at__date__gte=date_from)
         withdrawals_qs = withdrawals_qs.filter(created_at__date__gte=date_from)
     if date_to:
-        payments_qs = payments_qs.filter(created_at__date__lte=date_to)
+        payments_qs = payments_qs.filter(
+            Q(payment_date__lte=date_to) | Q(payment_date__isnull=True, created_at__date__lte=date_to)
+        )
         expenses_qs = expenses_qs.filter(created_at__date__lte=date_to)
         withdrawals_qs = withdrawals_qs.filter(created_at__date__lte=date_to)
 
@@ -2486,7 +2555,14 @@ def report_pnl(request):
         except (ValueError, TypeError):
             pass
 
-    total_revenue = payments_qs.aggregate(total=Sum('amount'))['total'] or 0
+    total_paid = payments_qs.filter(
+        transaction_type=Payment.TransactionType.PAYMENT
+    ).aggregate(total=Sum('amount'))['total'] or 0
+    total_refunded = payments_qs.filter(
+        transaction_type=Payment.TransactionType.REFUND
+    ).aggregate(total=Sum('amount'))['total'] or 0
+    total_revenue = max(0, total_paid - total_refunded)
+
     total_expenses = expenses_qs.aggregate(total=Sum('amount'))['total'] or 0
     total_withdrawals = withdrawals_qs.aggregate(total=Sum('amount'))['total'] or 0
     net_profit = total_revenue - total_expenses
@@ -2494,7 +2570,13 @@ def report_pnl(request):
 
     revenue_by_method = []
     for method_code, method_name in Payment.Method.choices:
-        amount = payments_qs.filter(method=method_code).aggregate(total=Sum('amount'))['total'] or 0
+        paid_m = payments_qs.filter(
+            method=method_code, transaction_type=Payment.TransactionType.PAYMENT
+        ).aggregate(total=Sum('amount'))['total'] or 0
+        refunded_m = payments_qs.filter(
+            method=method_code, transaction_type=Payment.TransactionType.REFUND
+        ).aggregate(total=Sum('amount'))['total'] or 0
+        amount = max(0, paid_m - refunded_m)
         revenue_by_method.append({
             'method': method_code,
             'label': method_name,

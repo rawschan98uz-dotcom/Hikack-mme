@@ -75,15 +75,15 @@ The application will open at `http://localhost:5173`.
 
 ---
 
-## 🔑 Default CEO Credentials
+## 🔑 Initial Setup & Administration
 
-To log in to a newly deployed or cleaned system:
+To configure the initial administrator account in a newly deployed environment:
 
-| Parameter | Value |
-|---|---|
-| **Phone / Login** | `946263200` |
-| **Password** | `HiJack2024!` |
-| **Role** | CEO / Administrator |
+Run the management command in the backend directory:
+```powershell
+python manage.py createsuperuser
+```
+Or configure initial credentials via secure environment variables during deployment.
 
 ---
 

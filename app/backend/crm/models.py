@@ -110,6 +110,7 @@ class Student(models.Model):
     trial_date = models.DateField(null=True, blank=True)
     payment_offset = models.IntegerField(default=0)
     left_at = models.DateTimeField(null=True, blank=True)
+    frozen_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     @property
@@ -125,9 +126,17 @@ class Student(models.Model):
                     self.left_at = timezone.now()
             elif self.status not in left_statuses:
                 self.left_at = None
+
+            if self.status == self.Status.FROZEN and old_status != self.Status.FROZEN:
+                if not self.frozen_at:
+                    self.frozen_at = timezone.now()
+            elif self.status != self.Status.FROZEN:
+                self.frozen_at = None
         else:
             if self.status in left_statuses and not self.left_at:
                 self.left_at = timezone.now()
+            if self.status == self.Status.FROZEN and not self.frozen_at:
+                self.frozen_at = timezone.now()
 
         if not self.telegram_code:
             alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'

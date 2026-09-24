@@ -9,6 +9,7 @@ from accounts.models import User
 # ---------------------------------------------------------------------------
 
 PERM_DASHBOARD_VIEW = 'dashboard.view'
+PERM_DENIED = '__denied__'
 
 PERM_LEADS_VIEW = 'leads.view'
 PERM_LEADS_WRITE = 'leads.write'
@@ -130,6 +131,7 @@ ROLE_LIMITED_ADMIN = 'limited_admin'
 ROLE_MARKETER = 'marketer'
 ROLE_CASHIER = 'cashier'
 ROLE_TEACHER = 'teacher'
+ROLE_STUDENT = 'student'
 
 ROLE_LABELS: dict[str, str] = {
     ROLE_CEO: 'CEO',
@@ -139,6 +141,7 @@ ROLE_LABELS: dict[str, str] = {
     ROLE_MARKETER: 'Marketer',
     ROLE_CASHIER: 'Cashier',
     ROLE_TEACHER: 'Teacher',
+    ROLE_STUDENT: 'Student',
 }
 
 _ADMIN_OFFICE: frozenset[str] = frozenset(
@@ -239,6 +242,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
             PERM_PROFILE_EDIT,
         },
     ),
+    ROLE_STUDENT: frozenset(),
 }
 
 
@@ -247,11 +251,11 @@ def get_effective_role(user: User) -> str:
         return ROLE_CEO
     if user.user_type == User.UserType.TEACHER:
         return ROLE_TEACHER
-    if user.staff_role:
+    if user.user_type == User.UserType.STUDENT:
+        return ROLE_STUDENT
+    if user.staff_role and user.staff_role in ROLE_PERMISSIONS:
         return user.staff_role
-    if user.user_type == User.UserType.STAFF:
-        return ROLE_ADMINISTRATOR
-    return ROLE_ADMINISTRATOR
+    return ROLE_LIMITED_ADMIN
 
 
 def get_role_label(role: str) -> str:
@@ -267,6 +271,8 @@ def get_user_permissions(user: User) -> frozenset[str]:
 
 
 def user_has_permission(user: User, permission: str | None) -> bool:
+    if permission == PERM_DENIED:
+        return False
     if permission is None:
         return True
     if not user or not user.is_authenticated:

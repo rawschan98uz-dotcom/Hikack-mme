@@ -5,7 +5,7 @@ from org.models import Branch, Company, Room
 
 @admin.register(Company)
 class CompanyAdmin(admin.ModelAdmin):
-    list_display = ('name', 'subdomain', 'balance_mode', 'phone')
+    list_display = ('name', 'subdomain', 'phone')
     search_fields = ('name', 'subdomain')
 
 

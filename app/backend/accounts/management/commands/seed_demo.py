@@ -34,7 +34,6 @@ class Command(BaseCommand):
             subdomain='ravvatech',
             defaults={
                 'name': 'Hi Jack LMS',
-                'balance_mode': Company.PaymentMode.DAILY,
                 'phone': '946263200',
                 'address': 'Tashkent, Uzbekistan',
                 'work_start_time': time(9, 0),

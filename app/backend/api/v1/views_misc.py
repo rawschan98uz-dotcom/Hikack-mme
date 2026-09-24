@@ -107,7 +107,6 @@ def _apply_reminder_fields(reminder: Reminder, company, data: dict) -> str | Non
 
 
 @api_view(['GET', 'POST'])
-@permission_classes([IsAuthenticated])
 def reminder_index(request):
     company = _company(request)
     if company is None:
@@ -155,7 +154,6 @@ def reminder_index(request):
 
 
 @api_view(['GET', 'PATCH', 'DELETE'])
-@permission_classes([IsAuthenticated])
 def reminder_detail(request, reminder_id: int):
     company = _company(request)
     if company is None:
@@ -185,7 +183,6 @@ def reminder_detail(request, reminder_id: int):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
 def reminder_complete(request, reminder_id: int):
     company = _company(request)
     if company is None:
@@ -298,7 +295,6 @@ def _score_queryset(company, params):
 
 
 @api_view(['GET', 'POST'])
-@permission_classes([IsAuthenticated])
 def scores_branch(request):
     company = _company(request)
     if company is None:
@@ -375,7 +371,6 @@ def scores_branch(request):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
 def scores_bulk(request):
     """Bulk grading for a whole group at once."""
     company = _company(request)
@@ -431,7 +426,6 @@ def scores_bulk(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
 def scores_groups(request):
     """Returns group leaderboard: average grade per group, course, teacher, student counts, pass rate."""
     company = _company(request)
@@ -503,7 +497,6 @@ def scores_groups(request):
 
 
 @api_view(['GET', 'PATCH', 'DELETE'])
-@permission_classes([IsAuthenticated])
 def score_detail(request, score_id: int):
     company = _company(request)
     if company is None:
@@ -571,7 +564,6 @@ def score_detail(request, score_id: int):
 
 
 @api_view(['GET', 'POST'])
-@permission_classes([IsAuthenticated])
 def room_list(request):
     company = _company(request)
     if company is None:
@@ -611,7 +603,6 @@ def _serialize_room(room: Room) -> dict:
 
 
 @api_view(['GET', 'PATCH', 'DELETE'])
-@permission_classes([IsAuthenticated])
 def room_detail(request, room_id: int):
     company = _company(request)
     if company is None:
@@ -666,7 +657,6 @@ def _serialize_holiday(holiday: Holiday) -> dict:
 
 
 @api_view(['GET', 'POST'])
-@permission_classes([IsAuthenticated])
 def holiday_list(request):
     company = _company(request)
     if company is None:
@@ -705,7 +695,6 @@ def holiday_list(request):
 
 
 @api_view(['GET', 'PATCH', 'DELETE'])
-@permission_classes([IsAuthenticated])
 def holiday_detail(request, holiday_id: int):
     company = _company(request)
     if company is None:
@@ -751,7 +740,6 @@ def holiday_detail(request, holiday_id: int):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
 def archive_reasons(request):
     company = _company(request)
     if company is None:
@@ -807,7 +795,6 @@ def _archive_queryset(company, params):
 
 
 @api_view(['GET', 'POST'])
-@permission_classes([IsAuthenticated])
 def archive_list(request):
     company = _company(request)
     if company is None:
@@ -842,7 +829,6 @@ def archive_list(request):
 
 
 @api_view(['GET', 'DELETE'])
-@permission_classes([IsAuthenticated])
 def archive_detail(request, person_id: int):
     company = _company(request)
     if company is None:
@@ -860,7 +846,6 @@ def archive_detail(request, person_id: int):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
 def archive_restore(request, person_id: int):
     company = _company(request)
     if company is None:
@@ -878,7 +863,6 @@ def archive_restore(request, person_id: int):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
 def archive_bulk(request):
     company = _company(request)
     if company is None:
@@ -907,7 +891,6 @@ def archive_bulk(request):
 
 
 @api_view(['GET', 'POST'])
-@permission_classes([IsAuthenticated])
 def tags_list(request):
     company = _company(request)
     if company is None:
@@ -932,7 +915,6 @@ def _serialize_tag(tag: Tag) -> dict:
 
 
 @api_view(['GET', 'PATCH', 'DELETE'])
-@permission_classes([IsAuthenticated])
 def tag_detail(request, tag_id: int):
     company = _company(request)
     if company is None:
@@ -963,7 +945,6 @@ def tag_detail(request, tag_id: int):
 
 
 @api_view(['GET', 'POST'])
-@permission_classes([IsAuthenticated])
 def lead_form_list(request):
     company = _company(request)
     if company is None:
@@ -988,7 +969,6 @@ def _serialize_lead_form(form: LeadForm) -> dict:
 
 
 @api_view(['GET', 'PATCH', 'DELETE'])
-@permission_classes([IsAuthenticated])
 def lead_form_detail(request, form_id: int):
     company = _company(request)
     if company is None:
@@ -1019,7 +999,6 @@ def lead_form_detail(request, form_id: int):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
 def sms_report(request):
     company = _company(request)
     if company is None:
@@ -1037,7 +1016,6 @@ def sms_report(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
 def call_logs(request):
     company = _company(request)
     if company is None:
@@ -1058,7 +1036,6 @@ def call_logs(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
 def activity_logs(request):
     company = _company(request)
     if company is None:
@@ -1075,7 +1052,6 @@ def activity_logs(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
 def company_platform_payments(request, company_id: int):
     company = _company(request)
     if company is None or company.id != company_id:

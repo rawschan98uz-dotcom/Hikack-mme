@@ -22,7 +22,6 @@ def _company(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
 def student_payment_links(request, student_id: int):
     company = _company(request)
     if company is None:
@@ -46,7 +45,6 @@ def student_payment_links(request, student_id: int):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
 def student_send_payment_link(request, student_id: int):
     company = _company(request)
     if company is None:

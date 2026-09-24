@@ -8,6 +8,11 @@ _on_railway = bool(os.environ.get('RAILWAY_ENVIRONMENT') or os.environ.get('RAIL
 
 SECRET_KEY = os.environ.get('SECRET_KEY', 'dev-only-change-in-production-hijack-mme')
 DEBUG = os.environ.get('DEBUG', 'false').lower() in ('1', 'true', 'yes')
+
+if not DEBUG and (_on_railway or os.environ.get('DJANGO_ENV') == 'production'):
+    if SECRET_KEY == 'dev-only-change-in-production-hijack-mme':
+        raise RuntimeError("CRITICAL SECURITY: SECRET_KEY environment variable is required in production!")
+
 ALLOWED_HOSTS = [
     host.strip()
     for host in os.environ.get('ALLOWED_HOSTS', '*').split(',')

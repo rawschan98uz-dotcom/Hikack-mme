@@ -32,7 +32,7 @@ class Group(models.Model):
         CUSTOM = 5, 'Other'
 
     company = models.ForeignKey('org.Company', on_delete=models.CASCADE, related_name='groups')
-    branch = models.ForeignKey('org.Branch', on_delete=models.CASCADE, related_name='groups')
+    branch = models.ForeignKey('org.Branch', on_delete=models.PROTECT, related_name='groups')
     course = models.ForeignKey(Course, on_delete=models.SET_NULL, null=True, related_name='groups')
     room = models.ForeignKey(
         'org.Room',
@@ -50,6 +50,8 @@ class Group(models.Model):
     )
     name = models.CharField(max_length=255)
     days = models.IntegerField(choices=Days.choices, default=Days.ODD)
+    # Explicit weekdays (0=Mon … 6=Sun), used only when days == CUSTOM.
+    weekdays = models.JSONField(default=list, blank=True)
     status = models.IntegerField(choices=Status.choices, default=Status.ACTIVE)
     lesson_start_time = models.TimeField(null=True, blank=True)
     lesson_end_time = models.TimeField(null=True, blank=True)
@@ -81,14 +83,8 @@ class Student(models.Model):
         LEFT = 8, 'Отчислен / Ушел'
         GRADUATED = 9, 'Завершил курс (Graduated)'
 
-    # Backward-compatible aliases
-    Status.ACTIVE = Status.STUDYING  # type: ignore[attr-defined]
-    Status.TRIAL = Status.STUDYING  # type: ignore[attr-defined]
-    Status.DEBTOR = Status.STUDYING  # type: ignore[attr-defined]
-    Status.LEFT_ACTIVE = Status.LEFT  # type: ignore[attr-defined]
-
     company = models.ForeignKey('org.Company', on_delete=models.CASCADE, related_name='students')
-    branch = models.ForeignKey('org.Branch', on_delete=models.CASCADE, related_name='students')
+    branch = models.ForeignKey('org.Branch', on_delete=models.PROTECT, related_name='students')
     group = models.ForeignKey(Group, on_delete=models.SET_NULL, null=True, blank=True, related_name='students')
     first_name = models.CharField(max_length=150)
     last_name = models.CharField(max_length=150, blank=True)
@@ -104,7 +100,7 @@ class Student(models.Model):
     telegram = models.CharField(max_length=64, blank=True)
     parent_telegram = models.CharField(max_length=64, blank=True)
     telegram_code = models.CharField(max_length=16, null=True, blank=True, unique=True)
-    status = models.IntegerField(choices=Status.choices, default=Status.TRIAL)
+    status = models.IntegerField(choices=Status.choices, default=Status.STUDYING)
     balance = models.IntegerField(default=0)
     paid_this_month = models.BooleanField(default=False)
     trial_date = models.DateField(null=True, blank=True)
@@ -192,6 +188,9 @@ class Lead(models.Model):
     def save(self, *args, **kwargs):
         if self.stage == self.Stage.ATTENDED:
             self.attended_trial = True
+        elif self.stage == self.Stage.TRIAL_BOOKED:
+            # D3: moved back to "trial booked" -> the trial has not happened yet
+            self.attended_trial = False
         super().save(*args, **kwargs)
 
     def __str__(self) -> str:
@@ -290,6 +289,13 @@ class GroupEnrollment(models.Model):
         indexes = [
             models.Index(fields=['company', 'student']),
             models.Index(fields=['group', 'status']),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['student', 'group'],
+                condition=models.Q(left_date__isnull=True),
+                name='uniq_open_enrollment_per_student_group',
+            ),
         ]
 
     def __str__(self) -> str:

@@ -62,6 +62,7 @@ interface GroupRow {
   id: number;
   name: string;
   days: number;
+  weekdays?: number[];
   days_label: string;
   status: number;
   status_label: string;
@@ -108,6 +109,19 @@ const DAYS_OPTIONS = [
   { value: 3, label: 'Weekend days' },
   { value: 4, label: 'Every day' },
   { value: 5, label: 'Other' },
+] as const;
+
+const CUSTOM_DAYS = 5;
+
+/** 0 = Monday … 6 = Sunday (same as backend). */
+const WEEKDAY_OPTIONS = [
+  { value: 0, label: 'Mon' },
+  { value: 1, label: 'Tue' },
+  { value: 2, label: 'Wed' },
+  { value: 3, label: 'Thu' },
+  { value: 4, label: 'Fri' },
+  { value: 5, label: 'Sat' },
+  { value: 6, label: 'Sun' },
 ] as const;
 
 const STATUS_FILTER_OPTIONS: { value: number; label: string }[] = [
@@ -179,6 +193,7 @@ const form = reactive({
   room_id: '' as number | '',
   tag_ids: [] as number[],
   days: 1,
+  weekdays: [] as number[],
   status: 2,
   lesson_start_time: '',
   lesson_end_time: '',
@@ -330,6 +345,7 @@ function resetForm() {
   form.room_id = '';
   form.tag_ids = [];
   form.days = 1;
+  form.weekdays = [];
   form.status = 2;
   form.lesson_start_time = '';
   form.lesson_end_time = '';
@@ -349,6 +365,7 @@ function fillForm(group: GroupRow) {
   form.room_id = group.room_id ?? '';
   form.tag_ids = group.tags.map((tag) => tag.id);
   form.days = group.days;
+  form.weekdays = group.days === CUSTOM_DAYS ? [...(group.weekdays ?? [])] : [];
   form.status = group.status;
   form.lesson_start_time = group.lesson_start_time ?? '';
   form.lesson_end_time = group.lesson_end_time ?? '';
@@ -460,6 +477,7 @@ function buildPayload() {
     room_id: form.room_id === '' ? null : form.room_id,
     tag_ids: form.tag_ids,
     days: form.days,
+    weekdays: form.days === CUSTOM_DAYS ? [...form.weekdays].sort((a, b) => a - b) : [],
     status: form.status,
     lesson_start_time: form.lesson_start_time || null,
     lesson_end_time: form.lesson_end_time || null,
@@ -476,6 +494,10 @@ async function submitGroup() {
   }
   if (!form.branch_id) {
     formError.value = 'Select a branch';
+    return;
+  }
+  if (form.days === CUSTOM_DAYS && !form.weekdays.length) {
+    formError.value = 'Select lesson weekdays';
     return;
   }
 
@@ -954,6 +976,20 @@ onMounted(async () => {
                     {{ option.label }}
                   </option>
                 </select>
+              </div>
+            </div>
+
+            <div v-if="form.days === CUSTOM_DAYS">
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">Lesson weekdays</label>
+              <div class="flex flex-wrap gap-2">
+                <label
+                  v-for="wd in WEEKDAY_OPTIONS"
+                  :key="wd.value"
+                  class="flex items-center gap-1 rounded-lg border border-fb-line px-2 py-1 text-sm"
+                >
+                  <input v-model="form.weekdays" type="checkbox" :value="wd.value" :disabled="isReadOnly" />
+                  {{ wd.label }}
+                </label>
               </div>
             </div>
 

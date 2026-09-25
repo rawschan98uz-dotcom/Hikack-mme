@@ -18,6 +18,8 @@ from accounts.rbac import (
     user_has_permission,
     user_is_teacher,
 )
+from api.archive import archive_teacher
+from finance.salary import find_overlapping_setting, overlap_error, resolve_salary_setting
 from api.responses import fail, ok
 from api.scope import (
     filter_attendance_queryset,
@@ -25,7 +27,7 @@ from api.scope import (
     teacher_can_access_attendance,
     teacher_can_access_group,
 )
-from api.utils import normalize_phone, safe_int, parse_date_safe
+from api.utils import name_taken, normalize_phone, safe_int, parse_date_safe
 from crm.models import AttendanceRecord, Group, Lead, Student
 from operations.models import TeacherAttendanceRecord, WorklyRecord, log_audit
 from org.models import Branch
@@ -134,8 +136,7 @@ def teacher_detail_view(request, teacher_id: int):
             AttendanceRecord.objects.filter(group__teacher=teacher).exists()
         )
         if has_history:
-            teacher.is_active = False
-            teacher.save(update_fields=['is_active'])
+            archive_teacher(company, teacher, reason='Deleted with history')
             return ok({'deleted': True, 'archived': True})
 
         Group.objects.filter(teacher=teacher).update(teacher=None)
@@ -771,6 +772,8 @@ def student_payments(request, student_id: int):
     company = _company(request)
     if company is None:
         return fail('Company not found', status_code=404)
+    if user_is_teacher(request.user):
+        return fail('Teachers cannot view student payments', status_code=403)
 
     try:
         student = Student.objects.get(pk=student_id, company=company)
@@ -1009,6 +1012,8 @@ def expense_types(request):
         name = str(request.data.get('name') or '').strip()
         if not name:
             return fail('Category name is required')
+        if name_taken(ExpenseCategory.objects.filter(company=company), name):
+            return fail('Такая категория расходов уже есть')
         cat = ExpenseCategory.objects.create(company=company, name=name)
         return ok({'id': cat.id, 'name': cat.name}, status_code=201)
 
@@ -1034,6 +1039,8 @@ def expense_type_detail(request, category_id: int):
     name = str(request.data.get('name') or '').strip()
     if not name:
         return fail('Category name is required')
+    if name_taken(ExpenseCategory.objects.filter(company=company), name, exclude_pk=cat.pk):
+        return fail('Такая категория расходов уже есть')
     cat.name = name
     cat.save()
     return ok({'id': cat.id, 'name': cat.name})
@@ -1121,6 +1128,12 @@ def salary_settings(request):
                 group = Group.objects.get(pk=int(group_id), company=company)
             except (Group.DoesNotExist, TypeError, ValueError):
                 return fail('Invalid group')
+
+        overlapping = find_overlapping_setting(
+            company, teacher, course.id if course else None, group.id if group else None, effective_from, effective_to,
+        )
+        if overlapping:
+            return fail(overlap_error(overlapping))
 
         setting = SalarySetting.objects.create(
             company=company,
@@ -1241,6 +1254,13 @@ def salary_setting_detail(request, setting_id: int):
                 return fail('Invalid group')
     elif 'group_name' in request.data or 'group' in request.data:
         setting.group_name = str(request.data.get('group_name') or request.data.get('group') or '').strip()
+
+    overlapping = find_overlapping_setting(
+        company, setting.teacher, setting.course_id, setting.group_id,
+        setting.effective_from, setting.effective_to, exclude_pk=setting.pk,
+    )
+    if overlapping:
+        return fail(overlap_error(overlapping))
 
     setting.updated_by = request.user
     setting.save()
@@ -1462,30 +1482,33 @@ def report_attendance(request):
                 return fail('Group not found', 404)
 
             saved_count = 0
-            for item in records_data:
-                try:
-                    s_id = int(item.get('student_id'))
-                    st = int(item.get('status', AttendanceRecord.Status.PRESENT))
-                except (TypeError, ValueError):
-                    continue
-                if st not in VALID_ATTENDANCE_STATUSES:
-                    continue
-                note = str(item.get('note') or '').strip()
-                try:
-                    student = Student.objects.get(pk=s_id, company=company)
-                except Student.DoesNotExist:
-                    continue
-                if student.group_id != group.id:
-                    continue
+            # D5: the whole group's attendance is saved all-or-nothing
+            with transaction.atomic():
+                students_map = {
+                    s.id: s for s in Student.objects.filter(company=company, group=group)
+                }
+                for item in records_data:
+                    try:
+                        s_id = int(item.get('student_id'))
+                        st = int(item.get('status', AttendanceRecord.Status.PRESENT))
+                    except (TypeError, ValueError):
+                        continue
+                    if st not in VALID_ATTENDANCE_STATUSES:
+                        continue
+                    note = str(item.get('note') or '').strip()
+                    # D6: same checks as AttendanceRecord.clean() — student must be in this group
+                    student = students_map.get(s_id)
+                    if student is None:
+                        continue
 
-                AttendanceRecord.objects.update_or_create(
-                    company=company,
-                    student=student,
-                    group=group,
-                    attend_date=attend_date,
-                    defaults={'status': st, 'note': note},
-                )
-                saved_count += 1
+                    AttendanceRecord.objects.update_or_create(
+                        company=company,
+                        student=student,
+                        group=group,
+                        attend_date=attend_date,
+                        defaults={'status': st, 'note': note},
+                    )
+                    saved_count += 1
             return ok({
                 'saved': saved_count,
                 'group_id': group.id,
@@ -1660,10 +1683,17 @@ def attendance_detail(request, record_id: int):
     # Core invariant checks
     if record.student.company_id != company.id or record.group.company_id != company.id:
         return fail('Student and group belong to different companies', 400)
-    if record.student.group_id != record.group_id:
+    # D6: membership is checked only when the record is moved to another student/group,
+    # so past attendance of a transferred student can still be corrected.
+    moved = record.student_id != old_val['student_id'] or record.group_id != old_val['group_id']
+    if moved and record.student.group_id != record.group_id:
         return fail('Student does not belong to this group', 400)
     if user_is_teacher(request.user) and record.group.teacher_id != request.user.id:
         return fail('Group not found', 404)
+    if AttendanceRecord.objects.filter(
+        company=company, student_id=record.student_id, group_id=record.group_id, attend_date=record.attend_date,
+    ).exclude(pk=record.pk).exists():
+        return fail('На эту дату у студента уже есть отметка', 400)
 
     record.save()
     new_val = {
@@ -2710,25 +2740,8 @@ def payroll_summary(request):
 
         group_payments = max(0, snap_payments - snap_refunds + legacy_payments)
 
-        # Setting resolution: prefer teacher FK matching effective dates
-        settings_qs = SalarySetting.objects.filter(company=company, teacher=t)
-        effective_settings = [
-            s for s in settings_qs
-            if (s.effective_from is None or s.effective_from <= end_date) and
-               (s.effective_to is None or s.effective_to >= start_date)
-        ]
-        setting = effective_settings[0] if effective_settings else None
-
-        # Fallback to teacher_name matching for legacy settings
-        if not setting:
-            for s in SalarySetting.objects.filter(company=company):
-                if s.teacher_name.strip().lower() == t_name.lower():
-                    if (s.effective_from is None or s.effective_from <= end_date) and \
-                       (s.effective_to is None or s.effective_to >= start_date):
-                        setting = s
-                        break
-            if not setting:
-                setting = settings_qs.first()
+        # D8: one precedence rule shared with payroll_pay
+        setting = resolve_salary_setting(company, t, start_date, end_date)
 
         accrued = 0
         salary_type_label = 'Не настроена'
@@ -2864,19 +2877,8 @@ def payroll_pay(request):
 
     g_payments = max(0, snap_payments - snap_refunds + legacy_payments)
 
-    setting = SalarySetting.objects.filter(
-        company=company, teacher=teacher
-    ).filter(
-        Q(effective_from__isnull=True) | Q(effective_from__lte=end_date)
-    ).filter(
-        Q(effective_to__isnull=True) | Q(effective_to__gte=start_date)
-    ).first()
-
-    if not setting:
-        for s in SalarySetting.objects.filter(company=company):
-            if s.teacher_name.strip().lower() == teacher.display_name().lower():
-                setting = s
-                break
+    # D8: same precedence rule as payroll_summary
+    setting = resolve_salary_setting(company, teacher, start_date, end_date)
 
     accrued = 0
     if setting:
@@ -2908,10 +2910,10 @@ def payroll_pay(request):
             balance=max(0, accrued - already_paid),
         )
 
-    salary_cat, _ = ExpenseCategory.objects.get_or_create(
-        company=company,
-        name='Зарплата',
-    )
+    salary_cat = next(
+        (c for c in ExpenseCategory.objects.filter(company=company) if c.name.strip().casefold() == 'зарплата'),
+        None,
+    ) or ExpenseCategory.objects.create(company=company, name='Зарплата')
 
     with transaction.atomic():
         expense = Expense.objects.create(

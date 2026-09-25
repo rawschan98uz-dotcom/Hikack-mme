@@ -34,10 +34,18 @@ export interface PreviewResult {
   rows: PreviewRow[];
 }
 
+export interface ImportCredentialRow {
+  row: number;
+  phone: string;
+  password: string;
+}
+
 export interface ImportResult {
   created: number;
   skipped: number;
   errors: ImportErrorRow[];
+  /** Auto-generated passwords (staff/teacher import), shown only once. */
+  credentials?: ImportCredentialRow[];
 }
 
 const props = defineProps<{
@@ -347,6 +355,17 @@ async function confirmImport() {
               В базу данных успешно загружено <strong>{{ finalResult.created }}</strong> учеников.
               <span v-if="finalResult.skipped > 0"> Пропущено строк: {{ finalResult.skipped }}.</span>
             </p>
+
+            <div v-if="finalResult.credentials?.length" class="mt-4 rounded-xl border border-sky-200 bg-sky-50 p-4 text-left text-xs max-w-md mx-auto">
+              <div class="font-semibold text-sky-900 mb-1.5">
+                Сгенерированные пароли — сохраните их сейчас, повторно они не показываются:
+              </div>
+              <ul class="space-y-1 text-sky-900 max-h-40 overflow-y-auto font-mono">
+                <li v-for="cred in finalResult.credentials" :key="cred.row">
+                  {{ cred.phone }} — {{ cred.password }}
+                </li>
+              </ul>
+            </div>
 
             <div v-if="finalResult.errors.length" class="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-left text-xs max-w-md mx-auto">
               <div class="font-semibold text-amber-900 mb-1.5">Замечания по строкам:</div>

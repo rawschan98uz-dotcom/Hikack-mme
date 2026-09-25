@@ -14,11 +14,14 @@ def normalize_header(key: str) -> str:
 
 
 def normalize_phone(raw: str) -> str:
+    """Take the first number from a messy cell and bring it to the common 9-digit format (D9)."""
+    from api.utils import normalize_phone as normalize_uz_phone
+
     s = str(raw or '').strip()
     for sep in ('/', ',', ';', '\n', '|'):
         if sep in s:
             s = s.split(sep)[0]
-    return ''.join(ch for ch in s if ch.isdigit())
+    return normalize_uz_phone(s)
 
 
 KNOWN_HEADER_MARKERS = {

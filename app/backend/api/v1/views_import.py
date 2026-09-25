@@ -8,13 +8,13 @@ from rest_framework.permissions import IsAuthenticated
 from django.utils import timezone
 from accounts.models import TeacherBranch, User
 from api.csv_utils import normalize_phone, parse_csv_upload
+from api.utils import capitalize_name
 from api.utils import is_valid_phone, parse_date_safe
 from api.responses import fail, ok
 from api.v1.views_extended import _company, _generate_password, teacher_create
 from crm.models import Group, Lead, Student
 from org.models import Branch
 
-DEFAULT_IMPORT_PASSWORD = '946263200'
 VALID_STAFF_ROLES = {choice[0] for choice in User.StaffRole.choices if choice[0] != User.StaffRole.CEO}
 
 
@@ -39,12 +39,16 @@ def _resolve_branch_ids(company, raw: str) -> list[int]:
     return list(dict.fromkeys(ids))
 
 
-def _import_result(created: int, skipped: int, errors: list[dict]) -> dict:
-    return {
+def _import_result(created: int, skipped: int, errors: list[dict], credentials: list[dict] | None = None) -> dict:
+    result = {
         'created': created,
         'skipped': skipped,
         'errors': errors,
     }
+    if credentials is not None:
+        # Auto-generated passwords, shown once so the CEO can hand them out
+        result['credentials'] = credentials
+    return result
 
 
 @api_view(['POST'])
@@ -78,7 +82,7 @@ def teacher_import(request):
             last_name = parts[1] if len(parts) > 1 else ''
 
         phone = normalize_phone(row.get('phone', ''))
-        password = row.get('password') or DEFAULT_IMPORT_PASSWORD
+        password = row.get('password') or ''
         honorific = row.get('honorific') or 'Mr'
         job_title = row.get('job_title', '')
         branch_raw = row.get('branch_ids') or row.get('branches') or row.get('branch', '')
@@ -191,6 +195,7 @@ def teacher_import(request):
             'rows': preview_rows,
         })
 
+    credentials: list[dict] = []
     for item in valid_payloads:
         row_n = item.pop('row_num')
         class _Req:
@@ -205,8 +210,11 @@ def teacher_import(request):
             continue
 
         created += 1
+        generated = (response.data.get('data') or {}).get('generated_password') if isinstance(response.data, dict) else None
+        if generated:
+            credentials.append({'row': row_n, 'phone': item['phone'], 'password': generated})
 
-    return ok(_import_result(created, skipped, errors))
+    return ok(_import_result(created, skipped, errors, credentials))
 
 
 @api_view(['POST'])
@@ -222,6 +230,7 @@ def staff_import(request):
     created = 0
     skipped = 0
     errors: list[dict] = []
+    credentials: list[dict] = []
 
     for row in rows:
         row_num = int(row.get('_row', 0))
@@ -233,7 +242,10 @@ def staff_import(request):
             last_name = parts[1] if len(parts) > 1 else ''
 
         phone = normalize_phone(row.get('phone', ''))
-        password = row.get('password') or DEFAULT_IMPORT_PASSWORD
+        password = row.get('password') or ''
+        generated_password = not password
+        if generated_password:
+            password = _generate_password()
         job_title = row.get('job_title', '')
         staff_role = (row.get('staff_role') or row.get('role') or User.StaffRole.ADMINISTRATOR).lower()
 
@@ -266,8 +278,10 @@ def staff_import(request):
             job_title=job_title,
         )
         created += 1
+        if generated_password:
+            credentials.append({'row': row_num, 'phone': phone, 'password': password})
 
-    return ok(_import_result(created, skipped, errors))
+    return ok(_import_result(created, skipped, errors, credentials))
 
 
 @api_view(['POST'])
@@ -375,8 +389,8 @@ def student_import(request):
                 first_name = parts[0]
                 last_name = parts[1]
 
-        first_name = str(first_name or '').strip()
-        last_name = str(last_name or '').strip()
+        first_name = capitalize_name(first_name)
+        last_name = capitalize_name(last_name)
 
         phone = normalize_phone(
             row.get('phone')

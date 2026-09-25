@@ -1,4 +1,5 @@
 from django.db import models
+from django.db.models.functions import Lower
 
 
 class Company(models.Model):
@@ -44,20 +45,26 @@ class Branch(models.Model):
 
     class Meta:
         verbose_name_plural = 'branches'
+        constraints = [
+            models.UniqueConstraint(Lower('name'), 'company', name='uniq_branch_name_per_company'),
+        ]
 
     def __str__(self) -> str:
         return self.name
 
 
 class Room(models.Model):
+    # D2: real FK instead of a property through branch; always equals branch.company
+    company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name='rooms')
     branch = models.ForeignKey(Branch, on_delete=models.CASCADE, related_name='rooms')
     name = models.CharField(max_length=255)
     capacity = models.PositiveIntegerField(default=20)
     created_at = models.DateTimeField(auto_now_add=True)
 
-    @property
-    def company(self):
-        return self.branch.company
+    def save(self, *args, **kwargs):
+        if self.branch_id and self.company_id != self.branch.company_id:
+            self.company_id = self.branch.company_id
+        super().save(*args, **kwargs)
 
     def __str__(self) -> str:
         return self.name

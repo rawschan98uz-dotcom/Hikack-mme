@@ -287,7 +287,7 @@ onMounted(loadRows);
       template-filename="staff-import-template.csv"
       :template-header="['first_name', 'last_name', 'phone', 'password', 'job_title', 'staff_role']"
       :template-example="['Kamola', 'Yusupova', '901002010', 'demo1234', 'Administrator', 'administrator']"
-      columns-help="Required: first_name, phone. Optional: last_name, password (default demo1234), job_title, staff_role (administrator, marketer, cashier, branch_director, limited_admin)."
+      columns-help="Required: first_name, phone. Optional: last_name, password (auto-generated if empty), job_title, staff_role (administrator, marketer, cashier, branch_director, limited_admin)."
       @imported="loadRows"
     />
   </div>

@@ -3,6 +3,8 @@ export interface ScheduleRow {
   name: string;
   days: number;
   days_key: 'odd' | 'even' | 'other';
+  /** Real lesson weekdays, 0 = Monday … 6 = Sunday. */
+  weekdays?: number[];
   days_label: string;
   time: string;
   teacher: string;

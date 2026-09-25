@@ -6,8 +6,8 @@ from accounts.models import User
 from crm.models import AttendanceRecord, Course, Group, Lead, Student
 from finance.models import Expense, ExpenseCategory, Payment, SalarySetting, Withdrawal
 from operations.models import (
-    ActivityLog,
     ArchiveReason,
+    AuditLogRecord,
     ArchivedPerson,
     CallLog,
     Holiday,
@@ -108,7 +108,7 @@ class Command(BaseCommand):
         WorklyRecord.objects.filter(company=company).delete()
         SmsLog.objects.filter(company=company).delete()
         CallLog.objects.filter(company=company).delete()
-        ActivityLog.objects.filter(company=company).delete()
+        AuditLogRecord.objects.filter(company=company).delete()
         PlatformPayment.objects.filter(company=company).delete()
         Holiday.objects.filter(company=company).delete()
 

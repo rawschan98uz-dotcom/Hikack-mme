@@ -1,5 +1,6 @@
 from django.conf import settings
 from django.db import models
+from django.db.models.functions import Lower
 
 
 class Payment(models.Model):
@@ -91,6 +92,11 @@ class Withdrawal(models.Model):
 class ExpenseCategory(models.Model):
     company = models.ForeignKey('org.Company', on_delete=models.CASCADE, related_name='expense_categories')
     name = models.CharField(max_length=255)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(Lower('name'), 'company', name='uniq_expense_category_per_company'),
+        ]
 
     def __str__(self) -> str:
         return self.name

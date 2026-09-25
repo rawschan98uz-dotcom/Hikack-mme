@@ -243,3 +243,50 @@ def validate_course_code(code):
         return False, 'Code must be 2-15 characters (letters, numbers, - or _)'
     
     return True, None
+
+
+# ═══════════════════════════════════════════════════════════
+# 🔤 ИМЕНА
+# ═══════════════════════════════════════════════════════════
+
+# Patronymic particles that must stay lowercase ("Ali Valiyev o'g'li").
+NAME_PARTICLES = {
+    "o'g'li", "o‘g‘li", "og'li", "ogli", "ugli", "o'gli",
+    'qizi', 'kizi', 'қизи', 'ўғли',
+    'оглы', 'огли', 'угли', 'кызы', 'кизи',
+}
+
+_APOSTROPHES = "'‘’`ʻʼ"
+
+
+def _capitalize_word(word: str) -> str:
+    # Only touch words typed entirely in one case, so "McDonald" stays as entered.
+    letters = [ch for ch in word if ch.isalpha()]
+    if not letters or not (word.isupper() or word.islower()):
+        return word
+    lowered = word.lower()
+    if lowered in NAME_PARTICLES:
+        return lowered
+    parts = lowered.split('-')
+    out = []
+    for part in parts:
+        # Capitalize only the first letter: "g'ulom" -> "G'ulom", not "G'Ulom"
+        out.append(part[:1].upper() + part[1:] if part else part)
+    return '-'.join(out)
+
+
+def capitalize_name(value: str) -> str:
+    """'ALIJON VALIYEV OG'LI' -> "Alijon Valiyev og'li"; mixed-case input is left as typed."""
+    words = str(value or '').split()
+    return ' '.join(_capitalize_word(w) for w in words)
+
+
+def name_taken(qs, name: str, exclude_pk=None, field: str = 'name') -> bool:
+    """
+    Case-insensitive duplicate check that also works for Cyrillic / Uzbek letters
+    (SQLite's LOWER() and __iexact only fold ASCII).
+    """
+    wanted = str(name or '').strip().casefold()
+    if exclude_pk is not None:
+        qs = qs.exclude(pk=exclude_pk)
+    return any(str(value or '').strip().casefold() == wanted for value in qs.values_list(field, flat=True))

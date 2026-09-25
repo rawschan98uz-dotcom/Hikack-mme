@@ -45,6 +45,30 @@ def teacher_can_access_attendance(user: User, record) -> bool:
     return record.group.teacher_id == user.id
 
 
+# E1: money-related student fields a teacher must never see.
+TEACHER_HIDDEN_STUDENT_FIELDS = (
+    'balance',
+    'paid_this_month',
+    'last_payment_date',
+    'next_payment_date',
+    'is_debtor',
+    'overdue_days',
+    'paid_count',
+    'payment_offset',
+    'course_price',
+)
+
+
+def strip_for_teacher(payload: dict, user: User) -> dict:
+    """Blank out financial fields of a serialized student for the teacher role."""
+    if not user_is_teacher(user):
+        return payload
+    for key in TEACHER_HIDDEN_STUDENT_FIELDS:
+        if key in payload:
+            payload[key] = None
+    return payload
+
+
 def filter_teacher_attendance_queryset(qs, user: User):
     if user_is_teacher(user):
         return qs.filter(teacher=user)

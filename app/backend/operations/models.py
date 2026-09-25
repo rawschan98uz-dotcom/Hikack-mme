@@ -1,5 +1,6 @@
 from django.conf import settings
 from django.db import models
+from django.db.models.functions import Lower
 
 
 class Reminder(models.Model):
@@ -22,6 +23,20 @@ class Reminder(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
 
+    @property
+    def current_status(self) -> str:
+        """D7: OVERDUE/TODAY/FUTURE is computed from due_date on every read; only DONE is stored."""
+        from django.utils import timezone
+
+        if self.status == self.Status.DONE:
+            return self.Status.DONE
+        today = timezone.localdate()
+        if self.due_date < today:
+            return self.Status.OVERDUE
+        if self.due_date > today:
+            return self.Status.FUTURE
+        return self.Status.TODAY
+
 
 class Holiday(models.Model):
     company = models.ForeignKey('org.Company', on_delete=models.CASCADE, related_name='holidays')
@@ -31,6 +46,11 @@ class Holiday(models.Model):
     affects_payment = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['company', 'branch', 'holiday_date'], name='uniq_holiday_per_branch_day'),
+        ]
+
 
 class StudentScore(models.Model):
     company = models.ForeignKey('org.Company', on_delete=models.CASCADE, related_name='scores')
@@ -39,6 +59,11 @@ class StudentScore(models.Model):
     grade = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     rank = models.PositiveIntegerField(default=0)
     updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['student', 'group'], name='uniq_score_per_student_group'),
+        ]
 
 
 class TeacherAttendanceRecord(models.Model):
@@ -102,6 +127,11 @@ class Tag(models.Model):
     company = models.ForeignKey('org.Company', on_delete=models.CASCADE, related_name='tags')
     name = models.CharField(max_length=255)
     source = models.CharField(max_length=255, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(Lower('name'), 'company', name='uniq_tag_name_per_company'),
+        ]
 
     def __str__(self) -> str:
         return self.name
@@ -182,13 +212,6 @@ class CallLog(models.Model):
     duration = models.CharField(max_length=32, blank=True)
     result = models.CharField(max_length=64, blank=True)
     called_at = models.DateTimeField(auto_now_add=True)
-
-
-class ActivityLog(models.Model):
-    company = models.ForeignKey('org.Company', on_delete=models.CASCADE, related_name='activity_logs')
-    action = models.CharField(max_length=255)
-    actor_name = models.CharField(max_length=255, blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
 
 
 class PlatformPayment(models.Model):

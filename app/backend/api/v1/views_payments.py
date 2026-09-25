@@ -9,6 +9,7 @@ from django.views.decorators.csrf import csrf_exempt
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 
+from accounts.rbac import user_is_teacher
 from api.responses import fail, ok
 from crm.models import Student
 from finance.gateways import get_student_payment_links
@@ -26,6 +27,8 @@ def student_payment_links(request, student_id: int):
     company = _company(request)
     if company is None:
         return fail('Company not found', status_code=404)
+    if user_is_teacher(request.user):
+        return fail('Teachers cannot view payment links', status_code=403)
 
     try:
         student = Student.objects.select_related('group', 'group__course', 'company').get(

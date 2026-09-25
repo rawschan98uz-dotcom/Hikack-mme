@@ -7,10 +7,13 @@ from rest_framework.permissions import IsAuthenticated
 
 from accounts.models import User
 from api.responses import fail, ok
+from api.archive import archive_teacher
+from api.scope import teacher_can_access_group
+from api.utils import name_taken
 from crm.models import Group, Student
 from operations.models import (
-    ActivityLog,
     ArchiveReason,
+    AuditLogRecord,
     ArchivedPerson,
     CallLog,
     Holiday,
@@ -29,15 +32,10 @@ def _company(request):
 
 
 VALID_REMINDER_STATUSES = {choice[0] for choice in Reminder.Status.choices}
-ACTIVE_REMINDER_STATUSES = {
-    Reminder.Status.OVERDUE,
-    Reminder.Status.TODAY,
-    Reminder.Status.FUTURE,
-}
 
 
 def _reminder_status_for_date(due_date: date) -> str:
-    today = timezone.now().date()
+    today = timezone.localdate()
     if due_date < today:
         return Reminder.Status.OVERDUE
     if due_date > today:
@@ -51,8 +49,8 @@ def _serialize_reminder(reminder: Reminder) -> dict:
         'title': reminder.title,
         'details': reminder.details,
         'due_date': reminder.due_date.isoformat(),
-        'status': reminder.status,
-        'status_label': reminder.get_status_display(),
+        'status': reminder.current_status,
+        'status_label': Reminder.Status(reminder.current_status).label,
         'assigned_to_id': reminder.assigned_to_id,
         'assigned_to': reminder.assigned_to.display_name() if reminder.assigned_to else '—',
         'created_at': reminder.created_at.isoformat(),
@@ -119,7 +117,7 @@ def reminder_index(request):
 
         details = str(request.data.get('details', '')).strip()
         due_date_raw = request.data.get('due_date')
-        due_date = timezone.now().date()
+        due_date = timezone.localdate()
         if due_date_raw:
             try:
                 due_date = date.fromisoformat(str(due_date_raw)[:10])
@@ -146,8 +144,7 @@ def reminder_index(request):
 
     qs = Reminder.objects.filter(
         company=company,
-        status__in=ACTIVE_REMINDER_STATUSES,
-    ).select_related('assigned_to').order_by('due_date', 'id')
+    ).exclude(status=Reminder.Status.DONE).select_related('assigned_to').order_by('due_date', 'id')
 
     data = [_serialize_reminder(reminder) for reminder in qs]
     return ok({'items': data, 'buckets': _reminder_buckets(data)})
@@ -324,6 +321,11 @@ def scores_branch(request):
         except Group.DoesNotExist:
             return fail('Group not found')
 
+        if not teacher_can_access_group(request.user, group):
+            return fail('You can grade only your own groups', status_code=403)
+        if student.group_id != group.id:
+            return fail('Student does not belong to this group')
+
         score, _created = StudentScore.objects.update_or_create(
             company=company,
             student=student,
@@ -351,8 +353,11 @@ def scores_branch(request):
     if status == 'top10':
         qs = qs[:10]
     else:
-        limit = int(request.query_params.get('limit') or 500)
-        qs = qs[:limit]
+        try:
+            limit = int(request.query_params.get('limit') or 500)
+        except (TypeError, ValueError):
+            limit = 500
+        qs = qs[:max(1, min(limit, 500))]
 
     scores = list(qs)
     rows = [_serialize_score(score, idx, company) for idx, score in enumerate(scores, start=1)]
@@ -387,11 +392,14 @@ def scores_bulk(request):
     except (Group.DoesNotExist, TypeError, ValueError):
         return fail('Group not found', status_code=404)
 
+    if not teacher_can_access_group(request.user, group):
+        return fail('You can grade only your own groups', status_code=403)
+
     max_scale = company.grade_scale_max or 100
 
     student_ids = [item.get('student_id') for item in items if item.get('student_id')]
     students_map = {
-        s.id: s for s in Student.objects.filter(pk__in=student_ids, company=company)
+        s.id: s for s in Student.objects.filter(pk__in=student_ids, company=company, group=group)
     }
 
     saved_count = 0
@@ -520,6 +528,9 @@ def score_detail(request, score_id: int):
         ).count() + 1
         return ok(_serialize_score(score, rank, company))
 
+    if score.group is None or not teacher_can_access_group(request.user, score.group):
+        return fail('You can grade only your own groups', status_code=403)
+
     group_id = score.group_id
     max_scale = company.grade_scale_max or 100
 
@@ -585,10 +596,10 @@ def room_list(request):
         except Branch.DoesNotExist:
             return fail('Branch not found')
 
-        room = Room.objects.create(branch=branch, name=name, capacity=max(capacity, 1))
+        room = Room.objects.create(company=company, branch=branch, name=name, capacity=max(capacity, 1))
         return ok(_serialize_room(room), status_code=201)
 
-    rooms = Room.objects.filter(branch__company=company).select_related('branch')
+    rooms = Room.objects.filter(company=company).select_related('branch')
     return ok([_serialize_room(r) for r in rooms])
 
 
@@ -608,7 +619,7 @@ def room_detail(request, room_id: int):
     if company is None:
         return fail('Company not found', status_code=404)
 
-    room = Room.objects.filter(pk=room_id, branch__company=company).select_related('branch').first()
+    room = Room.objects.filter(pk=room_id, company=company).select_related('branch').first()
     if room is None:
         return fail('Room not found', status_code=404)
 
@@ -681,6 +692,8 @@ def holiday_list(request):
         except (Branch.DoesNotExist, TypeError, ValueError):
             return fail('Branch is required')
 
+        if Holiday.objects.filter(company=company, branch=branch, holiday_date=holiday_date).exists():
+            return fail('На эту дату в этом филиале уже есть праздник')
         holiday = Holiday.objects.create(
             company=company,
             branch=branch,
@@ -734,6 +747,10 @@ def holiday_detail(request, holiday_id: int):
         except (Branch.DoesNotExist, TypeError, ValueError):
             return fail('Branch not found')
 
+    if Holiday.objects.filter(
+        company=company, branch_id=holiday.branch_id, holiday_date=holiday.holiday_date,
+    ).exclude(pk=holiday.pk).exists():
+        return fail('На эту дату в этом филиале уже есть праздник')
     holiday.save()
     holiday.refresh_from_db()
     return ok(_serialize_holiday(holiday))
@@ -795,10 +812,13 @@ def _archive_queryset(company, params):
 
 
 @api_view(['GET', 'POST'])
-def archive_list(request):
+def archive_list(request, company_id: int | None = None):
     company = _company(request)
     if company is None:
         return ok({'quantity': 0, 'rows': []})
+    # A4: legacy route company/<id>/users/trashed must not leak or accept another company's id
+    if company_id is not None and company_id != company.id:
+        return fail('Company not found', status_code=404)
 
     if request.method == 'POST':
         name = str(request.data.get('name') or '').strip()
@@ -818,9 +838,7 @@ def archive_list(request):
         if 'teacher' in roles.lower():
             teacher = User.objects.filter(company=company, phone=phone, user_type=User.UserType.TEACHER).first()
             if teacher:
-                teacher.is_active = False
-                teacher.save(update_fields=['is_active'])
-                Group.objects.filter(teacher=teacher).update(teacher=None)
+                archive_teacher(company, teacher, create_record=False)
         return ok(_serialize_archived(person), status_code=201)
 
     qs = _archive_queryset(company, request.query_params)
@@ -900,6 +918,8 @@ def tags_list(request):
         name = str(request.data.get('name') or '').strip()
         if not name:
             return fail('Tag name is required')
+        if name_taken(Tag.objects.filter(company=company), name):
+            return fail('Такой тег уже есть')
         tag = Tag.objects.create(
             company=company,
             name=name,
@@ -935,6 +955,8 @@ def tag_detail(request, tag_id: int):
         name = str(request.data.get('name') or '').strip()
         if not name:
             return fail('Tag name is required')
+        if name_taken(Tag.objects.filter(company=company), name, exclude_pk=tag.pk):
+            return fail('Такой тег уже есть')
         tag.name = name
 
     if 'from_where' in request.data or 'source' in request.data:
@@ -1041,13 +1063,14 @@ def activity_logs(request):
     if company is None:
         return ok([])
 
+    # Single audit journal (C5): human-readable view over AuditLogRecord.
     return ok([
         {
-            'action': log.action,
-            'actor': log.actor_name,
-            'created_at': log.created_at.strftime('%Y-%m-%d %H:%M'),
+            'action': log.reason or f'{log.action} {log.entity_type} #{log.entity_id}',
+            'actor': log.actor_name or 'System',
+            'created_at': timezone.localtime(log.created_at).strftime('%Y-%m-%d %H:%M'),
         }
-        for log in ActivityLog.objects.filter(company=company).order_by('-created_at')[:200]
+        for log in AuditLogRecord.objects.filter(company=company).order_by('-created_at')[:200]
     ])
 
 
@@ -1055,7 +1078,7 @@ def activity_logs(request):
 def company_platform_payments(request, company_id: int):
     company = _company(request)
     if company is None or company.id != company_id:
-        return ok([])
+        return fail('Company not found', status_code=404)
 
     return ok([
         {'sum': p.amount, 'created_at': p.created_at.strftime('%Y-%m-%d')}

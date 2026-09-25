@@ -24,6 +24,10 @@ export function useSchedule(initialRows?: ScheduleRow[]) {
     rows.value.filter((row) => {
       if (row.days_key !== scheduleTab.value) return false;
       if (scheduleTab.value !== 'other') return true;
+      if (row.weekdays?.length) {
+        // JS getDay(): 0 = Sunday; backend weekdays: 0 = Monday
+        return row.weekdays.includes((otherWeekday.value + 6) % 7);
+      }
       const allowed = GROUP_DAYS_BY_WEEKDAY[otherWeekday.value] ?? [];
       return allowed.includes(row.days);
     }),

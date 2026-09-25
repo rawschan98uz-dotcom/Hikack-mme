@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(app/backend/.venv/Scripts/python.exe manage.py check*)",
+      "Bash(app/backend/.venv/Scripts/python.exe manage.py test*)",
+      "Bash(app/backend/.venv/Scripts/python.exe manage.py showmigrations*)",
+      "Bash(app/backend/.venv/Scripts/python.exe manage.py makemigrations --check*)",
+      "Bash(.venv/Scripts/python.exe manage.py check*)",
+      "Bash(.venv/Scripts/python.exe manage.py test*)",
+      "Bash(.venv/Scripts/python.exe manage.py showmigrations*)",
+      "Bash(.venv/Scripts/python.exe manage.py makemigrations --check*)",
+      "Bash(npx vue-tsc*)",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)"
+    ]
+  }
+}

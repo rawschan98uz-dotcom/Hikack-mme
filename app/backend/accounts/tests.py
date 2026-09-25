@@ -1773,7 +1773,7 @@ class P2RegressionTests(TestCase):
         self.assertEqual(lead.stage, Lead.Stage.CONVERTED)
 
         student = Student.objects.get(lead=lead)
-        self.assertEqual(student.status, Student.Status.TRIAL)
+        self.assertEqual(student.status, Student.Status.STUDYING)
 
         # Before soft delete: student is active
         lead_res1 = self.client.get(f'/v1/leads/{lead.id}')

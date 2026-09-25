@@ -31,10 +31,11 @@ def match_student_to_lead(student: Student) -> Lead | None:
     if not phone_variants:
         return None
 
+    # D4: a lead that is already converted belongs to another student
     candidate_leads = Lead.objects.filter(
         company=student.company,
         phone__in=phone_variants,
-    ).order_by('-created_at')
+    ).exclude(stage=Lead.Stage.CONVERTED).order_by('-created_at')
 
     s_first = (student.first_name or '').strip().lower()
     s_last = (student.last_name or '').strip().lower()
@@ -175,21 +176,23 @@ def sync_student_paid_this_month(student: Student | int | None) -> bool:
     return has_payment_this_month
 
 
-def days_overlap(days1: int, days2: int) -> bool:
-    """Check if two Group.Days choices have any overlapping days of the week."""
+def group_weekdays(days: int, weekdays=None) -> list[int]:
+    """Actual weekdays (0=Mon … 6=Sun) for a Group.Days choice; CUSTOM uses the explicit list."""
     from crm.models import Group
-    if days1 == Group.Days.EVERY_DAY or days2 == Group.Days.EVERY_DAY:
-        return True
-    if days1 == Group.Days.CUSTOM or days2 == Group.Days.CUSTOM:
-        return True
+    if days == Group.Days.CUSTOM:
+        return sorted({int(d) for d in (weekdays or []) if str(d).isdigit() and 0 <= int(d) <= 6})
     mapping = {
-        Group.Days.ODD: {0, 2, 4},
-        Group.Days.EVEN: {1, 3, 5},
-        Group.Days.WEEKEND: {5, 6},
+        Group.Days.ODD: [0, 2, 4],
+        Group.Days.EVEN: [1, 3, 5],
+        Group.Days.WEEKEND: [5, 6],
+        Group.Days.EVERY_DAY: [0, 1, 2, 3, 4, 5, 6],
     }
-    set1 = mapping.get(days1, set())
-    set2 = mapping.get(days2, set())
-    return bool(set1 & set2)
+    return mapping.get(days, [])
+
+
+def days_overlap(days1: int, days2: int, weekdays1=None, weekdays2=None) -> bool:
+    """Check if two schedules share at least one real day of the week."""
+    return bool(set(group_weekdays(days1, weekdays1)) & set(group_weekdays(days2, weekdays2)))
 
 
 def dates_overlap(start1, end1, start2, end2) -> bool:
@@ -213,21 +216,14 @@ def sync_group_schedule_slots(group, weekdays=None):
     Synchronize normalized GroupScheduleSlot records for a group based on its
     lesson_start_time, lesson_end_time, room, and days (or explicit weekdays).
     """
-    from crm.models import Group, GroupScheduleSlot
+    from crm.models import GroupScheduleSlot
 
     if not (group.lesson_start_time and group.lesson_end_time):
         group.schedule_slots.all().delete()
         return
 
     if weekdays is None:
-        mapping = {
-            Group.Days.ODD: [0, 2, 4],
-            Group.Days.EVEN: [1, 3, 5],
-            Group.Days.WEEKEND: [5, 6],
-            Group.Days.EVERY_DAY: [0, 1, 2, 3, 4, 5, 6],
-            Group.Days.CUSTOM: [0, 2, 4],
-        }
-        weekdays = mapping.get(group.days, [0, 2, 4])
+        weekdays = group_weekdays(group.days, group.weekdays)
 
     group.schedule_slots.exclude(weekday__in=weekdays).delete()
 
@@ -255,6 +251,7 @@ def validate_group_schedule(
     start_date=None,
     end_date=None,
     exclude_group_id=None,
+    weekdays=None,
 ) -> dict | None:
     """
     Validate schedule consistency and check for room and teacher collisions.
@@ -317,7 +314,7 @@ def validate_group_schedule(
     for g in candidates:
         if not g.lesson_start_time or not g.lesson_end_time:
             continue
-        if not days_overlap(days, g.days):
+        if not days_overlap(days, g.days, weekdays, g.weekdays):
             continue
         if not dates_overlap(start_date, end_date, g.group_start_date, g.group_end_date):
             continue
@@ -358,50 +355,89 @@ def validate_group_schedule(
     return None
 
 
-def sync_student_group_enrollment(student: Student, old_group_id: int | None = None, old_status: int | None = None) -> None:
+def sync_student_group_enrollment(student: Student) -> dict:
     """
-    Maintain GroupEnrollment lifecycle when a student is created, assigned, transferred, or changes status.
+    Bring the GroupEnrollment history in line with the student's current state.
+
+    `Student.group` + `Student.status` are the source of truth. The function is
+    idempotent: it compares the open (left_date IS NULL) enrollments with the
+    current state and only writes the difference. It is called automatically
+    from the Student post_save signal (crm/signals.py), so every code path that
+    saves a student (API, lead conversion, Excel import, archive restore, soft
+    delete) keeps the history consistent.
+
+    Returns {'closed': n, 'created': n, 'updated': n} for reporting.
     """
     from django.utils import timezone
     from crm.models import GroupEnrollment
 
     today = timezone.localdate()
+    result = {'closed': 0, 'created': 0, 'updated': 0}
 
-    # Case 1: Group changed
-    if student.group_id != old_group_id:
-        if old_group_id:
-            GroupEnrollment.objects.filter(
-                student=student,
-                group_id=old_group_id,
-                left_date__isnull=True,
-            ).update(
-                left_date=today,
-                status=GroupEnrollment.Status.TRANSFERRED if student.group_id else GroupEnrollment.Status.LEFT,
-            )
-        if student.group_id:
-            GroupEnrollment.objects.create(
-                company=student.company,
-                student=student,
-                group=student.group,
-                status=GroupEnrollment.Status.ACTIVE if student.status == Student.Status.STUDYING else GroupEnrollment.Status.FROZEN,
-                joined_date=today,
-            )
-        return
+    gone_statuses = {Student.Status.LEFT, Student.Status.LEFT_TRIAL, Student.Status.GRADUATED}
+    is_gone = student.status in gone_statuses
+    target_group_id = None if is_gone else student.group_id
 
-    # Case 2: Same group, but student status changed
-    if student.group_id and old_status is not None and old_status != student.status:
-        active_enrollments = GroupEnrollment.objects.filter(
+    open_enrollments = GroupEnrollment.objects.filter(student=student, left_date__isnull=True)
+
+    # 1. Close every open enrollment that no longer matches the current group.
+    if student.status == Student.Status.GRADUATED:
+        close_status = GroupEnrollment.Status.GRADUATED
+    elif is_gone or not student.group_id:
+        close_status = GroupEnrollment.Status.LEFT
+    else:
+        close_status = GroupEnrollment.Status.TRANSFERRED
+
+    stale = open_enrollments.exclude(group_id=target_group_id) if target_group_id else open_enrollments
+    result['closed'] = stale.update(left_date=today, status=close_status)
+
+    if not target_group_id:
+        return result
+
+    # 2. Make sure exactly one open enrollment exists in the current group, with the right status.
+    wanted_status = (
+        GroupEnrollment.Status.FROZEN if student.status == Student.Status.FROZEN else GroupEnrollment.Status.ACTIVE
+    )
+    current = list(open_enrollments.filter(group_id=target_group_id).order_by('joined_date', 'id'))
+    if not current:
+        GroupEnrollment.objects.create(
+            company_id=student.company_id,
             student=student,
-            group_id=student.group_id,
-            left_date__isnull=True,
+            group_id=target_group_id,
+            status=wanted_status,
+            joined_date=today,
         )
-        if student.status == Student.Status.FROZEN:
-            active_enrollments.update(status=GroupEnrollment.Status.FROZEN)
-        elif student.status == Student.Status.STUDYING:
-            active_enrollments.update(status=GroupEnrollment.Status.ACTIVE)
-        elif student.status in (Student.Status.LEFT, Student.Status.LEFT_TRIAL):
-            active_enrollments.update(status=GroupEnrollment.Status.LEFT, left_date=today)
-        elif student.status == Student.Status.GRADUATED:
-            active_enrollments.update(status=GroupEnrollment.Status.GRADUATED, left_date=today)
+        result['created'] = 1
+        return result
+
+    keep, duplicates = current[0], current[1:]
+    if duplicates:
+        result['closed'] += GroupEnrollment.objects.filter(pk__in=[d.pk for d in duplicates]).update(
+            left_date=today, status=GroupEnrollment.Status.LEFT, note='duplicate open enrollment closed automatically',
+        )
+    if keep.status != wanted_status:
+        keep.status = wanted_status
+        keep.save(update_fields=['status'])
+        result['updated'] = 1
+    return result
 
 
+
+
+def group_capacity_error(group, room=None, exclude_student_id=None, adding: int = 1) -> str | None:
+    """
+    D10: refuse to seat more studying students than the room holds.
+    Returns a human-readable error, or None when there is space (or no room / no capacity set).
+    """
+    room = room if room is not None else group.room
+    if room is None or not room.capacity:
+        return None
+    seated = Student.objects.filter(group=group, status=Student.Status.STUDYING)
+    if exclude_student_id:
+        seated = seated.exclude(pk=exclude_student_id)
+    if seated.count() + adding > room.capacity:
+        return (
+            f'В аудитории «{room.name}» {room.capacity} мест, а в группе «{group.name}» '
+            f'уже {seated.count()} студентов. Выберите другую аудиторию или увеличьте её вместимость.'
+        )
+    return None

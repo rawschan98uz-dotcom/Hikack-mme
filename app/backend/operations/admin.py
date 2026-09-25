@@ -1,7 +1,6 @@
 from django.contrib import admin
 
 from operations.models import (
-    ActivityLog,
     ArchivedPerson,
     AuditLogRecord,
     CallLog,
@@ -16,7 +15,7 @@ from operations.models import (
 
 for model in (
     Reminder, Holiday, StudentScore, Tag, LeadForm,
-    ArchivedPerson, SmsLog, CallLog, ActivityLog, PlatformPayment,
+    ArchivedPerson, SmsLog, CallLog, PlatformPayment,
     AuditLogRecord,
 ):
     admin.site.register(model)

@@ -11,9 +11,15 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from accounts.models import TeacherBranch, User
-from accounts.rbac import ROLE_CEO, get_effective_role, get_role_label, get_user_permissions
+from accounts.rbac import ROLE_CEO, get_effective_role, get_role_label, get_user_permissions, user_is_teacher
 from api.responses import fail, ok
-from api.scope import filter_groups_queryset, filter_students_queryset, teacher_can_access_group, teacher_can_access_student
+from api.scope import (
+    filter_groups_queryset,
+    filter_students_queryset,
+    strip_for_teacher,
+    teacher_can_access_group,
+    teacher_can_access_student,
+)
 from api.utils import (
     safe_int,
     normalize_phone,
@@ -26,14 +32,15 @@ from api.utils import (
 )
 from crm.models import Course, Group, Lead, Student
 from crm.services import (
+    group_capacity_error,
+    group_weekdays,
     sync_group_schedule_slots,
-    sync_student_group_enrollment,
     validate_group_schedule,
 )
 
 from finance.models import Payment
 from operations import notify as notifications
-from operations.models import ActivityLog, Reminder, Tag
+from operations.models import Reminder, Tag, log_audit
 from org.models import Branch, Company, Room
 
 SCHEDULE_DAY_KEYS = {
@@ -62,6 +69,7 @@ def _serialize_schedule_rows(groups) -> list[dict]:
             'name': group.name,
             'days': group.days,
             'days_key': SCHEDULE_DAY_KEYS.get(group.days, 'other'),
+            'weekdays': group_weekdays(group.days, group.weekdays),
             'days_label': group.get_days_display(),
             'time': time_label,
             'teacher': group.teacher.display_name() if group.teacher else '—',
@@ -198,6 +206,7 @@ def _serialize_group(group: Group, *, detailed: bool = False) -> dict:
         'name': group.name,
         'days': group.days,
         'days_label': group.get_days_display(),
+        'weekdays': group_weekdays(group.days, group.weekdays),
         'status': group.status,
         'status_label': group.get_status_display(),
         'branch_id': group.branch_id,
@@ -292,6 +301,26 @@ def _apply_group_fields(group: Group, company: Company, data: dict) -> str | Non
             return 'Invalid schedule'
         group.days = days
 
+    if 'weekdays' in data:
+        raw_weekdays = data.get('weekdays')
+        if isinstance(raw_weekdays, str):
+            raw_weekdays = [p for p in raw_weekdays.split(',') if p.strip()]
+        if not isinstance(raw_weekdays, (list, tuple)):
+            return 'Invalid weekdays'
+        try:
+            parsed_weekdays = sorted({int(d) for d in raw_weekdays})
+        except (TypeError, ValueError):
+            return 'Invalid weekdays'
+        if any(d < 0 or d > 6 for d in parsed_weekdays):
+            return 'Invalid weekdays'
+        group.weekdays = parsed_weekdays
+
+    if group.days == Group.Days.CUSTOM:
+        if not group.weekdays:
+            return 'Выберите дни недели для расписания «Другое»'
+    else:
+        group.weekdays = []
+
     status = data.get('status')
     if status is not None:
         try:
@@ -336,7 +365,7 @@ def _apply_group_fields(group: Group, company: Company, data: dict) -> str | Non
                 group.room = Room.objects.get(pk=int(room_id), branch=group.branch)
             except (Room.DoesNotExist, TypeError, ValueError):
                 try:
-                    if Room.objects.filter(pk=int(room_id), branch__company=company).exists():
+                    if Room.objects.filter(pk=int(room_id), company=company).exists():
                         return 'Room belongs to a different branch'
                 except (TypeError, ValueError):
                     pass
@@ -344,6 +373,10 @@ def _apply_group_fields(group: Group, company: Company, data: dict) -> str | Non
 
     if group.room and group.room.branch_id != group.branch_id:
         return 'Room belongs to a different branch'
+    if room_id not in (None, '') and group.pk and group.room:
+        capacity_error = group_capacity_error(group, room=group.room, adding=0)
+        if capacity_error:
+            return capacity_error
     if group.teacher and not TeacherBranch.objects.filter(teacher=group.teacher, branch=group.branch).exists():
         return 'Teacher is not assigned to this branch'
 
@@ -679,9 +712,13 @@ def _apply_student_fields(student: Student, company: Company, data: dict) -> str
             student.group = None
         else:
             try:
-                group = Group.objects.get(pk=int(group_id), company=company)
+                group = Group.objects.select_related('room').get(pk=int(group_id), company=company)
             except (Group.DoesNotExist, TypeError, ValueError):
                 return 'Invalid group'
+            if group.id != student.group_id and student.status == Student.Status.STUDYING:
+                capacity_error = group_capacity_error(group, exclude_student_id=student.pk)
+                if capacity_error:
+                    return capacity_error
             student.group = group
             student.branch = group.branch
 
@@ -883,7 +920,8 @@ def dashboard(request):
     if company is None:
         return ok({})
 
-    students = Student.objects.filter(company=company)
+    is_teacher = user_is_teacher(request.user)
+    students = filter_students_queryset(Student.objects.filter(company=company), request.user)
     groups = Group.objects.filter(company=company, status=Group.Status.ACTIVE)
     groups = filter_groups_queryset(groups, request.user)
     active_leads_count = Lead.objects.filter(
@@ -919,21 +957,27 @@ def dashboard(request):
             'title': reminder.title,
             'details': reminder.details,
             'due_date': reminder.due_date.isoformat(),
-            'status': reminder.status,
+            'status': reminder.current_status,
             'assigned_to': reminder.assigned_to.display_name() if reminder.assigned_to else '—',
         }
         for reminder in Reminder.objects.filter(
             company=company,
-            status__in=[Reminder.Status.OVERDUE, Reminder.Status.TODAY],
-        ).select_related('assigned_to').order_by('due_date', 'id')[:8]
+            due_date__lte=timezone.localdate(),
+        ).exclude(status=Reminder.Status.DONE).select_related('assigned_to').order_by('due_date', 'id')[:8]
     ]
 
     studying_students = students.filter(status=Student.Status.STUDYING)
-    payments_summary = _company_payments_summary(company)
-    debtors_count = sum(
-        1 for s in studying_students
-        if _get_student_payment_info(s, payments_summary.get(s.id) or payments_summary.get(s.full_name))['is_debtor']
-    )
+    if is_teacher:
+        # E1: teachers get no company-wide money or sales figures
+        active_leads_count = 0
+        finance_chart = []
+        debtors_count = 0
+    else:
+        payments_summary = _company_payments_summary(company)
+        debtors_count = sum(
+            1 for s in studying_students
+            if _get_student_payment_info(s, payments_summary.get(s.id) or payments_summary.get(s.full_name))['is_debtor']
+        )
 
     return ok({
         'active_leads': active_leads_count,
@@ -941,7 +985,7 @@ def dashboard(request):
         'groups': groups.count(),
         'debtors': debtors_count,
         'trial_students': 0,
-        'paid_during_month': students.filter(paid_this_month=True).count(),
+        'paid_during_month': 0 if is_teacher else students.filter(paid_this_month=True).count(),
         'left_active_group': students.filter(status=Student.Status.LEFT).count(),
         'left_after_trial': students.filter(status=Student.Status.LEFT_TRIAL).count(),
         'finance_chart': finance_chart,
@@ -1021,6 +1065,7 @@ def group_list(request):
             start_date=group.group_start_date,
             end_date=group.group_end_date,
             exclude_group_id=None,
+            weekdays=group.weekdays,
         )
         if conflict:
             return fail(
@@ -1165,6 +1210,7 @@ def group_detail(request, group_id: int):
             start_date=group.group_start_date,
             end_date=group.group_end_date,
             exclude_group_id=group.id,
+            weekdays=group.weekdays,
         )
         if conflict:
             return fail(
@@ -1223,8 +1269,8 @@ def student_list(request):
         except (Branch.DoesNotExist, TypeError, ValueError):
             return fail('Invalid branch')
 
-        status = safe_int(request.data.get('status', Student.Status.TRIAL),
-                         default=Student.Status.TRIAL)
+        status = safe_int(request.data.get('status', Student.Status.STUDYING),
+                         default=Student.Status.STUDYING)
         if status not in VALID_STUDENT_STATUSES:
             return fail('Invalid status')
 
@@ -1275,8 +1321,7 @@ def student_list(request):
             enrich_student_from_lead(student, matched_lead)
 
             # Save student first — if this fails, lead stays untouched
-            student.save()
-            sync_student_group_enrollment(student)
+            student.save()  # GroupEnrollment is synced by the post_save signal
 
             # Now safe to mark lead as CONVERTED
 
@@ -1294,7 +1339,8 @@ def student_list(request):
 
     payments_summary = _company_payments_summary(company)
 
-    debtors_filter = (
+    is_teacher = user_is_teacher(request.user)
+    debtors_filter = not is_teacher and (
         request.query_params.get('debtors') == '1'
         or request.query_params.get('statuses') in ('6', 'debtor', 'debtors')
     )
@@ -1322,7 +1368,7 @@ def student_list(request):
     if group_id:
         qs = qs.filter(group_id=group_id)
 
-    finance = request.query_params.get('finance')
+    finance = None if is_teacher else request.query_params.get('finance')
     if finance == 'paid_during_the_month':
         qs = qs.filter(paid_this_month=True)
 
@@ -1346,7 +1392,10 @@ def student_list(request):
         'has_more': page['has_more'],
         'next_offset': page['next_offset'],
         'results': [
-            _serialize_student(s, payment_info=_get_student_payment_info(s, _lookup_student_payment_summary(s, payments_summary)))
+            strip_for_teacher(
+                _serialize_student(s, payment_info=_get_student_payment_info(s, _lookup_student_payment_summary(s, payments_summary))),
+                request.user,
+            )
             for s in page['results']
         ],
     })
@@ -1370,7 +1419,7 @@ def student_detail(request, student_id: int):
         return fail('Student not found', status_code=404)
 
     if request.method == 'GET':
-        return ok(_serialize_student(student, detailed=True))
+        return ok(strip_for_teacher(_serialize_student(student, detailed=True), request.user))
 
     if request.method == 'DELETE':
         is_hard = (
@@ -1415,14 +1464,10 @@ def student_detail(request, student_id: int):
                     status_code=400
                 )
 
-    old_group_id = student.group_id
-    old_status = student.status
-
     error = _apply_student_fields(student, company, request.data)
     if error:
         return fail(error)
-    student.save()
-    sync_student_group_enrollment(student, old_group_id=old_group_id, old_status=old_status)
+    student.save()  # GroupEnrollment is synced by the post_save signal
     student = Student.objects.select_related('group', 'branch').get(pk=student.pk)
     return ok(_serialize_student(student, detailed=True))
 
@@ -1475,7 +1520,7 @@ def student_photo(request, student_id: int):
         _delete_photo_file(student)
         student.photo = None
         student.save(update_fields=['photo'])
-        return ok(_serialize_student(student))
+        return ok(strip_for_teacher(_serialize_student(student), request.user))
 
     upload = request.FILES.get('photo')
     if upload is None:
@@ -1491,7 +1536,7 @@ def student_photo(request, student_id: int):
     extension = ALLOWED_PHOTO_CONTENT_TYPES[content_type]
     student.photo.save(f'student-{student.pk}{extension}', upload, save=True)
     student.refresh_from_db()
-    return ok(_serialize_student(student))
+    return ok(strip_for_teacher(_serialize_student(student), request.user))
 
 
 @api_view(['GET', 'POST'])
@@ -1524,6 +1569,9 @@ def lead_list(request):
             return fail('Phone must contain 9 digits')
         if stage not in VALID_LEAD_STAGES:
             return fail('Invalid lead status')
+        if stage == Lead.Stage.CONVERTED:
+            # D3: CONVERTED only through the conversion endpoint, which creates the Student
+            return fail('Для зачисления лида в студенты используйте кнопку перевода')
 
         phone2_raw = str(request.data.get('phone2') or request.data.get('extra_phone') or '').strip()
         if phone2_raw:
@@ -1886,9 +1934,12 @@ def lead_convert_to_student(request, lead_id: int):
         group_id = request.data.get('group_id')
         if group_id:
             try:
-                group = Group.objects.select_related('branch', 'course').get(pk=int(group_id), company=company)
+                group = Group.objects.select_related('branch', 'course', 'room').get(pk=int(group_id), company=company)
             except (Group.DoesNotExist, TypeError, ValueError):
                 return fail('Invalid group')
+            capacity_error = group_capacity_error(group)
+            if capacity_error:
+                return fail(capacity_error)
             branch = group.branch
         else:
             branch_id = request.data.get('branch_id')
@@ -1960,10 +2011,14 @@ def lead_convert_to_student(request, lead_id: int):
         lead.save(update_fields=update_fields)
 
         try:
-            ActivityLog.objects.create(
+            log_audit(
                 company=company,
-                action=f'Lead "{lead_name}" converted to student',
-                actor_name=request.user.display_name(),
+                actor=request.user,
+                entity_type='lead',
+                entity_id=lead.id,
+                action='convert',
+                new_values={'student_id': student.pk},
+                reason=f'Lead "{lead_name}" converted to student',
             )
         except Exception:
             pass

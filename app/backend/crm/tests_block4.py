@@ -126,10 +126,11 @@ class TeacherScopeTests(Block4Base):
 class TenantAndArchiveTests(Block4Base):
     """A4"""
 
-    def test_trashed_route_rejects_foreign_company(self):
+    def test_legacy_trashed_route_removed(self):
+        # P4-1: the duplicate route company/<id>/users/trashed is gone; archive/list is the only one
         self.client.force_authenticate(self.ceo)
-        self.assertEqual(self.client.get(f'/v1/company/{self.other_company.id}/users/trashed').status_code, 404)
-        self.assertEqual(self.client.get(f'/v1/company/{self.company.id}/users/trashed').status_code, 200)
+        self.assertEqual(self.client.get(f'/v1/company/{self.company.id}/users/trashed').status_code, 404)
+        self.assertEqual(self.client.get('/v1/archive/list').status_code, 200)
 
     def test_platform_payments_reject_foreign_company(self):
         self.client.force_authenticate(self.ceo)

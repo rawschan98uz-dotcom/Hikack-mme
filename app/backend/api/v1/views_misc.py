@@ -812,13 +812,10 @@ def _archive_queryset(company, params):
 
 
 @api_view(['GET', 'POST'])
-def archive_list(request, company_id: int | None = None):
+def archive_list(request):
     company = _company(request)
     if company is None:
         return ok({'quantity': 0, 'rows': []})
-    # A4: legacy route company/<id>/users/trashed must not leak or accept another company's id
-    if company_id is not None and company_id != company.id:
-        return fail('Company not found', status_code=404)
 
     if request.method == 'POST':
         name = str(request.data.get('name') or '').strip()

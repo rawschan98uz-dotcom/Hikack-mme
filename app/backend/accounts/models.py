@@ -76,4 +76,6 @@ class TeacherBranch(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        unique_together = [['teacher', 'branch']]
+        constraints = [
+            models.UniqueConstraint(fields=['teacher', 'branch'], name='uniq_teacher_branch'),
+        ]

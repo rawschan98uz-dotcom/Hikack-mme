@@ -3,10 +3,12 @@ import { computed, onMounted, ref } from 'vue';
 import { useRouter, type RouteLocationRaw } from 'vue-router';
 
 import client, { type ApiEnvelope } from '../api/client';
+import { useAuthStore } from '../stores/auth';
 import DashboardCardIcon from '../components/DashboardCardIcon.vue';
 import SchedulePanel from '../components/SchedulePanel.vue';
 import type { ScheduleRow } from '../types/schedule';
 import { groupRoute } from '../utils/crossLinks';
+import { canAccessRoute } from '../utils/rbac';
 
 interface DashboardStats {
   active_leads: number;
@@ -22,6 +24,7 @@ interface DashboardStats {
 }
 
 const router = useRouter();
+const auth = useAuthStore();
 const stats = ref<DashboardStats | null>(null);
 const loading = ref(true);
 
@@ -40,7 +43,22 @@ const cardsRowSecondary = [
 ] as const;
 
 type DashboardCard = (typeof cardsRowPrimary)[number] | (typeof cardsRowSecondary)[number];
-const dashboardCardRows = [cardsRowPrimary, cardsRowSecondary] as const;
+// Teachers get no money figures (backend sends zeros and an empty chart).
+const showFinanceChart = computed(() => auth.role !== 'teacher');
+const MONEY_CARDS: readonly string[] = ['debtors', 'paid_during_month'];
+
+// Show only cards that lead to a page the user may open (teacher: no leads, debtors, reports).
+const dashboardCardRows = computed(() =>
+  [cardsRowPrimary, cardsRowSecondary]
+    .map((row) =>
+      row.filter(
+        (card) =>
+          (showFinanceChart.value || !MONEY_CARDS.includes(card.key)) &&
+          (auth.isCeo || canAccessRoute(card.to, auth.permissions)),
+      ),
+    )
+    .filter((row) => row.length > 0),
+);
 
 const maxChartValue = computed(() => {
   const values = stats.value?.finance_chart.map((point) => point.value) ?? [0];
@@ -114,7 +132,7 @@ onMounted(loadDashboard);
         </div>
       </div>
 
-      <div class="relative min-h-[300px] border-b border-fb-line bg-fb-card lg:min-h-[340px]">
+      <div v-if="showFinanceChart" class="relative min-h-[300px] border-b border-fb-line bg-fb-card lg:min-h-[340px]">
         <div
           v-if="!hasChartData"
           class="flex min-h-[300px] items-center justify-center text-[15px] text-fb-icon lg:min-h-[340px]"

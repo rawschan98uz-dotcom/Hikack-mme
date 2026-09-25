@@ -111,8 +111,6 @@ ROUTE_RULES: list[tuple[tuple[str, ...], str, str | None]] = [
     (('GET',), r'^reminders/\d+$', P.PERM_REMINDERS_VIEW),
     (('PATCH', 'DELETE'), r'^reminders/\d+$', P.PERM_REMINDERS_WRITE),
     (('POST',), r'^reminders/\d+/complete$', P.PERM_REMINDERS_WRITE),
-    (('GET',), r'^reminder/index$', P.PERM_REMINDERS_VIEW),
-    (('POST',), r'^reminder/index$', P.PERM_REMINDERS_WRITE),
 
     (('GET',), r'^scores/branch$', P.PERM_RATING_VIEW),
     (('POST',), r'^scores/branch$', P.PERM_RATING_WRITE),
@@ -127,12 +125,8 @@ ROUTE_RULES: list[tuple[tuple[str, ...], str, str | None]] = [
 
     (('POST',), r'^holidays$', P.PERM_HOLIDAYS_WRITE),
     (('GET',), r'^holidays$', P.PERM_HOLIDAYS_VIEW),
-    (('POST',), r'^holidayRecalculation$', P.PERM_HOLIDAYS_WRITE),
-    (('GET',), r'^holidayRecalculation$', P.PERM_HOLIDAYS_VIEW),
     (('GET',), r'^holidays/\d+$', P.PERM_HOLIDAYS_VIEW),
     (('PATCH', 'DELETE'), r'^holidays/\d+$', P.PERM_HOLIDAYS_WRITE),
-    (('GET',), r'^holidayRecalculation/\d+$', P.PERM_HOLIDAYS_VIEW),
-    (('PATCH', 'DELETE'), r'^holidayRecalculation/\d+$', P.PERM_HOLIDAYS_WRITE),
 
     (('GET',), r'^archiveReasons$', P.PERM_ARCHIVE_VIEW),
     (('POST',), r'^archive/list$', P.PERM_ARCHIVE_WRITE),
@@ -141,7 +135,6 @@ ROUTE_RULES: list[tuple[tuple[str, ...], str, str | None]] = [
     (('GET',), r'^archive/list/\d+$', P.PERM_ARCHIVE_VIEW),
     (('DELETE',), r'^archive/list/\d+$', P.PERM_ARCHIVE_WRITE),
     (('POST',), r'^archive/list/\d+/restore$', P.PERM_ARCHIVE_WRITE),
-    (('GET',), r'^company/\d+/users/trashed$', P.PERM_ARCHIVE_VIEW),
 
     (('POST',), r'^tags$', P.PERM_TAGS_WRITE),
     (('GET',), r'^tags$', P.PERM_TAGS_VIEW),

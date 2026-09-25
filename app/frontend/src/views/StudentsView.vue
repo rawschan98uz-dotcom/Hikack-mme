@@ -159,6 +159,10 @@ function printStudentPayment(p: StudentPayment) {
 }
 
 async function loadStudentPayments(studentId: number) {
+  if (!canSeeMoney.value) {
+    studentPayments.value = [];
+    return;
+  }
   paymentsLoading.value = true;
   try {
     const { data } = await client.get<ApiEnvelope<StudentPayment[]>>(`/students/${studentId}/payments`);
@@ -311,6 +315,10 @@ const panelTitle = computed(() => {
 const isReadOnly = computed(() => Boolean(detailStudent.value && !editingStudent.value));
 const canExportStudents = computed(() => auth.can(PERM.STUDENTS_VIEW));
 const canImportStudents = computed(() => auth.can(PERM.STUDENTS_WRITE));
+const canWriteStudents = computed(() => auth.can(PERM.STUDENTS_WRITE));
+// Teachers never see money fields — backend returns them as null (strip_for_teacher).
+const canSeeMoney = computed(() => auth.role !== 'teacher');
+const canAcceptPayment = computed(() => auth.can(PERM.FINANCE_WRITE));
 
 function exportCsv() {
   downloadCsv(
@@ -848,6 +856,7 @@ onMounted(async () => {
           Import
         </button>
         <button
+          v-if="canWriteStudents"
           type="button"
           class="rounded-lg bg-fb-blue px-4 py-2 text-sm font-medium text-white hover:bg-fb-blue-dark"
           @click="openCreatePanel"
@@ -935,7 +944,7 @@ onMounted(async () => {
             <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Group</th>
             <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Branch</th>
             <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Start date</th>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Next payment</th>
+            <th v-if="canSeeMoney" class="px-5 py-4 text-left font-semibold text-fb-secondary">Next payment</th>
           </tr>
         </thead>
         <tbody>
@@ -943,7 +952,7 @@ onMounted(async () => {
             v-for="row in tableRows"
             :key="row.id"
             class="cursor-pointer border-b border-fb-line"
-            :class="row.isDebtor ? 'bg-red-50/70 hover:bg-red-100/70' : 'hover:bg-fb-hover/40'"
+            :class="canSeeMoney && row.isDebtor ? 'bg-red-50/70 hover:bg-red-100/70' : 'hover:bg-fb-hover/40'"
             @click="openDetailPanel(row.id)"
           >
             <td class="px-5 py-4">
@@ -999,7 +1008,7 @@ onMounted(async () => {
             </td>
             <td class="px-5 py-4 text-fb-secondary">{{ row.branch }}</td>
             <td class="px-5 py-4 text-fb-secondary">{{ row.trialDate }}</td>
-            <td class="px-5 py-4 text-fb-secondary">
+            <td v-if="canSeeMoney" class="px-5 py-4 text-fb-secondary">
               <div v-if="row.isDebtor" class="flex flex-col items-start gap-1">
                 <span class="inline-flex items-center rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-semibold text-red-700">
                   Просрочено на {{ row.overdueDays }} дн.
@@ -1087,13 +1096,13 @@ onMounted(async () => {
                   {{ detailStudent.trial_date ? formatAddedDate(detailStudent.trial_date) : '-' }}
                 </dd>
               </div>
-              <div class="flex items-center justify-between gap-4 border-b border-fb-line pb-2">
+              <div v-if="canSeeMoney" class="flex items-center justify-between gap-4 border-b border-fb-line pb-2">
                 <dt class="text-fb-secondary">Last payment (Последняя оплата)</dt>
                 <dd class="text-right font-medium text-fb-text">
                   {{ detailStudent.last_payment_date ? formatAddedDate(detailStudent.last_payment_date) : 'Нет платежей' }}
                 </dd>
               </div>
-              <div class="flex items-center justify-between gap-4 border-b border-fb-line pb-2">
+              <div v-if="canSeeMoney" class="flex items-center justify-between gap-4 border-b border-fb-line pb-2">
                 <dt class="text-fb-secondary">Next payment (Следующая оплата)</dt>
                 <dd class="text-right flex items-center justify-end flex-wrap gap-2">
                   <span class="font-medium text-fb-text">
@@ -1112,6 +1121,7 @@ onMounted(async () => {
                     Оплачено
                   </span>
                   <button
+                    v-if="canAcceptPayment"
                     type="button"
                     class="rounded-md bg-emerald-600 px-2.5 py-1 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700"
                     @click="openAcceptPaymentModal"
@@ -1164,7 +1174,7 @@ onMounted(async () => {
             </div>
 
             <!-- Payment History Section -->
-            <div class="mt-5 rounded-xl border border-fb-line bg-fb-canvas p-4 text-sm">
+            <div v-if="canSeeMoney" class="mt-5 rounded-xl border border-fb-line bg-fb-canvas p-4 text-sm">
               <div class="flex items-center justify-between border-b border-fb-line pb-3">
                 <div class="flex items-center gap-2">
                   <span class="font-semibold text-fb-text">История оплат</span>
@@ -1174,6 +1184,7 @@ onMounted(async () => {
                 </div>
                 <div class="flex items-center gap-2">
                   <button
+                    v-if="canWriteStudents"
                     type="button"
                     class="rounded-lg border border-fb-line bg-white px-2.5 py-1 text-xs font-semibold text-fb-secondary hover:border-fb-blue hover:text-fb-blue shadow-sm transition-colors"
                     title="Ссылка на оплату Click / Payme / Uzum"
@@ -1182,6 +1193,7 @@ onMounted(async () => {
                     💳 Ссылка на оплату
                   </button>
                   <button
+                    v-if="canAcceptPayment"
                     type="button"
                     class="rounded-lg bg-emerald-600 px-3 py-1 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700"
                     @click="openAcceptPaymentModal"
@@ -1523,7 +1535,7 @@ onMounted(async () => {
           </div>
 
           <div class="flex flex-wrap gap-2 border-t border-fb-line px-6 py-4">
-            <template v-if="isReadOnly">
+            <template v-if="isReadOnly && canWriteStudents">
               <button
                 v-if="detailStudent?.status === 2"
                 type="button"
@@ -1559,7 +1571,7 @@ onMounted(async () => {
                 Hard Delete
               </button>
             </template>
-            <template v-else>
+            <template v-else-if="!isReadOnly">
               <button
                 type="submit"
                 class="rounded-lg bg-fb-blue px-5 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"

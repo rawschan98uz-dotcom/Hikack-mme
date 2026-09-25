@@ -85,7 +85,12 @@ class TeacherAttendanceRecord(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        unique_together = [['company', 'teacher', 'group', 'attend_date']]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['company', 'teacher', 'group', 'attend_date'],
+                name='uniq_teacher_attendance_per_day',
+            ),
+        ]
         indexes = [
             models.Index(fields=['company', 'attend_date']),
         ]
@@ -114,7 +119,9 @@ class WorklyRecord(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        unique_together = [['company', 'staff', 'work_date']]
+        constraints = [
+            models.UniqueConstraint(fields=['company', 'staff', 'work_date'], name='uniq_workly_per_day'),
+        ]
         indexes = [
             models.Index(fields=['company', 'work_date']),
         ]

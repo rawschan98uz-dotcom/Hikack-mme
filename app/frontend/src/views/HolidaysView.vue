@@ -68,7 +68,7 @@ function fillForm(row: HolidayRow) {
 
 async function loadMeta() {
   const [holidayRes, branchRes] = await Promise.all([
-    client.get<ApiEnvelope<HolidayRow[]>>('/holidayRecalculation'),
+    client.get<ApiEnvelope<HolidayRow[]>>('/holidays'),
     client.get<ApiEnvelope<Branch[]>>('/branch'),
   ]);
   rows.value = holidayRes.data.data;
@@ -78,7 +78,7 @@ async function loadMeta() {
 async function loadRows() {
   loading.value = true;
   try {
-    const { data } = await client.get<ApiEnvelope<HolidayRow[]>>('/holidayRecalculation');
+    const { data } = await client.get<ApiEnvelope<HolidayRow[]>>('/holidays');
     rows.value = data.data;
   } finally {
     loading.value = false;
@@ -95,7 +95,7 @@ async function openDetail(id: number) {
   showPanel.value = true;
   panelLoading.value = true;
   try {
-    const { data } = await client.get<ApiEnvelope<HolidayRow>>(`/holidayRecalculation/${id}`);
+    const { data } = await client.get<ApiEnvelope<HolidayRow>>(`/holidays/${id}`);
     detailRow.value = data.data;
     fillForm(data.data);
   } finally {
@@ -127,9 +127,9 @@ async function submitForm() {
       affects_payment: form.affects_payment,
     };
     if (editingRow.value) {
-      await client.patch(`/holidayRecalculation/${editingRow.value.id}`, payload);
+      await client.patch(`/holidays/${editingRow.value.id}`, payload);
     } else {
-      await client.post('/holidayRecalculation', payload);
+      await client.post('/holidays', payload);
     }
     closePanel();
     await loadRows();
@@ -144,7 +144,7 @@ async function deleteRow() {
   if (!detailRow.value || !window.confirm('Delete this holiday?')) return;
   deleting.value = true;
   try {
-    await client.delete(`/holidayRecalculation/${detailRow.value.id}`);
+    await client.delete(`/holidays/${detailRow.value.id}`);
     closePanel();
     await loadRows();
   } finally {

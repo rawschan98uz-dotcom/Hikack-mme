@@ -95,9 +95,10 @@ Hijack-mme/
 │   ├── backend/        # Django REST Framework backend
 │   │   ├── accounts/   # User authentication, roles & RBAC
 │   │   ├── api/        # REST API endpoints & smart import parser
-│   │   ├── crm/        # Students, Leads, Groups, Courses
+│   │   ├── crm/        # Students, Leads, Groups, Courses, student Attendance, Schedule slots, group history
 │   │   ├── finance/    # Payments, Expenses, Salaries, Debts
-│   │   └── operations/ # Attendance, Scores, Schedules
+│   │   ├── org/        # Companies, Branches, Rooms
+│   │   └── operations/ # Scores, Teacher attendance, Workly, Reminders, Holidays, Tags, Archive, SMS/call/audit logs
 │   ├── frontend/       # Vue 3 SPA with Tailwind CSS & Pinia
 │   └── desktop/        # Windows desktop runtime & system-tray assets
 ├── installer/          # Inno Setup compiler script (HiJack-LMS.iss)

@@ -77,9 +77,9 @@
 | 39 | **#29** | **P2 (Надёжность)** | Ошибка 500 в `scores_branch` при нечисловом параметре `?limit=abc` | **СДЕЛАНО ✅** | `limit` защищён try/except, ограничен 1..500 |
 | 40 | **Раздел 7 п.11**| **P2 (Удобство)** | Капитализация имён ломает узбекские частицы (`og'li`, `qizi` превращаются в `Og'Li`) | **СДЕЛАНО ✅** | `api/utils.py:capitalize_name`, применяется при импорте студентов |
 | 41 | **Раздел 7 п.12**| **P2 (Удобство)** | Дубли категорий расходов (`ExpenseCategory`) | **СДЕЛАНО ✅** | Слияние дублей в миграции `finance.0008`, проверка в API (`name_taken`, работает с кириллицей) |
-| 42 | **P4-1 (E4)**| **P4 (Маршруты)** | Удалить неиспользуемые пермишены (`SETTINGS_INTEGRATIONS`, `SETTINGS_GRADE`, `GROUPS_EXPORT`), дубли роутов (`holidayRecalculation`, `reminder/index`, `users/trashed`), дубль `POST ^company/settings$` | **НЕ СДЕЛАНО ⏳** | `api/rbac_routes.py`, `api/v1/urls.py` |
-| 43 | **P4-2 (F1–F6)**| **P4 (Гигиена бэкенда)**| Заменить `unique_together` на `UniqueConstraint`, унифицировать Choices, `Course.course_duration`, `BigIntegerField` для UZS, `Student.save()` | **НЕ СДЕЛАНО ⏳** | Модели всех приложений (`operations`, `crm`, `finance`), `README.md` |
-| 44 | **P4-3 (Фронтенд)**| **P4 (Интерфейс)** | 1. Скрыть в UI финансовые разделы, балансы и кнопки удаления для учителей.<br>2. Вычистить обращения к алиасам DEBTOR и TRIAL.<br>3. Сборка `npm run build` и синхронизация `sync-app.ps1`. | **НЕ СДЕЛАНО ⏳** | `app/frontend/src/` |
+| 42 | **P4-1 (E4)**| **P4 (Маршруты)** | Удалить неиспользуемые пермишены (`SETTINGS_INTEGRATIONS`, `SETTINGS_GRADE`, `GROUPS_EXPORT`), дубли роутов (`holidayRecalculation`, `reminder/index`, `users/trashed`), дубль `POST ^company/settings$` | **СДЕЛАНО ✅** (2026-09-25) | Дубли роутов удалены, `HolidaysView` ходит на `/holidays`. Пермишены ОСТАВЛЕНЫ — они используются во фронтенде (меню SMS/VoIP/Grade, кнопка экспорта групп). Дубля `company/settings` уже не было |
+| 43 | **P4-2 (F1–F6)**| **P4 (Гигиена бэкенда)**| Заменить `unique_together` на `UniqueConstraint`, унифицировать Choices, `Course.course_duration`, `BigIntegerField` для UZS, `Student.save()` | **СДЕЛАНО ✅ кроме F2** (2026-09-25) | F1: UniqueConstraint (+`TeacherBranch`); F3: README; F4: BigIntegerField для всех сумм; F5: verbose_name (месяцы/минуты/UZS); F6: без SELECT при `update_fields` без `status`. Миграции `*_p4_hygiene`. F2 (язык Choices) — не трогали: подписи видны в интерфейсе, решает владелец |
+| 44 | **P4-3 (Фронтенд)**| **P4 (Интерфейс)** | 1. Скрыть в UI финансовые разделы, балансы и кнопки удаления для учителей.<br>2. Вычистить обращения к алиасам DEBTOR и TRIAL.<br>3. Сборка `npm run build` и синхронизация `sync-app.ps1`. | **СДЕЛАНО ✅** (2026-09-25) | `StudentsView` (оплаты/даты оплат/кнопки по правам), `DashboardView` (карточки по доступу, без денег у учителя). Алиасов во фронтенде не было. `dist` пересобран; `sync-app.ps1` на этом ПК не используется |
 
 ---
 
@@ -224,7 +224,7 @@
 
 ---
 
-### ЗАВЕРШАЮЩИЙ ШАГ: 🟢 УРОВЕНЬ P4 (Фронтенд, чистка роутов и гигиена кода)
+### ✅ P4 ВЫПОЛНЕН 2026-09-25 (кроме F2 — язык Choices). Итоги — строки 42–44 в разделе 2. Ниже — исходный план
 
 Завершающий этап приведения кодовой базы и пользовательского интерфейса в полный порядок:
 
@@ -232,7 +232,7 @@
 |---|---|---|---|---|---|
 | 42 | **P4-1 (E4)** | `api/rbac_routes.py`,<br>`api/v1/urls.py` | 1. Удалить неиспользуемые пермишены (`PERM_SETTINGS_INTEGRATIONS`, `PERM_SETTINGS_GRADE`, `PERM_GROUPS_EXPORT`).<br>2. Удалить дублирующиеся роуты (`holidayRecalculation`, `reminder/index`, `company/<id>/users/trashed`).<br>3. Удалить дублирующееся правило `POST ^company/settings$`. | Очистка мертвого кода и устранение дубликатов в маршрутизации. | **НЕ СДЕЛАНО ⏳** |
 | 43 | **P4-2 (F1–F6)** | Модели всех приложений (`operations`, `crm`, `finance`), `README.md` | 1. Заменить устаревший `unique_together` на современный `UniqueConstraint` в `TeacherAttendanceRecord` и `WorklyRecord` (F1).<br>2. Унифицировать язык Choices (русский / английский) (F2).<br>3. Обновить в `README.md` описание архитектуры: Attendance/Schedule живут в `crm/`, а не в `operations/` (F3).<br>4. Перевести денежные суммы с 32-битного IntegerField на `BigIntegerField` во избежание переполнения 2.1 млрд сум (F4).<br>5. Задокументировать единицы измерения длительности курсов (`Course.course_duration`) через verbose_name (F5).<br>6. Оптимизировать `Student.save()` от лишних SELECT-запросов (F6). | Единый стиль моделей Django, защита от переполнения и чистота архитектуры. | **НЕ СДЕЛАНО ⏳** |
-| 44 | **P4-3 (Фронтенд)** | `app/frontend/src` | 1. Скрыть в UI финансовые разделы, колонки балансов и кнопки удаления для учителей.<br>2. Вычистить из компонентов обращения к удалённым алиасам `DEBTOR` и `TRIAL`.<br>3. Пересобрать фронтенд (`npm run build`) и синхронизировать с установленной версией через протокол `sync-app.ps1`. | Полная синхронизация пользовательского интерфейса с новыми серверными правилами. | **НЕ СДЕЛАНО ⏳** |
+| 44 | **P4-3 (Фронтенд)** | `app/frontend/src` | 1. Скрыть в UI финансовые разделы, колонки балансов и кнопки удаления для учителей.<br>2. Вычистить из компонентов обращения к удалённым алиасам `DEBTOR` и `TRIAL`.<br>3. Пересобрать фронтенд (`npm run build`) и синхронизировать с установленной версией через протокол `sync-app.ps1`. | Полная синхронизация пользовательского интерфейса с новыми серверными правилами. | **СДЕЛАНО ✅** |
 
 ---
 
@@ -253,7 +253,7 @@ app\backend\.venv\Scripts\python.exe app\backend\manage.py makemigrations --chec
 
 # 3. Запуск полного набора unit-тестов
 app\backend\.venv\Scripts\python.exe app\backend\manage.py test accounts
-# Текущий результат: Ran 78 tests -> OK (0 failures, 0 errors).
+# Текущий результат: Ran 126 tests -> OK (0 failures, 0 errors).
 ```
 
 ### Памятка по синхронизации с десктопным приложением:

@@ -24,7 +24,7 @@ class Payment(models.Model):
     )
     student_name = models.CharField(max_length=255)
     payment_date = models.DateField(null=True, blank=True, db_index=True)
-    amount = models.IntegerField()
+    amount = models.BigIntegerField()
     months_covered = models.PositiveIntegerField(default=1)
     method = models.CharField(max_length=20, choices=Method.choices, default=Method.CASH)
     transaction_type = models.CharField(
@@ -61,9 +61,9 @@ class Payment(models.Model):
         blank=True,
         related_name='payments',
     )
-    discount_amount = models.IntegerField(default=0)
-    gross_amount = models.IntegerField(null=True, blank=True)
-    net_amount = models.IntegerField(null=True, blank=True)
+    discount_amount = models.BigIntegerField(default=0)
+    gross_amount = models.BigIntegerField(null=True, blank=True)
+    net_amount = models.BigIntegerField(null=True, blank=True)
     teacher_name = models.CharField(max_length=255, blank=True)
     comment = models.TextField(blank=True)
     created_by = models.ForeignKey(
@@ -78,7 +78,7 @@ class Payment(models.Model):
 class Withdrawal(models.Model):
     company = models.ForeignKey('org.Company', on_delete=models.CASCADE, related_name='withdrawals')
     name = models.CharField(max_length=255)
-    amount = models.IntegerField()
+    amount = models.BigIntegerField()
     comment = models.TextField(blank=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -113,7 +113,7 @@ class Expense(models.Model):
     description = models.TextField(blank=True)
     payee = models.CharField(max_length=255, blank=True)
     method = models.CharField(max_length=20, choices=Method.choices, default=Method.CASH)
-    amount = models.IntegerField()
+    amount = models.BigIntegerField()
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -155,7 +155,7 @@ class SalarySetting(models.Model):
     effective_to = models.DateField(null=True, blank=True)
     teacher_name = models.CharField(max_length=255)
     salary_type = models.CharField(max_length=20, choices=SalaryType.choices, default=SalaryType.FIXED)
-    amount = models.IntegerField(default=0)
+    amount = models.BigIntegerField(default=0)
     course_name = models.CharField(max_length=255, blank=True)
     group_name = models.CharField(max_length=255, blank=True)
     created_by = models.ForeignKey(
@@ -187,7 +187,7 @@ class PayrollPayment(models.Model):
         related_name='payroll_payments',
     )
     payroll_period = models.CharField(max_length=7)  # 'YYYY-MM'
-    amount = models.IntegerField()
+    amount = models.BigIntegerField()
     method = models.CharField(max_length=20, choices=Method.choices, default=Method.CASH)
     comment = models.TextField(blank=True)
     expense = models.ForeignKey(
@@ -230,7 +230,7 @@ class PaymentTransaction(models.Model):
     )
     provider = models.CharField(max_length=20, choices=Provider.choices)
     trans_id = models.CharField(max_length=255)
-    amount = models.IntegerField()
+    amount = models.BigIntegerField()
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
     payment = models.ForeignKey(Payment, null=True, blank=True, on_delete=models.SET_NULL, related_name='transactions')
     data = models.JSONField(default=dict, blank=True)

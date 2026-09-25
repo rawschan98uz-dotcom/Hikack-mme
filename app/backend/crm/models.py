@@ -9,9 +9,9 @@ class Course(models.Model):
     company = models.ForeignKey('org.Company', on_delete=models.CASCADE, related_name='courses')
     name = models.CharField(max_length=255)
     code = models.CharField(max_length=64, blank=True)
-    price = models.PositiveIntegerField(default=0)
-    lesson_duration = models.PositiveIntegerField(default=90)
-    course_duration = models.PositiveIntegerField(default=12)
+    price = models.PositiveBigIntegerField(default=0, verbose_name='Цена в месяц (UZS)')
+    lesson_duration = models.PositiveIntegerField(default=90, verbose_name='Длительность урока (минуты)')
+    course_duration = models.PositiveIntegerField(default=12, verbose_name='Длительность курса (месяцы)')
     description = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -101,7 +101,7 @@ class Student(models.Model):
     parent_telegram = models.CharField(max_length=64, blank=True)
     telegram_code = models.CharField(max_length=16, null=True, blank=True, unique=True)
     status = models.IntegerField(choices=Status.choices, default=Status.STUDYING)
-    balance = models.IntegerField(default=0)
+    balance = models.BigIntegerField(default=0)
     paid_this_month = models.BooleanField(default=False)
     trial_date = models.DateField(null=True, blank=True)
     payment_offset = models.IntegerField(default=0)
@@ -115,7 +115,10 @@ class Student(models.Model):
 
     def save(self, *args, **kwargs):
         left_statuses = {self.Status.LEFT, self.Status.LEFT_TRIAL}
-        if self.pk:
+        update_fields = kwargs.get('update_fields')
+        # F6: status is not being written -> no need to look up the old one
+        status_untouched = update_fields is not None and 'status' not in update_fields
+        if self.pk and not status_untouched:
             old_status = Student.objects.filter(pk=self.pk).values_list('status', flat=True).first()
             if self.status in left_statuses and old_status not in left_statuses:
                 if not self.left_at:
@@ -128,7 +131,7 @@ class Student(models.Model):
                     self.frozen_at = timezone.now()
             elif self.status != self.Status.FROZEN:
                 self.frozen_at = None
-        else:
+        elif not self.pk:
             if self.status in left_statuses and not self.left_at:
                 self.left_at = timezone.now()
             if self.status == self.Status.FROZEN and not self.frozen_at:

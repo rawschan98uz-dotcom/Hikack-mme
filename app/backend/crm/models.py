@@ -21,15 +21,15 @@ class Course(models.Model):
 
 class Group(models.Model):
     class Status(models.IntegerChoices):
-        ACTIVE = 2, 'Active'
-        ARCHIVE = 3, 'Archive'
+        ACTIVE = 2, 'Активная'
+        ARCHIVE = 3, 'В архиве'
 
     class Days(models.IntegerChoices):
-        ODD = 1, 'Odd days'
-        EVEN = 2, 'Even days'
-        WEEKEND = 3, 'Weekend days'
-        EVERY_DAY = 4, 'Every day'
-        CUSTOM = 5, 'Other'
+        ODD = 1, 'Нечётные дни'
+        EVEN = 2, 'Чётные дни'
+        WEEKEND = 3, 'Выходные'
+        EVERY_DAY = 4, 'Каждый день'
+        CUSTOM = 5, 'Свои дни'
 
     company = models.ForeignKey('org.Company', on_delete=models.CASCADE, related_name='groups')
     branch = models.ForeignKey('org.Branch', on_delete=models.PROTECT, related_name='groups')
@@ -78,10 +78,13 @@ class Group(models.Model):
 class Student(models.Model):
     class Status(models.IntegerChoices):
         STUDYING = 1, 'Обучается'
-        FROZEN = 2, 'Заморозка (Frozen)'
+        FROZEN = 2, 'Заморозка'
         LEFT_TRIAL = 7, 'Ушел после пробного'
         LEFT = 8, 'Отчислен / Ушел'
-        GRADUATED = 9, 'Завершил курс (Graduated)'
+        GRADUATED = 9, 'Завершил курс'
+
+    # Statuses of students who are still members of their group (left / graduated ones are history)
+    CURRENT_STATUSES = (Status.STUDYING, Status.FROZEN)
 
     company = models.ForeignKey('org.Company', on_delete=models.CASCADE, related_name='students')
     branch = models.ForeignKey('org.Branch', on_delete=models.PROTECT, related_name='students')
@@ -101,7 +104,8 @@ class Student(models.Model):
     parent_telegram = models.CharField(max_length=64, blank=True)
     telegram_code = models.CharField(max_length=16, null=True, blank=True, unique=True)
     status = models.IntegerField(choices=Status.choices, default=Status.STUDYING)
-    balance = models.BigIntegerField(default=0)
+    # "Копилка": money paid on top of whole months, waiting to close the next month (finance/wallet.py)
+    wallet_amount = models.BigIntegerField(default=0)
     paid_this_month = models.BooleanField(default=False)
     trial_date = models.DateField(null=True, blank=True)
     payment_offset = models.IntegerField(default=0)
@@ -118,8 +122,13 @@ class Student(models.Model):
         update_fields = kwargs.get('update_fields')
         # F6: status is not being written -> no need to look up the old one
         status_untouched = update_fields is not None and 'status' not in update_fields
+        # Read by crm/signals.py: the student has just left / finished -> check for unpaid months
+        self._just_left = False
         if self.pk and not status_untouched:
             old_status = Student.objects.filter(pk=self.pk).values_list('status', flat=True).first()
+            self._just_left = old_status in self.CURRENT_STATUSES and self.status in (
+                self.Status.LEFT, self.Status.GRADUATED,
+            )
             if self.status in left_statuses and old_status not in left_statuses:
                 if not self.left_at:
                     self.left_at = timezone.now()
@@ -202,9 +211,9 @@ class Lead(models.Model):
 
 class AttendanceRecord(models.Model):
     class Status(models.IntegerChoices):
-        PRESENT = 1, 'Present'
-        ABSENT = 0, 'Absent'
-        LATE = 2, 'Late'
+        PRESENT = 1, 'Был'
+        ABSENT = 0, 'Не был'
+        LATE = 2, 'Опоздал'
 
     company = models.ForeignKey('org.Company', on_delete=models.CASCADE, related_name='attendance_records')
     group = models.ForeignKey(Group, on_delete=models.CASCADE, related_name='attendance_records')
@@ -273,11 +282,11 @@ class GroupScheduleSlot(models.Model):
 
 class GroupEnrollment(models.Model):
     class Status(models.TextChoices):
-        ACTIVE = 'active', 'Active'
-        FROZEN = 'frozen', 'Frozen'
-        TRANSFERRED = 'transferred', 'Transferred'
-        GRADUATED = 'graduated', 'Graduated'
-        LEFT = 'left', 'Left'
+        ACTIVE = 'active', 'Учится'
+        FROZEN = 'frozen', 'Заморозка'
+        TRANSFERRED = 'transferred', 'Переведён'
+        GRADUATED = 'graduated', 'Завершил курс'
+        LEFT = 'left', 'Ушёл'
 
     company = models.ForeignKey('org.Company', on_delete=models.CASCADE, related_name='group_enrollments')
     student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name='enrollments')

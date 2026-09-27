@@ -43,7 +43,7 @@ class Block4Base(TestCase):
         )
         self.own_student = Student.objects.create(
             company=self.company, branch=self.branch, group=self.own_group, first_name='Mine', phone='901110001',
-            balance=500000, status=Student.Status.STUDYING,
+            status=Student.Status.STUDYING,
         )
         self.other_student = Student.objects.create(
             company=self.company, branch=self.branch, group=self.other_group, first_name='Theirs', phone='901110002',
@@ -58,17 +58,17 @@ class TeacherScopeTests(Block4Base):
         self.client.force_authenticate(self.teacher)
         rows = self.client.get('/v1/students').json()['data']['results']
         self.assertEqual([r['id'] for r in rows], [self.own_student.id])
-        for key in ('balance', 'paid_this_month', 'is_debtor', 'overdue_days', 'next_payment_date', 'course_price'):
+        for key in ('paid_this_month', 'is_debtor', 'overdue_days', 'next_payment_date', 'course_price'):
             self.assertIsNone(rows[0][key], key)
 
         detail = self.client.get(f'/v1/students/{self.own_student.id}').json()['data']
-        self.assertIsNone(detail['balance'])
+        self.assertIsNone(detail['next_payment_date'])
         self.assertEqual(self.client.get(f'/v1/students/{self.other_student.id}').status_code, 404)
 
     def test_staff_still_sees_money_fields(self):
         self.client.force_authenticate(self.ceo)
         detail = self.client.get(f'/v1/students/{self.own_student.id}').json()['data']
-        self.assertEqual(detail['balance'], 500000)
+        self.assertIsNotNone(detail['next_payment_date'])
 
     def test_teacher_cannot_read_student_payments(self):
         self.client.force_authenticate(self.teacher)
@@ -116,7 +116,10 @@ class TeacherScopeTests(Block4Base):
     def test_teacher_cannot_edit_score_of_other_group(self):
         score = StudentScore.objects.create(company=self.company, student=self.other_student, group=self.other_group, grade=50)
         self.client.force_authenticate(self.teacher)
-        self.assertEqual(self.client.patch(f'/v1/scores/{score.id}', {'grade': 99}).status_code, 403)
+        # another teacher's grade is not even visible to this teacher
+        self.assertEqual(self.client.patch(f'/v1/scores/{score.id}', {'grade': 99}).status_code, 404)
+        score.refresh_from_db()
+        self.assertEqual(score.grade, 50)
 
     def test_scores_limit_not_a_number_does_not_crash(self):
         self.client.force_authenticate(self.ceo)
@@ -290,25 +293,17 @@ class SalaryTests(Block4Base):
 
 
 class CapacityTests(Block4Base):
-    """D10"""
+    """D10 was removed by the owner (2026-09-27): room capacity no longer limits a group."""
 
-    def test_room_capacity_blocks_extra_student(self):
+    def test_room_capacity_does_not_block(self):
         room = Room.objects.create(branch=self.branch, name='Tiny', capacity=1)
         self.own_group.room = room
         self.own_group.save()
         self.client.force_authenticate(self.ceo)
         res = self.client.patch(f'/v1/students/{self.other_student.id}', {'group_id': self.own_group.id})
-        self.assertEqual(res.status_code, 400)
-        self.assertIn('мест', res.json()['message'])
-
-    def test_smaller_room_cannot_be_assigned_to_full_group(self):
-        room = Room.objects.create(branch=self.branch, name='Zero', capacity=1)
-        Student.objects.create(
-            company=self.company, branch=self.branch, group=self.own_group, first_name='Second', phone='901110003',
-        )
-        self.client.force_authenticate(self.ceo)
+        self.assertEqual(res.status_code, 200, res.content)
         res = self.client.patch(f'/v1/groups/{self.own_group.id}', {'room_id': room.id})
-        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.status_code, 200, res.content)
 
 
 class BillingAndImportTests(Block4Base):

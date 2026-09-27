@@ -16,9 +16,9 @@ export type ScheduleTab = 'odd' | 'even' | 'other';
 export type ScheduleLayout = 'horizontal' | 'vertical';
 
 export const SCHEDULE_TABS: { key: ScheduleTab; label: string }[] = [
-  { key: 'odd', label: 'Odd days' },
-  { key: 'even', label: 'Even days' },
-  { key: 'other', label: 'Other' },
+  { key: 'odd', label: 'Нечётные дни' },
+  { key: 'even', label: 'Чётные дни' },
+  { key: 'other', label: 'Свои дни' },
 ];
 
 export const SCHEDULE_WEEKDAYS = [

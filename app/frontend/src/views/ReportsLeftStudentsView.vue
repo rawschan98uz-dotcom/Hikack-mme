@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { todayIso } from '../utils/dates';
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 
@@ -26,15 +27,19 @@ interface LeftStudentRow {
   branch: string;
   group_id: number | null;
   group: string;
-  balance?: number;
   comment?: string;
   left_at: string;
+  /** Unpaid months at the moment of leaving (0 = left without debt). */
+  debt_months?: number;
+  debt_amount?: number;
+  debt_since?: string | null;
 }
 
 interface Summary {
   left_active: number;
   left_trial: number;
   total: number;
+  with_debt?: number;
 }
 
 interface Payload {
@@ -73,7 +78,17 @@ const filters = reactive({
   date_from: '',
   date_to: '',
   q: '',
+  with_debt: false,
 });
+
+function formatMoney(value: number) {
+  return value.toLocaleString('ru-RU');
+}
+
+function showDebtors() {
+  filters.with_debt = true;
+  applyFilters();
+}
 
 async function loadMeta() {
   const [branchRes, groupRes] = await Promise.all([
@@ -96,6 +111,7 @@ function resetFilters() {
   filters.date_from = '';
   filters.date_to = '';
   filters.q = '';
+  filters.with_debt = false;
   currentPage.value = 1;
   loadRows();
 }
@@ -115,6 +131,7 @@ async function loadRows() {
     if (filters.date_from) params.date_from = filters.date_from;
     if (filters.date_to) params.date_to = filters.date_to;
     if (filters.q.trim()) params.q = filters.q.trim();
+    if (filters.with_debt) params.with_debt = '1';
     const { data } = await client.get<ApiEnvelope<Payload>>('/reports/left-students', { params });
     summary.value = data.data.summary;
     rows.value = data.data.rows;
@@ -135,10 +152,11 @@ async function exportCsv() {
     if (filters.date_from) params.date_from = filters.date_from;
     if (filters.date_to) params.date_to = filters.date_to;
     if (filters.q.trim()) params.q = filters.q.trim();
+    if (filters.with_debt) params.with_debt = '1';
 
     const { data } = await client.get<ApiEnvelope<Payload>>('/reports/left-students', { params });
     const csvRows = [
-      ['ID', 'ФИО (Name)', 'Телефон (Phone)', 'Статус (Status)', 'Группа (Group)', 'Филиал (Branch)', 'Баланс (Balance)', 'Причина ухода / Комментарий (Comment)', 'Дата ухода (Left Date)'],
+      ['ID', 'ФИО (Name)', 'Телефон (Phone)', 'Статус (Status)', 'Группа (Group)', 'Филиал (Branch)', 'Долг при уходе, мес.', 'Долг при уходе, сум (примерно)', 'Причина ухода / Комментарий (Comment)', 'Дата ухода (Left Date)'],
     ];
     for (const row of data.data.rows) {
       csvRows.push([
@@ -148,7 +166,8 @@ async function exportCsv() {
         `"${row.status_label}"`,
         `"${row.group}"`,
         `"${row.branch}"`,
-        String(row.balance ?? 0),
+        String(row.debt_months ?? 0),
+        String(row.debt_amount ?? 0),
         `"${row.comment || ''}"`,
         `"${row.left_at}"`,
       ]);
@@ -157,7 +176,7 @@ async function exportCsv() {
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement('a');
     link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `left_students_${new Date().toISOString().slice(0, 10)}.csv`);
+    link.setAttribute('download', `left_students_${todayIso()}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -178,6 +197,8 @@ function openGroup(groupId: number) {
 }
 
 onMounted(async () => {
+  // Link from the dashboard block "Ушли, не заплатив"
+  if (route.query.with_debt === '1') filters.with_debt = true;
   await loadMeta();
   await loadRows();
 });
@@ -222,7 +243,7 @@ watch(
     </div>
 
     <!-- Summary KPI cards -->
-    <div v-if="!isSettingsView" class="grid grid-cols-1 gap-3 md:grid-cols-3">
+    <div v-if="!isSettingsView" class="grid grid-cols-1 gap-3 md:grid-cols-4">
       <div class="rounded-xl border border-fb-line bg-fb-card p-5 text-center shadow-sm">
         <div class="text-3xl font-bold text-fb-text">{{ summary.total }}</div>
         <div class="mt-1 text-xs font-medium uppercase tracking-wider text-fb-secondary">Всего ушло</div>
@@ -235,6 +256,15 @@ watch(
         <div class="text-3xl font-bold text-amber-600">{{ summary.left_trial }}</div>
         <div class="mt-1 text-xs font-medium uppercase tracking-wider text-fb-secondary">Ушли после пробного</div>
       </div>
+      <button
+        type="button"
+        class="rounded-xl border border-rose-200 bg-rose-50 p-5 text-center shadow-sm hover:border-rose-400 transition-colors"
+        title="Показать только ушедших с неоплаченными месяцами"
+        @click="showDebtors"
+      >
+        <div class="text-3xl font-bold text-rose-700">{{ summary.with_debt ?? 0 }}</div>
+        <div class="mt-1 text-xs font-medium uppercase tracking-wider text-rose-700">Ушли с долгом</div>
+      </button>
     </div>
 
     <!-- Filters -->
@@ -277,6 +307,10 @@ watch(
           @keydown.enter="applyFilters"
         />
       </div>
+      <label class="flex items-center gap-2 pb-2 text-sm text-fb-secondary">
+        <input v-model="filters.with_debt" type="checkbox" />
+        Только с долгом
+      </label>
       <button
         type="button"
         class="rounded-lg bg-fb-blue px-4 py-2 text-sm font-medium text-white hover:bg-fb-blue-dark transition-colors"
@@ -317,6 +351,7 @@ watch(
               <th class="px-5 py-3.5 text-left">Категория</th>
               <th class="px-5 py-3.5 text-left">Группа</th>
               <th class="px-5 py-3.5 text-left">Филиал</th>
+              <th class="px-5 py-3.5 text-left">Долг при уходе</th>
               <th class="px-5 py-3.5 text-left">Причина ухода (Комментарий)</th>
               <th class="px-5 py-3.5 text-left">Дата ухода</th>
             </tr>
@@ -350,6 +385,12 @@ watch(
                 <span v-else class="text-fb-secondary">{{ row.group }}</span>
               </td>
               <td class="px-5 py-3.5 text-fb-secondary">{{ row.branch }}</td>
+              <td class="px-5 py-3.5">
+                <span v-if="row.debt_months" class="font-semibold text-rose-700">
+                  {{ row.debt_months }} мес.<span v-if="row.debt_amount"> · ≈ {{ formatMoney(row.debt_amount) }} сум</span>
+                </span>
+                <span v-else class="text-fb-secondary">—</span>
+              </td>
               <td class="px-5 py-3.5 text-fb-secondary max-w-[240px] truncate" :title="row.comment">
                 {{ row.comment || '—' }}
               </td>

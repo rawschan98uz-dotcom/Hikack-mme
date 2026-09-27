@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { todayIso } from '../utils/dates';
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 
 import client, { type ApiEnvelope } from '../api/client';
@@ -167,7 +168,7 @@ async function exportCsv() {
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement('a');
     link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `conversion_report_${new Date().toISOString().slice(0, 10)}.csv`);
+    link.setAttribute('download', `conversion_report_${todayIso()}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);

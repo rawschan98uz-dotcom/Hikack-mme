@@ -2,8 +2,8 @@ import re
 from datetime import date, datetime, time, timedelta
 
 from django.contrib.auth import authenticate
-from django.db.models import Count, Max, Min, Q, Sum
-from django.db.models.functions import TruncMonth
+from django.db.models import Count, F, Max, Min, Q, Sum
+from django.db.models.functions import Coalesce, TruncDate, TruncMonth
 from django.db import transaction
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
@@ -14,11 +14,18 @@ from accounts.models import TeacherBranch, User
 from accounts.rbac import ROLE_CEO, get_effective_role, get_role_label, get_user_permissions, user_is_teacher
 from api.responses import fail, ok
 from api.scope import (
+    branch_allowed,
+    branch_limit,
+    branches_for,
+    can_access_group,
+    can_access_lead,
+    can_access_student,
     filter_groups_queryset,
+    filter_reminders_queryset,
     filter_students_queryset,
+    scope_branch,
+    scope_payments,
     strip_for_teacher,
-    teacher_can_access_group,
-    teacher_can_access_student,
 )
 from api.utils import (
     safe_int,
@@ -30,14 +37,16 @@ from api.utils import (
     parse_time_safe,
     validate_course_code,
 )
-from crm.models import Course, Group, Lead, Student
+from crm.models import Course, Group, GroupEnrollment, Lead, Student
 from crm.services import (
-    group_capacity_error,
     group_weekdays,
     sync_group_schedule_slots,
     validate_group_schedule,
 )
 
+from finance.refunds import EFFECTIVE_MONTHS
+from crm.debts import unpaid_leave_state
+from finance.wallet import ACTIVE_PAYMENT_Q, current_month_price, wallet_info
 from finance.models import Payment
 from operations import notify as notifications
 from operations.models import Reminder, Tag, log_audit
@@ -88,9 +97,28 @@ def _normalize_phone(phone: str) -> str:
     return normalize_phone(phone)
 
 
+def _latest_converted_student(lead: Lead) -> Student | None:
+    """The most recent student made from this lead (a lead can be re-converted after the student left)."""
+    students = list(lead.converted_students.all())
+    return max(students, key=lambda s: s.id) if students else None
+
+
+def _active_student_duplicate(company, phone: str, first_name: str, last_name: str) -> Student | None:
+    """An active student with the same phone and name (case-insensitive, Cyrillic too)."""
+    from crm.services import get_phone_variants
+    qs = Student.objects.filter(
+        company=company,
+        phone__in=get_phone_variants(phone),
+        first_name__iexact=first_name,
+    ).exclude(status__in=[Student.Status.LEFT, Student.Status.LEFT_TRIAL])
+    if last_name:
+        qs = qs.filter(last_name__iexact=last_name)
+    return qs.first()
+
+
 def _serialize_lead(lead: Lead) -> dict:
     converted_student = (
-        lead.converted_students.first()
+        _latest_converted_student(lead)
         if lead.stage == Lead.Stage.CONVERTED
         else None
     )
@@ -199,6 +227,21 @@ def _week_of_study(group: Group) -> int | None:
     return (today - group.group_start_date).days // 7 + 1
 
 
+# Group size = students who still belong to it (left / graduated students keep the link only as history)
+CURRENT_STUDENTS_COUNT = Count('students', filter=Q(students__status__in=Student.CURRENT_STATUSES))
+
+
+def _group_archive_error(group: Group) -> str | None:
+    """A group with current students cannot be closed — they would keep studying (and paying) in it."""
+    count = group.students.filter(status__in=Student.CURRENT_STATUSES).count()
+    if count:
+        return (
+            f'В группе «{group.name}» {count} студент(ов) учатся или на заморозке. Сначала переведите их '
+            'в другую группу или поставьте статус «Завершил курс» / «Ушёл», потом закройте группу.'
+        )
+    return None
+
+
 def _serialize_group(group: Group, *, detailed: bool = False) -> dict:
     week = _week_of_study(group)
     payload = {
@@ -228,7 +271,9 @@ def _serialize_group(group: Group, *, detailed: bool = False) -> dict:
         'training_dates': _training_dates_label(group),
         'week_of_study': week,
         'week_of_study_label': f'Week {week}' if week is not None else None,
-        'students_count': getattr(group, 'students_count', group.students.count()),
+        'students_count': getattr(
+            group, 'students_count', group.students.filter(status__in=Student.CURRENT_STATUSES).count(),
+        ),
         'tags': [{'id': tag.id, 'name': tag.name} for tag in group.tags.all()],
         'archived_at': group.archived_at.isoformat() if group.archived_at else None,
         'archived_by_id': group.archived_by_id,
@@ -243,7 +288,7 @@ def _serialize_group(group: Group, *, detailed: bool = False) -> dict:
                 'status': student.status,
                 'status_label': student.get_status_display(),
             }
-            for student in group.students.order_by('first_name', 'last_name')[:100]
+            for student in group.students.filter(status__in=Student.CURRENT_STATUSES).order_by('first_name', 'last_name')
         ]
     return payload
 
@@ -284,6 +329,7 @@ def _apply_group_fields(group: Group, company: Company, data: dict) -> str | Non
                     pk=int(teacher_id),
                     company=company,
                     user_type=User.UserType.TEACHER,
+                    is_active=True,
                 )
             except (User.DoesNotExist, TypeError, ValueError):
                 return 'Invalid teacher'
@@ -373,10 +419,6 @@ def _apply_group_fields(group: Group, company: Company, data: dict) -> str | Non
 
     if group.room and group.room.branch_id != group.branch_id:
         return 'Room belongs to a different branch'
-    if room_id not in (None, '') and group.pk and group.room:
-        capacity_error = group_capacity_error(group, room=group.room, adding=0)
-        if capacity_error:
-            return capacity_error
     if group.teacher and not TeacherBranch.objects.filter(teacher=group.teacher, branch=group.branch).exists():
         return 'Teacher is not assigned to this branch'
 
@@ -413,14 +455,13 @@ def _get_student_payments_queryset(student: Student, company: Company):
     return Payment.objects.filter(
         Q(company=company) & payment_filter,
         transaction_type=Payment.TransactionType.PAYMENT,
-        reversals__isnull=True,
-    )
+    ).filter(ACTIVE_PAYMENT_Q)
 
 
 def _get_student_payment_info(student: Student, info: dict | None = None) -> dict:
     if info is None:
         payments = _get_student_payments_queryset(student, student.company)
-        months_covered = payments.aggregate(total=Sum('months_covered'))['total'] or 0
+        months_covered = payments.aggregate(total=Sum(EFFECTIVE_MONTHS))['total'] or 0
         last = payments.order_by('-payment_date', '-created_at').first()
         first = payments.order_by('payment_date', 'created_at').first()
         last_date = (last.payment_date or timezone.localtime(last.created_at).date()) if last else None
@@ -437,8 +478,16 @@ def _get_student_payment_info(student: Student, info: dict | None = None) -> dic
 
     today = timezone.localdate()
     # A student is only a debtor if currently studying and next payment due date is in the past
-    is_debtor = (student.status == Student.Status.STUDYING) and (today > next_due)
-    overdue_days = (today - next_due).days if is_debtor else 0
+    # Studying: overdue as of today. Frozen (owner, 2026-09-27): a debt from before the freeze is shown
+    # too, counted up to the day of freezing (the pause itself never adds debt).
+    if student.status == Student.Status.STUDYING:
+        check_date = today
+    elif student.status == Student.Status.FROZEN:
+        check_date = timezone.localtime(student.frozen_at).date() if student.frozen_at else today
+    else:
+        check_date = None
+    is_debtor = check_date is not None and check_date > next_due
+    overdue_days = (check_date - next_due).days if is_debtor else 0
 
     return {
         'last_payment_date': last_date,
@@ -447,6 +496,43 @@ def _get_student_payment_info(student: Student, info: dict | None = None) -> dic
         'overdue_days': overdue_days,
         'paid_count': effective_count,
     }
+
+
+def _student_monthly_price(student: Student) -> int:
+    """Course price of the student's current group, or of the last group in their history."""
+    if student.group_id and student.group and student.group.course:
+        return student.group.course.price or 0
+    last = (
+        GroupEnrollment.objects.filter(student=student, group__course__isnull=False)
+        .select_related('group__course').order_by('-joined_date', '-id').first()
+    )
+    return (last.group.course.price or 0) if last else 0
+
+
+def student_debt_on(student: Student, on_date: date | None = None) -> dict | None:
+    """
+    Unpaid months on `on_date` (default: the day the student left, or today), regardless of status.
+    Returns None when nothing is owed.
+    """
+    if on_date is None:
+        on_date = timezone.localtime(student.left_at).date() if student.left_at else timezone.localdate()
+    due = _get_student_payment_info(student)['next_payment_date']
+    if on_date <= due:
+        return None
+    months = 1
+    while _add_months(due, months) < on_date:
+        months += 1
+    price = _student_monthly_price(student)
+    return {
+        'unpaid_since': due,
+        'months': months,
+        'days': (on_date - due).days,
+        'monthly_price': price,
+        'approx_amount': price * months,
+    }
+
+
+PAID_DAY = Coalesce('payment_date', TruncDate('created_at'))
 
 
 def _company_payments_summary(company: Company) -> dict:
@@ -463,23 +549,25 @@ def _company_payments_summary(company: Company) -> dict:
         Payment.objects.filter(
             company=company,
             transaction_type=Payment.TransactionType.PAYMENT,
-            reversals__isnull=True,
         )
+        .filter(ACTIVE_PAYMENT_Q)
         .values('student_id', 'student_name')
         .annotate(
             count=Count('id'),
-            total_months=Sum('months_covered'),
-            last_created=Max('created_at'),
-            first_created=Min('created_at'),
+            total_months=Sum(EFFECTIVE_MONTHS),
+            # The day the money was actually brought (payment_date); old payments without it — the day entered
+            last_paid=Max(PAID_DAY),
+            first_paid=Min(PAID_DAY),
         )
     )
     summary = {}
     for r in rows:
         item = {
             'count': r['count'],
-            'months_covered': r['total_months'] or r['count'],
-            'last_date': timezone.localtime(r['last_created']).date() if r['last_created'] else None,
-            'first_date': timezone.localtime(r['first_created']).date() if r['first_created'] else None,
+            # 0 is a real value now (a копилка payment that did not close a month yet)
+            'months_covered': r['total_months'] if r['total_months'] is not None else r['count'],
+            'last_date': r['last_paid'],
+            'first_date': r['first_paid'],
         }
         if r['student_id']:
             sid = r['student_id']
@@ -551,7 +639,6 @@ def _serialize_student(student: Student, *, payment_info: dict | None = None, de
         'status': student.status,
         'status_label': student.get_status_display(),
         'trial_date': student.trial_date.isoformat() if student.trial_date else None,
-        'balance': student.balance,
         'paid_this_month': student.paid_this_month,
         'last_payment_date': (
             last_payment_date.isoformat() if last_payment_date else None
@@ -562,6 +649,7 @@ def _serialize_student(student: Student, *, payment_info: dict | None = None, de
         'is_debtor': p_info['is_debtor'],
         'overdue_days': p_info['overdue_days'],
         'paid_count': p_info['paid_count'],
+        **wallet_info(student),
         'payment_offset': student.payment_offset,
         'branch_id': student.branch_id,
         'branch': student.branch.name if student.branch_id else '—',
@@ -579,29 +667,46 @@ def _serialize_student(student: Student, *, payment_info: dict | None = None, de
     return payload
 
 
-def _calculate_unfreeze_offset(student: Student, company: Company) -> int:
+def _months_days_between(start: date, end: date) -> tuple[int, int]:
+    """(whole months, leftover days) from start to end, end >= start: end = start + months + days."""
+    months = (end.year - start.year) * 12 + (end.month - start.month)
+    while months > 0 and _add_months(start, months) > end:
+        months -= 1
+    return months, (end - _add_months(start, months)).days
+
+
+class UnfreezeError(ValueError):
+    pass
+
+
+def _unfreeze_schedule(student: Student, company: Company, resume_date: date) -> tuple[date, int]:
     """
-    B4: Offset consumes only months actually studied between anchor_date and frozen_at,
-    preserving unused prepaid months.
+    Freeze = the payment clock is paused, nothing is forgiven and nothing is lost.
+
+    Whatever the student had at the moment of freezing is carried over to the resume date:
+    - prepaid time left (e.g. 2 months) -> next payment = resume date + 2 months;
+    - a debt (e.g. unpaid since 1 May, frozen 26 Sep) -> still the same months/days overdue after resuming.
+    Repeated freezes work the same way because each one starts from the current schedule.
+
+    Returns (new anchor date, new payment_offset) that encode the shifted schedule.
     """
-    current_paid_months = _get_student_payments_queryset(student, company).aggregate(
-        total=Sum('months_covered')
-    )['total'] or 0
+    freeze_date = timezone.localtime(student.frozen_at).date() if student.frozen_at else resume_date
+    if resume_date < freeze_date:
+        raise UnfreezeError(
+            f'Дата возобновления не может быть раньше даты заморозки ({freeze_date.strftime("%d.%m.%Y")})'
+        )
 
-    first_pay = _get_student_payments_queryset(student, company).order_by('payment_date', 'created_at').first()
-    first_pay_date = (first_pay.payment_date or timezone.localtime(first_pay.created_at).date()) if first_pay else None
-    anchor = student.trial_date or first_pay_date or student.created_at.date()
-    freeze_date = timezone.localtime(student.frozen_at).date() if student.frozen_at else timezone.localdate()
+    old_due = _get_student_payment_info(student)['next_payment_date']
+    paid_total = _get_student_payments_queryset(student, company).aggregate(total=Sum(EFFECTIVE_MONTHS))['total'] or 0
 
-    consumed_months = 0
-    if freeze_date > anchor:
-        # Floor rounding: student is charged for full completed months studied
-        consumed_months = (freeze_date.year - anchor.year) * 12 + (freeze_date.month - anchor.month)
-        if freeze_date.day < anchor.day:
-            consumed_months -= 1
-        consumed_months = max(0, consumed_months)
+    if old_due >= freeze_date:
+        # Prepaid time left at freeze: `months` + `days`, all of it is kept
+        months, days = _months_days_between(freeze_date, old_due)
+        return resume_date + timedelta(days=days), max(0, paid_total - months)
 
-    return min(current_paid_months, consumed_months)
+    # Debt at freeze: unpaid since old_due -> keep exactly the same overdue after resuming
+    months, days = _months_days_between(old_due, freeze_date)
+    return _add_months(resume_date, -months) - timedelta(days=days), paid_total
 
 
 def _apply_student_fields(student: Student, company: Company, data: dict) -> str | None:
@@ -660,31 +765,23 @@ def _apply_student_fields(student: Student, company: Company, data: dict) -> str
         status = safe_int(status, default=None)
         if status is None or status not in VALID_STUDENT_STATUSES:
             return 'Invalid status'
+    elif data.get('unfreeze') and was_frozen:
+        status = Student.Status.STUDYING
+
+    if status is not None:
         if was_frozen and status == Student.Status.STUDYING:
-            student.payment_offset = _calculate_unfreeze_offset(student, company)
-            if 'trial_date' in data:
-                student.trial_date = parse_date_safe(data.get('trial_date')) or timezone.localdate()
-            else:
-                student.trial_date = timezone.localdate()
+            # trial_date in an unfreeze request = the day the student comes back
+            resume_date = parse_date_safe(data.get('trial_date')) if data.get('trial_date') else None
+            try:
+                student.trial_date, student.payment_offset = _unfreeze_schedule(
+                    student, company, resume_date or timezone.localdate(),
+                )
+            except UnfreezeError as exc:
+                return str(exc)
         student.status = status
-    elif data.get('unfreeze'):
-        if was_frozen:
-            student.payment_offset = _calculate_unfreeze_offset(student, company)
-            if 'trial_date' in data:
-                student.trial_date = parse_date_safe(data.get('trial_date')) or timezone.localdate()
-            else:
-                student.trial_date = timezone.localdate()
-            student.status = Student.Status.STUDYING
 
     if 'payment_offset' in data:
         student.payment_offset = max(0, safe_int(data.get('payment_offset'), default=0))
-
-    if 'balance' in data:
-        # ✅ ИСПРАВЛЕНО: safe_int с ограничениями
-        student.balance = safe_int(
-            data.get('balance'), default=0,
-            min_val=-100_000_000, max_val=100_000_000
-        )
 
     # paid_this_month is computed from Payment records only (see sync_student_paid_this_month).
     # Manual override removed to prevent inconsistency between the flag and actual payments.
@@ -715,10 +812,6 @@ def _apply_student_fields(student: Student, company: Company, data: dict) -> str
                 group = Group.objects.select_related('room').get(pk=int(group_id), company=company)
             except (Group.DoesNotExist, TypeError, ValueError):
                 return 'Invalid group'
-            if group.id != student.group_id and student.status == Student.Status.STUDYING:
-                capacity_error = group_capacity_error(group, exclude_student_id=student.pk)
-                if capacity_error:
-                    return capacity_error
             student.group = group
             student.branch = group.branch
 
@@ -765,6 +858,15 @@ def _user_role_label(user: User) -> str:
     return get_role_label(get_effective_role(user))
 
 
+def _student_branch_error(user: User, student: Student) -> str | None:
+    """E3: a branch director keeps the student and the student's group inside own branch."""
+    if not branch_allowed(user, student.branch_id):
+        return 'Invalid branch'
+    if student.group_id and not branch_allowed(user, student.group.branch_id):
+        return 'Invalid group'
+    return None
+
+
 def _user_branches(user: User) -> list[dict]:
     company = user.company
     if company is None:
@@ -776,7 +878,7 @@ def _user_branches(user: User) -> list[dict]:
         ]
     return [
         {'id': branch.id, 'name': branch.name}
-        for branch in Branch.objects.filter(company=company).order_by('id')
+        for branch in branches_for(user, company).order_by('id')
     ]
 
 
@@ -909,7 +1011,7 @@ def branch_list(request):
     company = request.user.company
     if company is None:
         return ok([])
-    branches = Branch.objects.filter(company=company).order_by('id')
+    branches = branches_for(request.user, company).order_by('id')
     data = [{'id': b.id, 'name': b.name, 'address': b.address} for b in branches]
     return ok(data)
 
@@ -924,15 +1026,15 @@ def dashboard(request):
     students = filter_students_queryset(Student.objects.filter(company=company), request.user)
     groups = Group.objects.filter(company=company, status=Group.Status.ACTIVE)
     groups = filter_groups_queryset(groups, request.user)
-    active_leads_count = Lead.objects.filter(
+    active_leads_count = scope_branch(Lead.objects.filter(
         company=company,
         is_active=True,
         stage__in=[Lead.Stage.TRIAL_BOOKED, Lead.Stage.ATTENDED],
-    ).count()
+    ), request.user).count()
 
     six_months_ago = timezone.now() - timedelta(days=180)
     monthly_payments = (
-        Payment.objects.filter(company=company, created_at__gte=six_months_ago)
+        scope_payments(Payment.objects.filter(company=company, created_at__gte=six_months_ago), request.user)
         .annotate(month=TruncMonth('created_at'))
         .values('month')
         .annotate(
@@ -959,11 +1061,27 @@ def dashboard(request):
             'due_date': reminder.due_date.isoformat(),
             'status': reminder.current_status,
             'assigned_to': reminder.assigned_to.display_name() if reminder.assigned_to else '—',
+            'student_id': reminder.student_id,
         }
-        for reminder in Reminder.objects.filter(
+        for reminder in filter_reminders_queryset(Reminder.objects.filter(
             company=company,
             due_date__lte=timezone.localdate(),
-        ).exclude(status=Reminder.Status.DONE).select_related('assigned_to').order_by('due_date', 'id')[:8]
+        ), request.user).exclude(status=Reminder.Status.DONE).select_related('assigned_to').order_by('due_date', 'id')[:8]
+    ]
+
+    # Students who left without paying: stays on the dashboard until someone marks it done
+    unpaid_leavers = [] if is_teacher else [
+        {
+            'reminder_id': reminder.id,
+            'student_id': reminder.student_id,
+            'title': reminder.title,
+            'details': reminder.details,
+            'created_at': reminder.created_at.date().isoformat(),
+            **unpaid_leave_state(reminder),
+        }
+        for reminder in filter_reminders_queryset(
+            Reminder.objects.filter(company=company, kind=Reminder.KIND_UNPAID_LEAVE), request.user,
+        ).exclude(status=Reminder.Status.DONE).order_by('-created_at')[:50]
     ]
 
     studying_students = students.filter(status=Student.Status.STUDYING)
@@ -974,9 +1092,10 @@ def dashboard(request):
         debtors_count = 0
     else:
         payments_summary = _company_payments_summary(company)
+        # Same rule as the debtors list: studying + frozen, same payment lookup
         debtors_count = sum(
-            1 for s in studying_students
-            if _get_student_payment_info(s, payments_summary.get(s.id) or payments_summary.get(s.full_name))['is_debtor']
+            1 for s in students.filter(status__in=Student.CURRENT_STATUSES)
+            if _get_student_payment_info(s, _lookup_student_payment_summary(s, payments_summary))['is_debtor']
         )
 
     return ok({
@@ -985,12 +1104,12 @@ def dashboard(request):
         'groups': groups.count(),
         'debtors': debtors_count,
         'trial_students': 0,
-        'paid_during_month': 0 if is_teacher else students.filter(paid_this_month=True).count(),
         'left_active_group': students.filter(status=Student.Status.LEFT).count(),
         'left_after_trial': students.filter(status=Student.Status.LEFT_TRIAL).count(),
         'finance_chart': finance_chart,
         'schedule': schedule,
         'reminders': reminders,
+        'unpaid_leavers': unpaid_leavers,
     })
 
 
@@ -1022,7 +1141,7 @@ def group_list(request):
         if not branch_id:
             return fail('Branch is required')
         try:
-            branch = Branch.objects.get(pk=int(branch_id), company=company)
+            branch = branches_for(request.user, company).get(pk=int(branch_id))
         except (Branch.DoesNotExist, TypeError, ValueError):
             return fail('Invalid branch')
 
@@ -1088,7 +1207,7 @@ def group_list(request):
         group = Group.objects.select_related(
             'course', 'branch', 'teacher', 'room'
         ).prefetch_related('tags').annotate(
-            students_count=Count('students')
+            students_count=CURRENT_STUDENTS_COUNT
         ).get(pk=group.pk)
 
         return ok(_serialize_group(group), status_code=201)
@@ -1110,7 +1229,7 @@ def group_list(request):
 
     qs = Group.objects.filter(company=company).select_related(
         'course', 'branch', 'teacher', 'room',
-    ).prefetch_related('tags').annotate(students_count=Count('students')).order_by('name')
+    ).prefetch_related('tags').annotate(students_count=CURRENT_STUDENTS_COUNT).order_by('name')
     qs = filter_groups_queryset(qs, request.user)
 
     if branch_id:
@@ -1161,18 +1280,21 @@ def group_detail(request, group_id: int):
         group = Group.objects.select_related(
             'course', 'branch', 'teacher', 'room'
         ).prefetch_related('tags').annotate(
-            students_count=Count('students')
+            students_count=CURRENT_STUDENTS_COUNT
         ).get(pk=group_id, company=company)
     except Group.DoesNotExist:
         return fail('Group not found', status_code=404)
 
-    if not teacher_can_access_group(request.user, group):
+    if not can_access_group(request.user, group):
         return fail('Group not found', status_code=404)
 
     if request.method == 'GET':
         return ok(_serialize_group(group, detailed=True))
 
     if request.method == 'DELETE':
+        archive_error = _group_archive_error(group)
+        if archive_error:
+            return fail(archive_error)
         group.status = Group.Status.ARCHIVE
         group.archived_at = timezone.now()
         group.archived_by = request.user
@@ -1194,9 +1316,22 @@ def group_detail(request, group_id: int):
             if len(existing_tags) != len(set(tag_ids)):
                 return fail('One or more tags not found')
 
+    was_archived = group.status == Group.Status.ARCHIVE
+    old_branch_id = group.branch_id
     error = _apply_group_fields(group, company, request.data)
     if error:
         return fail(error)
+    if not branch_allowed(request.user, group.branch_id):
+        return fail('Invalid branch')
+    if group.status == Group.Status.ARCHIVE and not was_archived:
+        archive_error = _group_archive_error(group)
+        if archive_error:
+            return fail(archive_error)
+        group.archived_at = timezone.now()
+        group.archived_by = request.user
+    elif group.status != Group.Status.ARCHIVE and was_archived:
+        group.archived_at = None
+        group.archived_by = None
 
     if group.status != Group.Status.ARCHIVE:
         conflict = validate_group_schedule(
@@ -1222,6 +1357,9 @@ def group_detail(request, group_id: int):
 
     group.save()
     sync_group_schedule_slots(group)
+    if group.branch_id != old_branch_id:
+        # current students move with their group (branch scoping and reports read Student.branch)
+        Student.objects.filter(group=group, status__in=Student.CURRENT_STATUSES).update(branch_id=group.branch_id)
 
     if tag_ids is not None:
         group.tags.set(existing_tags)
@@ -1231,7 +1369,7 @@ def group_detail(request, group_id: int):
     group = Group.objects.select_related(
         'course', 'branch', 'teacher', 'room'
     ).prefetch_related('tags').annotate(
-        students_count=Count('students')
+        students_count=CURRENT_STUDENTS_COUNT
     ).get(pk=group.pk)
 
     return ok(_serialize_group(group))
@@ -1265,7 +1403,7 @@ def student_list(request):
         if not branch_id:
             return fail('Branch is required')
         try:
-            branch = Branch.objects.get(pk=int(branch_id), company=company)
+            branch = branches_for(request.user, company).get(pk=int(branch_id))
         except (Branch.DoesNotExist, TypeError, ValueError):
             return fail('Invalid branch')
 
@@ -1311,7 +1449,7 @@ def student_list(request):
                 status=status,
                 trial_date=trial_date,
             )
-            error = _apply_student_fields(student, company, request.data)
+            error = _apply_student_fields(student, company, request.data) or _student_branch_error(request.user, student)
             if error:
                 return fail(error)
 
@@ -1345,9 +1483,9 @@ def student_list(request):
         or request.query_params.get('statuses') in ('6', 'debtor', 'debtors')
     )
     if debtors_filter:
-        studying_students = list(qs.filter(status=Student.Status.STUDYING))
+        current_students = list(qs.filter(status__in=Student.CURRENT_STATUSES))
         debtor_ids = [
-            s.id for s in studying_students
+            s.id for s in current_students
             if _get_student_payment_info(s, _lookup_student_payment_summary(s, payments_summary))['is_debtor']
         ]
         qs = qs.filter(id__in=debtor_ids)
@@ -1367,10 +1505,6 @@ def student_list(request):
     group_id = request.query_params.get('group_id')
     if group_id:
         qs = qs.filter(group_id=group_id)
-
-    finance = None if is_teacher else request.query_params.get('finance')
-    if finance == 'paid_during_the_month':
-        qs = qs.filter(paid_this_month=True)
 
     query = (request.query_params.get('q') or '').strip()
     if query:
@@ -1415,7 +1549,7 @@ def student_detail(request, student_id: int):
     except Student.DoesNotExist:
         return fail('Student not found', status_code=404)
 
-    if not teacher_can_access_student(request.user, student):
+    if not can_access_student(request.user, student):
         return fail('Student not found', status_code=404)
 
     if request.method == 'GET':
@@ -1427,16 +1561,15 @@ def student_detail(request, student_id: int):
             or (isinstance(request.data, dict) and request.data.get('hard') in ('1', 'true', True))
         )
         if is_hard:
-            from accounts.rbac import get_effective_role, ROLE_CEO
-            if get_effective_role(request.user) != ROLE_CEO and not request.user.is_superuser:
-                return fail('Only CEO can permanently delete a student record', status_code=403)
-            student.delete()
-            return ok({'deleted': True, 'hard': True})
+            # Owner's rule #10 (confirmed 2026-09-27): students are never erased, for anyone — including the CEO.
+            # Erasing orphaned payments (they were credited to a namesake) and wiped attendance / salary history.
+            return fail('Полное удаление учеников отключено. Используйте «Отчислить» — история сохранится.')
 
-        student.status = Student.Status.LEFT
-        student.left_at = timezone.now()
-        student.group = None
-        student.save(update_fields=['status', 'left_at', 'group'])
+        # No separate "Отчислить" any more (owner, 2026-09-27): this does exactly what the status
+        # "Отчислен / Ушел" does in the edit form — the last group is kept for the reports.
+        if student.status not in (Student.Status.LEFT, Student.Status.LEFT_TRIAL):
+            student.status = Student.Status.LEFT
+            student.save(update_fields=['status', 'left_at'])
         return ok({'deleted': True, 'hard': False, 'archived': True, 'status': student.status})
 
     # Duplicate check on edit: if phone or name is modified, prevent colliding with another student
@@ -1464,7 +1597,7 @@ def student_detail(request, student_id: int):
                     status_code=400
                 )
 
-    error = _apply_student_fields(student, company, request.data)
+    error = _apply_student_fields(student, company, request.data) or _student_branch_error(request.user, student)
     if error:
         return fail(error)
     student.save()  # GroupEnrollment is synced by the post_save signal
@@ -1513,7 +1646,7 @@ def student_photo(request, student_id: int):
     except Student.DoesNotExist:
         return fail('Student not found', status_code=404)
 
-    if not teacher_can_access_student(request.user, student):
+    if not can_access_student(request.user, student):
         return fail('Student not found', status_code=404)
 
     if request.method == 'DELETE':
@@ -1589,9 +1722,12 @@ def lead_list(request):
         branch_id = request.data.get('branch_id')
         if branch_id:
             try:
-                branch = Branch.objects.get(pk=int(branch_id), company=company)
+                branch = branches_for(request.user, company).get(pk=int(branch_id))
             except (Branch.DoesNotExist, TypeError, ValueError):
-                pass
+                return fail('Invalid branch')
+        if branch is None and branch_limit(request.user) is not None:
+            # E3: a director's lead always belongs to the director's branch
+            branch = branches_for(request.user, company).first()
 
         course = None
         course_id = request.data.get('course_id')
@@ -1599,7 +1735,7 @@ def lead_list(request):
             try:
                 course = Course.objects.get(pk=int(course_id), company=company)
             except (Course.DoesNotExist, TypeError, ValueError):
-                pass
+                return fail('Invalid course')
 
         trial_date = parse_date_safe(request.data.get('trial_date')) or timezone.localdate()
         school = str(request.data.get('school') or '').strip()
@@ -1664,7 +1800,10 @@ def lead_list(request):
         )
         return ok(_serialize_lead(lead), status_code=201)
 
-    qs = Lead.objects.filter(company=company).select_related('branch', 'course').order_by('-created_at', '-id')
+    qs = Lead.objects.filter(company=company).select_related('branch', 'course').prefetch_related(
+        'converted_students',
+    ).order_by('-created_at', '-id')
+    qs = scope_branch(qs, request.user)
 
     archived = request.query_params.get('archived', '0')
     if archived == '1':
@@ -1733,6 +1872,8 @@ def lead_detail(request, lead_id: int):
     try:
         lead = Lead.objects.get(pk=lead_id, company=company)
     except Lead.DoesNotExist:
+        return fail('Lead not found', status_code=404)
+    if not can_access_lead(request.user, lead):
         return fail('Lead not found', status_code=404)
 
     if request.method == 'GET':
@@ -1826,12 +1967,13 @@ def lead_detail(request, lead_id: int):
     if 'branch_id' in request.data:
         bid = request.data.get('branch_id')
         if not bid:
-            lead.branch = None
+            if branch_limit(request.user) is None:
+                lead.branch = None
         else:
             try:
-                lead.branch = Branch.objects.get(pk=int(bid), company=company)
+                lead.branch = branches_for(request.user, company).get(pk=int(bid))
             except (Branch.DoesNotExist, TypeError, ValueError):
-                pass
+                return fail('Invalid branch')
 
     if 'course_id' in request.data:
         cid = request.data.get('course_id')
@@ -1841,7 +1983,7 @@ def lead_detail(request, lead_id: int):
             try:
                 lead.course = Course.objects.get(pk=int(cid), company=company)
             except (Course.DoesNotExist, TypeError, ValueError):
-                pass
+                return fail('Invalid course')
 
     if 'trial_date' in request.data:
         lead.trial_date = parse_date_safe(request.data.get('trial_date'))
@@ -1876,6 +2018,8 @@ def lead_archive(request, lead_id: int):
         lead = Lead.objects.get(pk=lead_id, company=company)
     except Lead.DoesNotExist:
         return fail('Lead not found', status_code=404)
+    if not can_access_lead(request.user, lead):
+        return fail('Lead not found', status_code=404)
 
     lead.is_active = False
     lead.save(update_fields=['is_active'])
@@ -1893,15 +2037,21 @@ def lead_convert_to_student(request, lead_id: int):
         return fail('You do not have permission to perform this action.', status_code=403)
 
     with transaction.atomic():
+        # Take the write lock first, so a double click cannot convert the same lead twice
+        # (SQLite ignores select_for_update; an UPDATE makes the second request wait for the first).
+        Lead.objects.filter(pk=lead_id, company=company).update(stage=F('stage'))
         try:
-            lead = Lead.objects.get(pk=lead_id, company=company)
+            lead = Lead.objects.select_for_update().get(pk=lead_id, company=company)
         except Lead.DoesNotExist:
             return fail('Lead not found', status_code=404)
+        if not can_access_lead(request.user, lead):
+            return fail('Lead not found', status_code=404)
 
-        if lead.stage == Lead.Stage.CONVERTED and lead.converted_students.exists():
-            existing_student = lead.converted_students.first()
-            if existing_student.status not in (Student.Status.LEFT, Student.Status.LEFT_TRIAL):
-                return fail(f'Этот лид уже зачислен как студент ({existing_student.full_name}).', status_code=400)
+        active_student = lead.converted_students.exclude(
+            status__in=[Student.Status.LEFT, Student.Status.LEFT_TRIAL],
+        ).order_by('-id').first()
+        if active_student:
+            return fail(f'Этот лид уже зачислен как студент ({active_student.full_name}).', status_code=400)
 
         first_name = (request.data.get('first_name') or '').strip()
         last_name = (request.data.get('last_name') or '').strip()
@@ -1918,6 +2068,15 @@ def lead_convert_to_student(request, lead_id: int):
         phone = normalize_phone(request.data.get('phone') or lead.phone or '')
         if not is_valid_phone(phone):
             return fail('Phone must contain 9 digits')
+
+        if not request.data.get('force'):
+            duplicate = _active_student_duplicate(company, phone, first_name, last_name)
+            if duplicate:
+                return fail(
+                    f'Ученик "{duplicate.full_name}" с номером {phone} уже учится. '
+                    'Откройте его карточку вместо создания нового студента.',
+                    status_code=400,
+                )
 
         phone2_raw = str(request.data.get('phone2') if 'phone2' in request.data else (lead.phone2 or '')).strip()
         if phone2_raw:
@@ -1937,21 +2096,20 @@ def lead_convert_to_student(request, lead_id: int):
                 group = Group.objects.select_related('branch', 'course', 'room').get(pk=int(group_id), company=company)
             except (Group.DoesNotExist, TypeError, ValueError):
                 return fail('Invalid group')
-            capacity_error = group_capacity_error(group)
-            if capacity_error:
-                return fail(capacity_error)
+            if not branch_allowed(request.user, group.branch_id):
+                return fail('Invalid group')
             branch = group.branch
         else:
             branch_id = request.data.get('branch_id')
             if not branch_id:
                 branch = lead.branch
                 if not branch:
-                    branch = Branch.objects.filter(company=company).order_by('id').first()
+                    branch = branches_for(request.user, company).order_by('id').first()
                 if not branch:
                     return fail('No branch available in company')
             else:
                 try:
-                    branch = Branch.objects.get(pk=int(branch_id), company=company)
+                    branch = branches_for(request.user, company).get(pk=int(branch_id))
                 except (Branch.DoesNotExist, TypeError, ValueError):
                     return fail('Invalid branch')
 
@@ -1969,7 +2127,8 @@ def lead_convert_to_student(request, lead_id: int):
         telegram = str(request.data.get('telegram') or '').strip()
         parent_telegram = str(request.data.get('parent_telegram') or '').strip()
         level = str(request.data.get('level') if 'level' in request.data else (lead.level or '')).strip()
-        trial_date = parse_date_safe(request.data.get('trial_date')) or lead.trial_date or timezone.localdate()
+        # Payment anchor: the date sent by the form, otherwise today (never the old trial lesson date)
+        trial_date = parse_date_safe(request.data.get('trial_date')) or timezone.localdate()
 
         student = Student.objects.create(
             company=company,

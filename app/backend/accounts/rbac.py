@@ -39,6 +39,8 @@ PERM_TEACHER_ATTENDANCE_WRITE = 'teacher_attendance.write'
 
 PERM_FINANCE_VIEW = 'finance.view'
 PERM_FINANCE_WRITE = 'finance.write'
+# Company-wide money that is not tied to a branch: expenses, withdrawals, P&L
+PERM_FINANCE_COMPANY = 'finance.company'
 
 PERM_REPORTS_VIEW = 'reports.view'
 PERM_REPORTS_WRITE = 'reports.write'
@@ -97,6 +99,7 @@ ALL_PERMISSIONS: frozenset[str] = frozenset(
         PERM_TEACHER_ATTENDANCE_WRITE,
         PERM_FINANCE_VIEW,
         PERM_FINANCE_WRITE,
+        PERM_FINANCE_COMPANY,
         PERM_REPORTS_VIEW,
         PERM_REPORTS_WRITE,
         PERM_SETTINGS_COMPANY,
@@ -135,13 +138,13 @@ ROLE_STUDENT = 'student'
 
 ROLE_LABELS: dict[str, str] = {
     ROLE_CEO: 'CEO',
-    ROLE_ADMINISTRATOR: 'Administrator',
-    ROLE_BRANCH_DIRECTOR: 'Branch director',
-    ROLE_LIMITED_ADMIN: 'Limited admin',
-    ROLE_MARKETER: 'Marketer',
-    ROLE_CASHIER: 'Cashier',
-    ROLE_TEACHER: 'Teacher',
-    ROLE_STUDENT: 'Student',
+    ROLE_ADMINISTRATOR: 'Администратор',
+    ROLE_BRANCH_DIRECTOR: 'Директор филиала',
+    ROLE_LIMITED_ADMIN: 'Ограниченный админ',
+    ROLE_MARKETER: 'Маркетолог',
+    ROLE_CASHIER: 'Кассир',
+    ROLE_TEACHER: 'Учитель',
+    ROLE_STUDENT: 'Студент',
 }
 
 _ADMIN_OFFICE: frozenset[str] = frozenset(
@@ -187,7 +190,8 @@ _ADMIN_OFFICE: frozenset[str] = frozenset(
 ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
     ROLE_CEO: ALL_PERMISSIONS,
     ROLE_ADMINISTRATOR: _ADMIN_OFFICE,
-    ROLE_BRANCH_DIRECTOR: _ADMIN_OFFICE,
+    # E3: a branch director also sees (read-only) the money of own branch
+    ROLE_BRANCH_DIRECTOR: _ADMIN_OFFICE | {PERM_FINANCE_VIEW},
     ROLE_LIMITED_ADMIN: frozenset(
         {
             PERM_DASHBOARD_VIEW,
@@ -222,6 +226,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
             PERM_STUDENTS_WRITE,
             PERM_FINANCE_VIEW,
             PERM_FINANCE_WRITE,
+            PERM_FINANCE_COMPANY,
             PERM_REPORTS_VIEW,
             PERM_BRANCH_VIEW,
             PERM_PROFILE_EDIT,

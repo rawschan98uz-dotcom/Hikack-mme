@@ -157,15 +157,15 @@ def sync_student_paid_this_month(student: Student | int | None) -> bool:
         if not student:
             return False
 
-    from django.db.models import Q
+    from django.db.models import F, Q
     from django.utils import timezone
     from finance.models import Payment
+    from finance.wallet import ACTIVE_PAYMENT_Q
     today = timezone.localdate()
     has_payment_this_month = Payment.objects.filter(
         student=student,
         transaction_type=Payment.TransactionType.PAYMENT,
-        reversals__isnull=True,
-    ).filter(
+    ).filter(ACTIVE_PAYMENT_Q).filter(
         Q(payment_date__year=today.year, payment_date__month=today.month)
         | Q(payment_date__isnull=True, created_at__year=today.year, created_at__month=today.month)
     ).exists()
@@ -421,23 +421,3 @@ def sync_student_group_enrollment(student: Student) -> dict:
         result['updated'] = 1
     return result
 
-
-
-
-def group_capacity_error(group, room=None, exclude_student_id=None, adding: int = 1) -> str | None:
-    """
-    D10: refuse to seat more studying students than the room holds.
-    Returns a human-readable error, or None when there is space (or no room / no capacity set).
-    """
-    room = room if room is not None else group.room
-    if room is None or not room.capacity:
-        return None
-    seated = Student.objects.filter(group=group, status=Student.Status.STUDYING)
-    if exclude_student_id:
-        seated = seated.exclude(pk=exclude_student_id)
-    if seated.count() + adding > room.capacity:
-        return (
-            f'В аудитории «{room.name}» {room.capacity} мест, а в группе «{group.name}» '
-            f'уже {seated.count()} студентов. Выберите другую аудиторию или увеличьте её вместимость.'
-        )
-    return None

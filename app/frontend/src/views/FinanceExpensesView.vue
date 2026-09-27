@@ -23,9 +23,9 @@ interface ExpenseRow {
 }
 
 const METHODS = [
-  { value: 'cash', label: 'Cash' },
-  { value: 'card', label: 'Card' },
-  { value: 'transfer', label: 'Transfer' },
+  { value: 'cash', label: 'Наличные' },
+  { value: 'card', label: 'Карта' },
+  { value: 'transfer', label: 'Перевод' },
 ] as const;
 
 const rows = ref<ExpenseRow[]>([]);

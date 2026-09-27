@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { todayIso } from '../utils/dates';
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 
 import client, { type ApiEnvelope } from '../api/client';
@@ -72,7 +73,7 @@ const filters = reactive({
 
 const form = reactive({
   staff_id: '' as number | '',
-  work_date: new Date().toISOString().slice(0, 10),
+  work_date: todayIso(),
   clock_in: '09:00',
   clock_out: '18:00',
   status: 'at_work' as (typeof FORM_STATUSES)[number]['value'],
@@ -94,7 +95,7 @@ function statusClass(status: string) {
 
 function resetForm() {
   form.staff_id = staffList.value[0]?.id ?? '';
-  form.work_date = new Date().toISOString().slice(0, 10);
+  form.work_date = todayIso();
   form.clock_in = '09:00';
   form.clock_out = '18:00';
   form.status = 'at_work';
@@ -187,7 +188,7 @@ async function exportCsv() {
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement('a');
     link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `workly_report_${new Date().toISOString().slice(0, 10)}.csv`);
+    link.setAttribute('download', `workly_report_${todayIso()}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);

@@ -2,8 +2,15 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 
 import client, { type ApiEnvelope } from '../api/client';
+import { formatSum, walletPreview } from '../utils/wallet';
+import { useAuthStore } from '../stores/auth';
+import { PERM } from '../utils/rbac';
 import ReceiptModal, { type ReceiptPayment } from '../components/ReceiptModal.vue';
 import PaymentLinkModal, { type StudentPaymentLinkTarget } from '../components/PaymentLinkModal.vue';
+
+const auth = useAuthStore();
+// Branch director sees money read-only: add/edit/pay buttons need finance.write
+const canWriteFinance = computed(() => auth.can(PERM.FINANCE_WRITE));
 
 interface PaymentRow {
   id: number;
@@ -13,6 +20,10 @@ interface PaymentRow {
   student_name: string;
   sum: number;
   months_covered?: number;
+  /** Months taken back by refunds of this payment. */
+  refunded_months?: number;
+  /** true = months counted from the money (копилка), false = entered by hand. */
+  months_auto?: boolean;
   method: string;
   method_pay: string;
   teacher: string;
@@ -28,12 +39,13 @@ interface StudentOption {
   group?: string | null;
   group_teacher?: string;
   course_price?: number;
+  wallet?: number;
 }
 
 const METHODS = [
-  { value: 'cash', label: 'Cash' },
-  { value: 'card', label: 'Card' },
-  { value: 'transfer', label: 'Transfer' },
+  { value: 'cash', label: 'Наличные' },
+  { value: 'card', label: 'Карта' },
+  { value: 'transfer', label: 'Перевод' },
 ] as const;
 
 const rows = ref<PaymentRow[]>([]);
@@ -60,7 +72,7 @@ function printPayment(row: PaymentRow) {
     date: row.date,
     student_name: row.student_name || row.name,
     amount: row.sum,
-    months_covered: row.months_covered || 1,
+    months_covered: row.months_covered ?? 1,
     method: row.method,
     method_pay: row.method_pay,
     teacher: row.teacher,
@@ -122,7 +134,8 @@ const tableRows = computed(() =>
     date: r.date,
     name: r.name,
     sum: r.sum.toLocaleString(),
-    months_covered: r.months_covered || 1,
+    months_covered: r.months_covered ?? 1,
+    refunded_months: r.refunded_months || 0,
     method_pay: r.method_pay,
     teacher: r.teacher,
     comment: r.comment || '—',
@@ -151,6 +164,13 @@ function selectStudent(student: StudentOption) {
   }
   showStudentDropdown.value = false;
 }
+
+// Копилка preview for a new payment (editing an existing one is recounted by the server)
+const payPreview = computed(() =>
+  editingRow.value || detailRow.value
+    ? null
+    : walletPreview(selectedStudent.value?.course_price, selectedStudent.value?.wallet, form.amount),
+);
 
 function onMonthsChange() {
   if (form.months_covered < 1) form.months_covered = 1;
@@ -198,6 +218,7 @@ async function loadStudentsList() {
       group: s.group || null,
       group_teacher: s.group_teacher || '',
       course_price: s.course_price || 0,
+      wallet: s.wallet || 0,
     }));
   } catch {
     studentsList.value = [];
@@ -322,7 +343,7 @@ watch(
   <div class="space-y-4">
     <div class="flex flex-wrap items-center justify-between gap-3">
       <h1 class="text-xl font-semibold text-fb-text">All payments</h1>
-      <button type="button" class="rounded-lg bg-fb-blue px-4 py-2 text-sm font-medium text-white" @click="openCreate">
+      <button v-if="canWriteFinance" type="button" class="rounded-lg bg-fb-blue px-4 py-2 text-sm font-medium text-white" @click="openCreate">
         + Add payment
       </button>
     </div>
@@ -375,6 +396,13 @@ watch(
             <td class="px-5 py-4">
               <span class="inline-flex items-center rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-fb-blue">
                 {{ row.months_covered }} mo
+              </span>
+              <span
+                v-if="row.refunded_months"
+                class="ml-1 inline-flex items-center rounded-full bg-rose-50 px-2 py-0.5 text-xs font-medium text-rose-700"
+                title="Столько месяцев этого платежа отменено возвратом"
+              >
+                −{{ row.refunded_months }} возврат
               </span>
             </td>
             <td class="px-5 py-4">{{ row.method_pay }}</td>
@@ -448,12 +476,14 @@ watch(
               />
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Months paid (Количество месяцев)</label>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">
+                {{ detailRow?.months_auto ? 'Months closed (посчитано по сумме)' : 'Months (подставит сумму)' }}
+              </label>
               <input
                 v-model.number="form.months_covered"
                 type="number"
                 min="1"
-                :readonly="isReadOnly"
+                :readonly="isReadOnly || Boolean(detailRow?.months_auto)"
                 required
                 class="w-full rounded-lg border px-3 py-2 text-sm read-only:bg-fb-canvas focus:border-fb-blue focus:outline-none"
                 @input="onMonthsChange"
@@ -468,6 +498,14 @@ watch(
                 required
                 class="w-full rounded-lg border px-3 py-2 text-sm read-only:bg-fb-canvas focus:border-fb-blue focus:outline-none"
               />
+              <p v-if="payPreview" class="mt-1 rounded-md bg-emerald-50 px-2 py-1 text-xs text-emerald-800">
+                Эта оплата закроет <strong>{{ payPreview.months }} мес.</strong><span v-if="payPreview.left">,
+                в копилке останется <strong>{{ formatSum(payPreview.left) }}</strong>
+                (до следующего месяца не хватит {{ formatSum(payPreview.missing) }})</span>.
+              </p>
+              <p v-else-if="selectedStudent && !selectedStudent.course_price && !detailRow" class="mt-1 text-xs text-amber-700">
+                У ученика нет цены курса — будет засчитано столько месяцев, сколько указано выше.
+              </p>
             </div>
             <div>
               <label class="mb-1 block text-sm font-medium text-fb-secondary">Method</label>
@@ -504,8 +542,8 @@ watch(
                 <span>💳</span>
                 <span>Ссылка</span>
               </button>
-              <button type="button" class="rounded-lg bg-fb-blue px-5 py-2 text-sm text-white" @click="startEdit">Edit</button>
-              <button type="button" class="rounded-lg border border-red-300 px-5 py-2 text-sm text-fb-danger" :disabled="deleting" @click="deleteRow">Delete</button>
+              <button v-if="canWriteFinance" type="button" class="rounded-lg bg-fb-blue px-5 py-2 text-sm text-white" @click="startEdit">Edit</button>
+              <button v-if="canWriteFinance" type="button" class="rounded-lg border border-red-300 px-5 py-2 text-sm text-fb-danger" :disabled="deleting" @click="deleteRow">Delete</button>
             </template>
             <template v-else>
               <button

@@ -41,6 +41,10 @@ class StudentAdmin(admin.ModelAdmin):
     list_display = ('full_name', 'photo', 'phone', 'status', 'branch', 'group', 'school')
     list_filter = ('company', 'status')
 
+    def has_delete_permission(self, request, obj=None):
+        # Owner's rule #10: students are archived ("Отчислить"), never erased — not even from the admin panel
+        return False
+
 
 @admin.register(Lead)
 class LeadAdmin(admin.ModelAdmin):

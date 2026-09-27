@@ -1,9 +1,10 @@
 <script setup lang="ts">
+import { todayIso } from '../utils/dates';
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 
 import client, { type ApiEnvelope } from '../api/client';
-import { hasCreateFlag, routeWithoutCreate } from '../utils/crossLinks';
+import { hasCreateFlag, routeWithoutCreate, studentRoute } from '../utils/crossLinks';
 import { useAuthStore } from '../stores/auth';
 import { PERM } from '../utils/rbac';
 
@@ -21,11 +22,20 @@ interface ReminderRow {
   status_label: string;
   assigned_to_id: number | null;
   assigned_to: string;
+  /** Set for automatic reminders about a student (e.g. left without paying). */
+  student_id?: number | null;
+  /** 'unpaid_leave' = student left without paying (pinned on top, locked until paid). */
+  kind?: string;
+  resolution?: string;
+  locked?: boolean;
+  debt_months?: number;
+  debt_amount?: number;
   created_at: string;
 }
 
 interface ReminderPayload {
   items: ReminderRow[];
+  pinned?: ReminderRow[];
   buckets: Record<'overdue' | 'today' | 'future', ReminderRow[]>;
 }
 
@@ -44,20 +54,19 @@ const panelLoading = ref(false);
 const formError = ref('');
 const activeTab = ref<ReminderTab>('today');
 const buckets = ref<ReminderPayload['buckets']>({ overdue: [], today: [], future: [] });
+const pinned = ref<ReminderRow[]>([]);
 const assignees = ref<Assignee[]>([]);
 const editingReminder = ref<ReminderRow | null>(null);
 const detailReminder = ref<ReminderRow | null>(null);
 
 const tabs: { key: ReminderTab; label: string }[] = [
-  { key: 'overdue', label: 'Overdue' },
-  { key: 'today', label: 'Today' },
-  { key: 'future', label: 'Future' },
+  { key: 'overdue', label: 'Просрочено' },
+  { key: 'today', label: 'Сегодня' },
+  { key: 'future', label: 'Предстоит' },
 ];
 
 function getLocalDateStr() {
-  const d = new Date();
-  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
-  return d.toISOString().slice(0, 10);
+  return todayIso();
 }
 
 const form = reactive({
@@ -112,6 +121,7 @@ async function loadReminders() {
   try {
     const { data } = await client.get<ApiEnvelope<ReminderPayload>>('/reminders');
     buckets.value = data.data.buckets;
+    pinned.value = data.data.pinned ?? [];
     if (!buckets.value[activeTab.value]?.length) {
       const firstNonEmpty = tabs.find((tab) => buckets.value[tab.key].length);
       if (firstNonEmpty) {
@@ -201,10 +211,27 @@ async function submitReminder() {
   }
 }
 
-async function completeReminder(reminder: ReminderRow) {
+function formatMoney(value: number) {
+  return Math.round(value).toLocaleString('ru-RU');
+}
+
+// CEO only: close a "left without paying" reminder without payment; the reason is kept
+function writeOffReminder(reminder: ReminderRow) {
+  const reason = window.prompt(`Списать долг без оплаты?\n${reminder.title}\n\nУкажите причину (обязательно):`);
+  if (reason === null) return;
+  if (reason.trim().length < 3) {
+    alertModal.message = 'Причина обязательна.';
+    alertModal.show = true;
+    return;
+  }
+  completeReminder(reminder, reason.trim());
+}
+
+async function completeReminder(reminder: ReminderRow, writeOffReason = '') {
+  if (reminder.locked && !writeOffReason) return;
   completing.value = true;
   try {
-    await client.post(`/reminders/${reminder.id}/complete`);
+    await client.post(`/reminders/${reminder.id}/complete`, writeOffReason ? { write_off_reason: writeOffReason } : {});
     closePanel();
     await loadReminders();
   } catch (err: any) {
@@ -289,6 +316,58 @@ onMounted(async () => {
       </button>
     </div>
 
+    <div v-if="pinned.length" class="rounded-xl border-2 border-rose-300 bg-rose-50 p-4">
+      <h2 class="mb-3 text-[15px] font-semibold text-rose-800">
+        ⚠️ Ушли, не заплатив — {{ pinned.length }}. Позвоните и решите вопрос.
+      </h2>
+      <ul class="space-y-2">
+        <li
+          v-for="item in pinned"
+          :key="item.id"
+          class="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-rose-200 bg-white px-4 py-3"
+        >
+          <div class="min-w-0">
+            <p class="text-sm font-semibold text-fb-text">{{ item.title }}</p>
+            <p class="mt-0.5 whitespace-pre-line text-xs text-fb-secondary">{{ item.details }}</p>
+            <p v-if="item.locked" class="mt-1 text-xs font-semibold text-rose-700">
+              Осталось оплатить: {{ item.debt_months }} мес.<span v-if="item.debt_amount"> (≈ {{ formatMoney(item.debt_amount) }} сум)</span>
+            </p>
+            <p v-else class="mt-1 text-xs font-semibold text-emerald-700">✓ Долг оплачен — можно закрыть</p>
+          </div>
+          <div class="flex shrink-0 gap-2">
+            <button
+              v-if="item.student_id"
+              type="button"
+              class="rounded-lg border border-fb-line px-3 py-1.5 text-xs font-medium text-fb-blue hover:bg-fb-hover"
+              @click="router.push(studentRoute(item.student_id))"
+            >
+              Открыть ученика
+            </button>
+            <button
+              v-if="auth.isCeo && item.locked"
+              type="button"
+              class="rounded-lg border border-rose-300 px-3 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-100"
+              :disabled="completing"
+              @click="writeOffReminder(item)"
+            >
+              Списать долг
+            </button>
+            <button
+              v-if="canWriteReminders"
+              type="button"
+              class="rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-medium text-white"
+              :class="item.locked ? 'cursor-not-allowed opacity-35' : 'shadow-md ring-2 ring-rose-300 hover:bg-rose-700'"
+              :disabled="item.locked || completing"
+              :title="item.locked ? 'Сначала примите оплату в карточке ученика' : 'Долг оплачен — закрыть напоминание'"
+              @click="completeReminder(item)"
+            >
+              Решено
+            </button>
+          </div>
+        </li>
+      </ul>
+    </div>
+
     <div class="flex gap-2 border-b border-fb-line">
       <button
         v-for="tab in tabs"
@@ -326,8 +405,18 @@ onMounted(async () => {
             class="cursor-pointer border-b border-fb-line hover:bg-fb-hover/40"
             @click="openDetailPanel(row.id)"
           >
-            <td class="px-5 py-4 font-medium text-fb-text">{{ row.title }}</td>
-            <td class="px-5 py-4 text-fb-secondary">{{ row.details || '—' }}</td>
+            <td class="px-5 py-4 font-medium text-fb-text">
+              {{ row.title }}
+              <button
+                v-if="row.student_id"
+                type="button"
+                class="ml-2 text-xs font-medium text-fb-blue hover:underline"
+                @click.stop="router.push(studentRoute(row.student_id))"
+              >
+                Открыть ученика
+              </button>
+            </td>
+            <td class="px-5 py-4 whitespace-pre-line text-fb-secondary">{{ row.details || '—' }}</td>
             <td class="px-5 py-4 text-fb-secondary">{{ row.due_date }}</td>
             <td class="px-5 py-4">
               <span class="rounded-full px-2 py-0.5 text-xs capitalize" :class="statusClass(row.status)">
@@ -416,10 +505,14 @@ onMounted(async () => {
 
           <div class="flex flex-wrap gap-2 border-t border-fb-line px-6 py-4">
             <template v-if="isReadOnly && detailReminder">
+              <p v-if="detailReminder.locked" class="w-full text-xs text-rose-700">
+                Долг не оплачен: закрыть, изменить или удалить нельзя. Примите оплату в карточке ученика.
+              </p>
               <button
                 v-if="canWriteReminders"
                 type="button"
-                class="rounded-lg bg-fb-blue px-5 py-2 text-sm font-medium text-white hover:opacity-90"
+                class="rounded-lg bg-fb-blue px-5 py-2 text-sm font-medium text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-35"
+                :disabled="detailReminder.locked"
                 @click="startEdit"
               >
                 Edit
@@ -427,17 +520,26 @@ onMounted(async () => {
               <button
                 v-if="canWriteReminders"
                 type="button"
-                class="rounded-lg border border-emerald-300 px-5 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
-                :disabled="completing"
+                class="rounded-lg border border-emerald-300 px-5 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-35"
+                :disabled="completing || detailReminder.locked"
                 @click="completeReminder(detailReminder)"
               >
                 Task done
               </button>
               <button
+                v-if="auth.isCeo && detailReminder.locked"
+                type="button"
+                class="rounded-lg border border-rose-300 px-5 py-2 text-sm font-medium text-rose-700 hover:bg-rose-50"
+                :disabled="completing"
+                @click="writeOffReminder(detailReminder)"
+              >
+                Списать долг
+              </button>
+              <button
                 v-if="canWriteReminders"
                 type="button"
-                class="rounded-lg border border-red-300 px-5 py-2 text-sm font-medium text-fb-danger hover:bg-red-50 disabled:opacity-50"
-                :disabled="deleting"
+                class="rounded-lg border border-red-300 px-5 py-2 text-sm font-medium text-fb-danger hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-35"
+                :disabled="deleting || detailReminder.locked"
                 @click="requestDeleteReminder"
               >
                 Delete

@@ -50,3 +50,21 @@ def overlap_error(setting: SalarySetting) -> str:
     start = setting.effective_from.isoformat() if setting.effective_from else '…'
     end = setting.effective_to.isoformat() if setting.effective_to else '…'
     return f'У учителя уже есть ставка на пересекающийся период ({start} — {end}). Сначала закройте её датой окончания.'
+
+
+def students_in_groups_during(company, groups, start_date, end_date) -> int:
+    """
+    How many different students were in these groups during [start_date, end_date],
+    taken from the group history (GroupEnrollment), not from who studies today.
+    A student counts if their stay in the group overlaps the period. Students frozen right now
+    are left out of the current month (the history does not keep past freeze periods).
+    """
+    from django.utils import timezone
+    from crm.models import GroupEnrollment
+
+    qs = GroupEnrollment.objects.filter(
+        company=company, group__in=groups, joined_date__lte=end_date,
+    ).filter(Q(left_date__isnull=True) | Q(left_date__gt=start_date))
+    if start_date <= timezone.localdate() <= end_date:
+        qs = qs.exclude(left_date__isnull=True, status=GroupEnrollment.Status.FROZEN)
+    return qs.values('student_id').distinct().count()

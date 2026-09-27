@@ -1,8 +1,10 @@
 <script setup lang="ts">
+import { todayIso } from '../utils/dates';
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 
 import client, { type ApiEnvelope } from '../api/client';
+import { formatSum, walletPreview } from '../utils/wallet';
 import { useAuthStore } from '../stores/auth';
 import { PERM } from '../utils/rbac';
 import { downloadCsv } from '../utils/csvExport';
@@ -61,6 +63,10 @@ interface StudentRow {
   group_teacher?: string;
   course_price?: number;
   course_name?: string;
+  /** Копилка: money waiting to close the next month, and the month price it is counted against. */
+  wallet?: number | null;
+  month_price?: number | null;
+  wallet_missing?: number | null;
   created_at: string;
 }
 
@@ -92,7 +98,6 @@ const branches = ref<Branch[]>([]);
 const groups = ref<GroupOption[]>([]);
 const loading = ref(true);
 const saving = ref(false);
-const deleting = ref(false);
 const showPanel = ref(false);
 const panelLoading = ref(false);
 const formError = ref('');
@@ -106,7 +111,7 @@ const tgBotUsername = ref('');
 const showImportModal = ref(false);
 const showUnfreezeModal = ref(false);
 const unfreezeStudent = ref<StudentRow | null>(null);
-const unfreezeDate = ref(new Date().toISOString().slice(0, 10));
+const unfreezeDate = ref(todayIso());
 const unfreezeSaving = ref(false);
 const unfreezeError = ref('');
 
@@ -148,7 +153,7 @@ function printStudentPayment(p: StudentPayment) {
     date: p.date,
     student_name: detailStudent.value?.full_name || 'Ученик',
     amount: p.amount,
-    months_covered: p.months_covered || 1,
+    months_covered: p.months_covered ?? 1,
     method: p.method,
     method_pay: p.method_pay,
     teacher: detailStudent.value?.group_teacher || '',
@@ -184,6 +189,11 @@ function openAcceptPaymentModal() {
   payError.value = '';
   showPayModal.value = true;
 }
+
+// Копилка: what the entered sum will actually do (months are counted from money when the price is known)
+const payPreview = computed(() =>
+  walletPreview(detailStudent.value?.course_price, detailStudent.value?.wallet, payForm.amount),
+);
 
 function onPayMonthsChange() {
   if (payForm.months_covered < 1) payForm.months_covered = 1;
@@ -228,7 +238,7 @@ async function submitPayment() {
 
 function openUnfreezeModal(student: StudentRow) {
   unfreezeStudent.value = student;
-  unfreezeDate.value = new Date().toISOString().slice(0, 10);
+  unfreezeDate.value = todayIso();
   unfreezeError.value = '';
   showUnfreezeModal.value = true;
 }
@@ -414,6 +424,7 @@ const tableRows = computed(() =>
     nextPaymentDate: row.next_payment_date ? formatAddedDate(row.next_payment_date) : '—',
     isDebtor: Boolean(row.is_debtor),
     overdueDays: row.overdue_days || 0,
+    isFrozen: row.status === 2,
   })),
 );
 
@@ -718,39 +729,6 @@ async function submitStudent() {
   }
 }
 
-async function deleteStudent(hard = false) {
-  if (!detailStudent.value) return;
-
-  if (hard) {
-    if (
-      !window.confirm(
-        `ВНИМАНИЕ: Безвозвратно удалить ученика "${detailStudent.value.full_name}" из базы данных?\n\nВся история посещаемости и оценок будет УНИЧТОЖЕНА! Действие необратимо.`
-      )
-    ) {
-      return;
-    }
-  } else {
-    if (
-      !window.confirm(
-        `Отчислить ученика "${detailStudent.value.full_name}"?\n\nУченик будет переведен в статус «Отчислен / Ушел». История посещаемости и платежей сохранится.`
-      )
-    ) {
-      return;
-    }
-  }
-
-  deleting.value = true;
-  try {
-    await client.delete(`/students/${detailStudent.value.id}${hard ? '?hard=1' : ''}`);
-    closePanel();
-    await loadStudents();
-  } catch (error) {
-    window.alert(apiErrorMessage(error, hard ? 'Could not delete student permanently' : 'Could not archive student'));
-  } finally {
-    deleting.value = false;
-  }
-}
-
 function goGroup(student: StudentRow | { group_id: number | null }) {
   if (!student.group_id) return;
   router.push(groupRoute(student.group_id));
@@ -798,7 +776,7 @@ watch(
   (newStatus, oldStatus) => {
     if (editingStudent.value && editingStudent.value.status === 2 && newStatus === 1 && oldStatus !== 1) {
       if (!form.trial_date || form.trial_date === editingStudent.value.trial_date?.slice(0, 10)) {
-        form.trial_date = new Date().toISOString().slice(0, 10);
+        form.trial_date = todayIso();
       }
     }
   },
@@ -1013,6 +991,13 @@ onMounted(async () => {
                 <span class="inline-flex items-center rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-semibold text-red-700">
                   Просрочено на {{ row.overdueDays }} дн.
                 </span>
+                <span
+                  v-if="row.isFrozen"
+                  class="inline-flex items-center rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-medium text-sky-700"
+                  title="Долг был до заморозки; пока ученик в заморозке, просрочка не растёт"
+                >
+                  в заморозке
+                </span>
                 <span class="text-xs font-medium text-red-600">{{ row.nextPaymentDate }}</span>
               </div>
               <div v-else-if="row.nextPaymentDate !== '—'" class="flex items-center gap-1.5">
@@ -1112,7 +1097,7 @@ onMounted(async () => {
                     v-if="detailStudent.is_debtor"
                     class="inline-block rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700"
                   >
-                    Просрочено на {{ detailStudent.overdue_days }} дн.
+                    Просрочено на {{ detailStudent.overdue_days }} дн.<template v-if="detailStudent.status === 2"> (в заморозке)</template>
                   </span>
                   <span
                     v-else-if="detailStudent.next_payment_date"
@@ -1128,6 +1113,15 @@ onMounted(async () => {
                   >
                     + Оплатить
                   </button>
+                </dd>
+              </div>
+              <div v-if="canSeeMoney && detailStudent.wallet" class="flex items-center justify-between gap-4 border-b border-fb-line pb-2">
+                <dt class="text-fb-secondary">Копилка</dt>
+                <dd class="text-right">
+                  <span class="font-semibold text-amber-700">{{ formatSum(detailStudent.wallet) }} сум</span>
+                  <span v-if="detailStudent.wallet_missing" class="ml-1 text-xs text-fb-secondary">
+                    · до следующего месяца не хватает {{ formatSum(detailStudent.wallet_missing) }}
+                  </span>
                 </dd>
               </div>
               <div class="flex items-center justify-between gap-4 border-b border-fb-line pb-2">
@@ -1219,7 +1213,7 @@ onMounted(async () => {
                     <div class="flex items-center gap-2">
                       <span class="font-semibold text-fb-blue">{{ p.amount.toLocaleString() }} UZS</span>
                       <span class="rounded bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-fb-blue">
-                        {{ p.months_covered || 1 }} мес.
+                        {{ p.months_covered ?? 1 }} мес.
                       </span>
                     </div>
                     <div class="mt-1 text-xs text-fb-secondary">
@@ -1551,25 +1545,6 @@ onMounted(async () => {
               >
                 Edit
               </button>
-              <button
-                type="button"
-                class="rounded-lg border border-red-300 px-5 py-2 text-sm font-medium text-fb-danger hover:bg-red-50 disabled:opacity-50"
-                :disabled="deleting"
-                title="Перевести в статус «Отчислен / Ушел» с сохранением истории"
-                @click="deleteStudent(false)"
-              >
-                Отчислить
-              </button>
-              <button
-                v-if="auth.isCeo"
-                type="button"
-                class="rounded-lg border border-red-600 px-3 py-2 text-xs font-semibold text-red-700 hover:bg-red-100 disabled:opacity-50"
-                :disabled="deleting"
-                title="Только CEO: Полное физическое удаление записи из базы"
-                @click="deleteStudent(true)"
-              >
-                Hard Delete
-              </button>
             </template>
             <template v-else-if="!isReadOnly">
               <button
@@ -1663,7 +1638,9 @@ onMounted(async () => {
 
         <form class="mt-4 space-y-4" @submit.prevent="submitPayment">
           <div>
-            <label class="mb-1 block text-xs font-medium text-fb-secondary">Оплачено месяцев (Период)</label>
+            <label class="mb-1 block text-xs font-medium text-fb-secondary">
+              Месяцев (подставит сумму)
+            </label>
             <input
               v-model.number="payForm.months_covered"
               type="number"
@@ -1684,6 +1661,14 @@ onMounted(async () => {
             />
             <p v-if="detailStudent?.course_price" class="mt-1 text-[11px] text-fb-secondary">
               Стоимость курса: {{ detailStudent.course_price.toLocaleString() }} UZS / мес.
+            </p>
+            <p v-if="payPreview" class="mt-1 rounded-md bg-emerald-50 px-2 py-1 text-xs text-emerald-800">
+              Эта оплата закроет <strong>{{ payPreview.months }} мес.</strong><span v-if="payPreview.left">,
+              в копилке останется <strong>{{ formatSum(payPreview.left) }}</strong>
+              (до следующего месяца не хватит {{ formatSum(payPreview.missing) }})</span>.
+            </p>
+            <p v-else-if="detailStudent && !detailStudent.course_price" class="mt-1 text-[11px] text-amber-700">
+              У ученика нет цены курса — месяцы будут засчитаны так, как указано выше.
             </p>
           </div>
 

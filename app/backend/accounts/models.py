@@ -19,17 +19,17 @@ class UserManager(BaseUserManager):
 
 class User(AbstractUser):
     class UserType(models.TextChoices):
-        STAFF = 'staff', 'Staff'
-        TEACHER = 'teacher', 'Teacher'
-        STUDENT = 'student', 'Student'
+        STAFF = 'staff', 'Сотрудник'
+        TEACHER = 'teacher', 'Учитель'
+        STUDENT = 'student', 'Студент'
 
     class StaffRole(models.TextChoices):
         CEO = 'ceo', 'CEO'
-        ADMINISTRATOR = 'administrator', 'Administrator'
-        BRANCH_DIRECTOR = 'branch_director', 'Branch director'
-        LIMITED_ADMIN = 'limited_admin', 'Limited admin'
-        MARKETER = 'marketer', 'Marketer'
-        CASHIER = 'cashier', 'Cashier'
+        ADMINISTRATOR = 'administrator', 'Администратор'
+        BRANCH_DIRECTOR = 'branch_director', 'Директор филиала'
+        LIMITED_ADMIN = 'limited_admin', 'Ограниченный админ'
+        MARKETER = 'marketer', 'Маркетолог'
+        CASHIER = 'cashier', 'Кассир'
 
     username = None
     email = None
@@ -53,6 +53,16 @@ class User(AbstractUser):
         related_name='users',
         null=True,
         blank=True,
+    )
+
+    # E3: the only branch a branch director works with (sees no other branch's data)
+    branch = models.ForeignKey(
+        'org.Branch',
+        on_delete=models.SET_NULL,
+        related_name='directors',
+        null=True,
+        blank=True,
+        verbose_name='Филиал директора',
     )
 
     USERNAME_FIELD = 'phone'

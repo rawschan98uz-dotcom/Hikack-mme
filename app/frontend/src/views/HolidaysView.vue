@@ -1,4 +1,5 @@
 ﻿<script setup lang="ts">
+import { todayIso } from '../utils/dates';
 import { computed, onMounted, reactive, ref } from 'vue';
 
 import client, { type ApiEnvelope } from '../api/client';
@@ -43,7 +44,7 @@ const panelTitle = computed(() =>
 );
 
 const filteredRows = computed(() => {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayIso();
   return rows.value.filter((row) =>
     activeTab.value === 'upcoming' ? row.date >= today : row.date < today,
   );
@@ -51,7 +52,7 @@ const filteredRows = computed(() => {
 
 function resetForm() {
   form.name = '';
-  form.date = new Date().toISOString().slice(0, 10);
+  form.date = todayIso();
   form.branch_id = branches.value[0]?.id ?? '';
   form.affects_payment = false;
   formError.value = '';

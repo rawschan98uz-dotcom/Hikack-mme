@@ -5,10 +5,10 @@ from django.db.models.functions import Lower
 
 class Reminder(models.Model):
     class Status(models.TextChoices):
-        OVERDUE = 'overdue', 'Overdue'
-        TODAY = 'today', 'Today'
-        FUTURE = 'future', 'Future'
-        DONE = 'done', 'Done'
+        OVERDUE = 'overdue', 'Просрочено'
+        TODAY = 'today', 'Сегодня'
+        FUTURE = 'future', 'Предстоит'
+        DONE = 'done', 'Выполнено'
 
     company = models.ForeignKey('org.Company', on_delete=models.CASCADE, related_name='reminders')
     title = models.CharField(max_length=255)
@@ -21,7 +21,22 @@ class Reminder(models.Model):
         null=True,
         blank=True,
     )
+    # Set for automatic reminders about a student (e.g. "left without paying"): link to the card
+    # and branch scoping for branch directors.
+    student = models.ForeignKey(
+        'crm.Student',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='reminders',
+    )
+    # '' = created by a person; 'unpaid_leave' = automatic "student left without paying"
+    kind = models.CharField(max_length=32, blank=True, default='')
+    # How an automatic reminder was closed ("оплачено" / "списано CEO: причина")
+    resolution = models.TextField(blank=True, default='')
     created_at = models.DateTimeField(auto_now_add=True)
+
+    KIND_UNPAID_LEAVE = 'unpaid_leave'
 
     @property
     def current_status(self) -> str:
@@ -68,9 +83,9 @@ class StudentScore(models.Model):
 
 class TeacherAttendanceRecord(models.Model):
     class Status(models.IntegerChoices):
-        PRESENT = 1, 'Present'
-        ABSENT = 0, 'Absent'
-        LATE = 2, 'Late'
+        PRESENT = 1, 'Был'
+        ABSENT = 0, 'Не был'
+        LATE = 2, 'Опоздал'
 
     company = models.ForeignKey('org.Company', on_delete=models.CASCADE, related_name='teacher_attendance_records')
     teacher = models.ForeignKey(
@@ -101,9 +116,9 @@ class TeacherAttendanceRecord(models.Model):
 
 class WorklyRecord(models.Model):
     class Status(models.TextChoices):
-        AT_WORK = 'at_work', 'At work'
-        LATE_IN = 'late_in', 'Late in'
-        ABSENT = 'absent', 'Absent'
+        AT_WORK = 'at_work', 'На работе'
+        LATE_IN = 'late_in', 'Опоздал'
+        ABSENT = 'absent', 'Отсутствовал'
 
     company = models.ForeignKey('org.Company', on_delete=models.CASCADE, related_name='workly_records')
     staff = models.ForeignKey(

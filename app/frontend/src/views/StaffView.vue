@@ -14,7 +14,20 @@ interface StaffRow {
   phone: string;
   role: string;
   job_title: string;
+  staff_role?: string;
+  staff_role_label?: string;
+  branch_id?: number | null;
+  branch?: string;
 }
+
+// Roles a CEO can give in the staff card (CEO itself is not assignable)
+const STAFF_ROLES = [
+  { value: 'administrator', label: 'Администратор' },
+  { value: 'branch_director', label: 'Директор филиала' },
+  { value: 'limited_admin', label: 'Ограниченный админ' },
+  { value: 'marketer', label: 'Маркетолог' },
+  { value: 'cashier', label: 'Кассир' },
+];
 
 const rows = ref<StaffRow[]>([]);
 const loading = ref(true);
@@ -41,7 +54,14 @@ const form = reactive({
   phone: '',
   job_title: '',
   password: '',
+  staff_role: 'administrator',
+  branch_id: '' as number | '',
 });
+
+const branches = computed(() => auth.user?.branches ?? []);
+// E3: only CEO sets roles and a director's branch; nobody changes own role
+const canEditRole = computed(() => auth.isCeo && (!editingStaff.value || editingStaff.value.id !== auth.user?.id));
+const isDirectorRole = computed(() => form.staff_role === 'branch_director');
 
 const searchQuery = ref('');
 
@@ -79,6 +99,8 @@ function resetForm() {
   form.phone = '';
   form.job_title = '';
   form.password = '';
+  form.staff_role = 'administrator';
+  form.branch_id = '';
   formError.value = '';
   editingStaff.value = null;
   detailStaff.value = null;
@@ -90,6 +112,8 @@ function fillForm(row: StaffRow) {
   form.phone = row.phone;
   form.job_title = row.job_title === '—' ? '' : row.job_title;
   form.password = '';
+  form.staff_role = row.staff_role || 'limited_admin';
+  form.branch_id = row.branch_id ?? '';
 }
 
 async function loadRows() {
@@ -135,6 +159,10 @@ async function submitForm() {
     formError.value = 'First name and phone are required';
     return;
   }
+  if (canEditRole.value && isDirectorRole.value && !form.branch_id) {
+    formError.value = 'Выберите филиал для директора филиала';
+    return;
+  }
   saving.value = true;
   try {
     const payload = {
@@ -143,6 +171,9 @@ async function submitForm() {
       phone: form.phone.trim(),
       job_title: form.job_title.trim(),
       ...(form.password ? { password: form.password } : {}),
+      ...(canEditRole.value
+        ? { staff_role: form.staff_role, branch_id: isDirectorRole.value ? form.branch_id : null }
+        : {}),
     };
     if (editingStaff.value) {
       await client.patch(`/user/staff/${editingStaff.value.id}`, payload);
@@ -151,8 +182,9 @@ async function submitForm() {
     }
     closePanel();
     await loadRows();
-  } catch {
-    formError.value = 'Could not save';
+  } catch (error) {
+    const data = (error as { response?: { data?: { message?: string } } })?.response?.data;
+    formError.value = data?.message || 'Could not save';
   } finally {
     saving.value = false;
   }
@@ -221,6 +253,7 @@ onMounted(loadRows);
           <tr>
             <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Name</th>
             <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Job title</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Роль</th>
             <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Phone</th>
           </tr>
         </thead>
@@ -228,6 +261,9 @@ onMounted(loadRows);
           <tr v-for="row in filteredRows" :key="row.id" class="cursor-pointer border-b hover:bg-fb-hover/40" @click="openDetail(row.id)">
             <td class="px-5 py-4">{{ row.name }}</td>
             <td class="px-5 py-4">{{ row.job_title }}</td>
+            <td class="px-5 py-4">
+              {{ row.staff_role_label || '—' }}<span v-if="row.branch" class="text-fb-secondary"> · {{ row.branch }}</span>
+            </td>
             <td class="px-5 py-4">{{ row.phone }}</td>
           </tr>
         </tbody>
@@ -260,6 +296,38 @@ onMounted(loadRows);
               <label class="mb-1 block text-sm font-medium">Job title</label>
               <input v-model="form.job_title" :readonly="isReadOnly" class="w-full rounded-lg border px-3 py-2 read-only:bg-fb-canvas" />
             </div>
+            <div>
+              <label class="mb-1 block text-sm font-medium">Роль</label>
+              <select
+                v-if="!isReadOnly && canEditRole"
+                v-model="form.staff_role"
+                class="w-full rounded-lg border px-3 py-2"
+              >
+                <option v-for="r in STAFF_ROLES" :key="r.value" :value="r.value">{{ r.label }}</option>
+              </select>
+              <input
+                v-else
+                :value="detailStaff?.staff_role_label || STAFF_ROLES.find((r) => r.value === form.staff_role)?.label || '—'"
+                readonly
+                class="w-full rounded-lg border bg-fb-canvas px-3 py-2"
+              />
+            </div>
+            <div v-if="isDirectorRole">
+              <label class="mb-1 block text-sm font-medium">Филиал директора</label>
+              <select
+                v-if="!isReadOnly && canEditRole"
+                v-model="form.branch_id"
+                required
+                class="w-full rounded-lg border px-3 py-2"
+              >
+                <option value="">— Выберите филиал —</option>
+                <option v-for="b in branches" :key="b.id" :value="b.id">{{ b.name }}</option>
+              </select>
+              <input v-else :value="detailStaff?.branch || '—'" readonly class="w-full rounded-lg border bg-fb-canvas px-3 py-2" />
+              <p class="mt-1 text-xs text-fb-secondary">
+                Директор видит студентов, группы, лиды, учителей и отчёты только этого филиала.
+              </p>
+            </div>
             <div v-if="!isReadOnly">
               <label class="mb-1 block text-sm font-medium">Password</label>
               <input v-model="form.password" type="password" :placeholder="editingStaff ? 'Leave blank to keep' : 'Default: demo1234'" class="w-full rounded-lg border px-3 py-2" />
@@ -285,9 +353,9 @@ onMounted(loadRows);
       title="Import staff"
       upload-url="/user/staff/import"
       template-filename="staff-import-template.csv"
-      :template-header="['first_name', 'last_name', 'phone', 'password', 'job_title', 'staff_role']"
-      :template-example="['Kamola', 'Yusupova', '901002010', 'demo1234', 'Administrator', 'administrator']"
-      columns-help="Required: first_name, phone. Optional: last_name, password (auto-generated if empty), job_title, staff_role (administrator, marketer, cashier, branch_director, limited_admin)."
+      :template-header="['first_name', 'last_name', 'phone', 'password', 'job_title', 'staff_role', 'branch']"
+      :template-example="['Kamola', 'Yusupova', '901002010', 'demo1234', 'Administrator', 'administrator', '']"
+      columns-help="Required: first_name, phone. Optional: last_name, password (auto-generated if empty), job_title, staff_role (administrator, marketer, cashier, branch_director, limited_admin), branch (обязателен для branch_director: название или id филиала)."
       @imported="loadRows"
     />
   </div>

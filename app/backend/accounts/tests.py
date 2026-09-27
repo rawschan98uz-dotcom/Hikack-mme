@@ -268,8 +268,10 @@ class LeadToStudentConversionTests(TestCase):
         self.assertEqual(student_data['level'], 'Elementary (A2)')
         self.assertEqual(student_data['branch_id'], self.branch.id)
         self.assertEqual(student_data['status'], 1)  # STUDYING
-        self.assertEqual(student_data['trial_date'], '2025-05-12')
-        self.assertEqual(student_data['next_payment_date'], '2025-05-12')
+        # Owner decision 2026-09-25: payments start today, not on the old trial lesson date
+        today = timezone.localdate().isoformat()
+        self.assertEqual(student_data['trial_date'], today)
+        self.assertEqual(student_data['next_payment_date'], today)
 
         # Check lead is preserved in database with stage CONVERTED
         lead = Lead.objects.get(pk=lead_id)
@@ -652,9 +654,13 @@ class SubscriptionBillingAndCategoryTests(TestCase):
         self.company.click_secret_key = 'testsecret'
         self.company.save()
 
+        # Копилка: online money is counted against the course price (500 000 = one month)
+        course = Course.objects.create(company=self.company, name='Click course', price=500000)
+        group = Group.objects.create(company=self.company, branch=self.branch, name='Click group', course=course)
         student = Student.objects.create(
             company=self.company,
             branch=self.branch,
+            group=group,
             first_name='Bobur',
             last_name='Nazarov',
             phone='909990011',
@@ -723,9 +729,13 @@ class SubscriptionBillingAndCategoryTests(TestCase):
         self.company.payme_secret_key = 'sec_key_123'
         self.company.save()
 
+        # Копилка: online money is counted against the course price (400 000 = one month)
+        course = Course.objects.create(company=self.company, name='Payme course', price=400000)
+        group = Group.objects.create(company=self.company, branch=self.branch, name='Payme group', course=course)
         student = Student.objects.create(
             company=self.company,
             branch=self.branch,
+            group=group,
             first_name='Malika',
             last_name='Usmanova',
             phone='909990022',
@@ -977,17 +987,18 @@ class CoreAuditedFeaturesTests(TestCase):
         student.refresh_from_db()
         self.assertEqual(student.status, Student.Status.LEFT)
         self.assertIsNotNone(student.left_at)
-        self.assertIsNone(student.group)
+        self.assertIsNotNone(student.group)  # the last group is kept for reports (owner, 2026-09-27)
         self.assertTrue(AttendanceRecord.objects.filter(pk=att.pk).exists())
         self.assertTrue(StudentScore.objects.filter(pk=score.pk).exists())
 
         hard_res = self.client.delete(f'/v1/students/{student.id}?hard=1')
-        self.assertEqual(hard_res.status_code, 403)
+        self.assertEqual(hard_res.status_code, 400)
 
+        # Owner (2026-09-27): nobody can erase a student, not even the CEO
         self.client.force_authenticate(user=self.ceo)
         ceo_hard = self.client.delete(f'/v1/students/{student.id}?hard=1')
-        self.assertEqual(ceo_hard.status_code, 200)
-        self.assertFalse(Student.objects.filter(pk=student.pk).exists())
+        self.assertEqual(ceo_hard.status_code, 400)
+        self.assertTrue(Student.objects.filter(pk=student.pk).exists())
 
     def test_brothers_safe_lead_student_matching(self):
         """Matching by phone variants must verify last_name to prevent wrong conversion."""
@@ -1205,10 +1216,12 @@ class P0RegressionTests(TestCase):
         self.assertEqual(res.json()['data']['paid_count'], 3)
         self.assertEqual(res.json()['data']['next_payment_date'], '2026-09-01')
 
-        # Freeze
+        # Freeze exactly when the 3 paid months are used up
         self.client.patch(f'/v1/students/{student.id}', {'status': Student.Status.FROZEN})
         student.refresh_from_db()
         self.assertEqual(student.status, Student.Status.FROZEN)
+        student.frozen_at = timezone.datetime(2026, 9, 1, 12, 0, tzinfo=timezone.get_current_timezone())
+        student.save(update_fields=['frozen_at'])
 
         # Unfreeze
         patch_res = self.client.patch(f'/v1/students/{student.id}', {
@@ -1368,6 +1381,7 @@ class P0RegressionTests(TestCase):
         # Unfreeze via 'unfreeze' key
         patch_res = self.client.patch(f'/v1/students/{student.id}', {
             'unfreeze': True,
+            'trial_date': '2026-10-15',
         })
         self.assertEqual(patch_res.status_code, 200)
         data = patch_res.json()['data']
@@ -1983,8 +1997,9 @@ class Phase1SecurityTests(TestCase):
         })
         self.assertEqual(post_res.status_code, 403)
 
-        # Teacher self-checkin on own group -> 200/201
+        # Teacher self-checkin on own group -> 200/201 (lessons every day, so the test does not depend on the weekday)
         self.group_a.lesson_start_time = datetime.time(9, 0)
+        self.group_a.days = Group.Days.EVERY_DAY
         self.group_a.save()
         checkin_ok = self.client.post('/v1/teacher-attendance/self-checkin', {
             'group_id': self.group_a.id,
@@ -2292,6 +2307,11 @@ class Phase2ScheduleAndArchiveTests(TestCase):
             attend_date='2026-09-05',
             status=AttendanceRecord.Status.PRESENT,
         )
+
+        # a group with a studying student cannot be closed (owner rule 2026-09-27)
+        self.assertEqual(self.client.delete(f'/v1/groups/{group.id}').status_code, 400)
+        student.status = Student.Status.GRADUATED
+        student.save()
 
         res_del = self.client.delete(f'/v1/groups/{group.id}')
         self.assertEqual(res_del.status_code, 200)
@@ -3039,6 +3059,8 @@ class Block2FinanceRemediationTests(TestCase):
         # 3. If that payment is reversed -> must no longer mark paid
         refund.reverses_payment = pay
         refund.save(update_fields=['reverses_payment'])
+        from finance.refunds import recalc_refunded_months
+        recalc_refunded_months(pay)  # the refund API does this; full refund takes back the month
         is_paid = sync_student_paid_this_month(self.student)
         self.assertFalse(is_paid)
 

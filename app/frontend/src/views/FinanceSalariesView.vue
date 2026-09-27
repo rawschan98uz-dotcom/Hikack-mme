@@ -1,7 +1,14 @@
 <script setup lang="ts">
+import { currentMonthIso } from '../utils/dates';
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 
 import client, { type ApiEnvelope } from '../api/client';
+import { useAuthStore } from '../stores/auth';
+import { PERM } from '../utils/rbac';
+
+const auth = useAuthStore();
+// Branch director sees money read-only: add/edit/pay buttons need finance.write
+const canWriteFinance = computed(() => auth.can(PERM.FINANCE_WRITE));
 
 interface SalaryRow {
   id: number;
@@ -50,16 +57,16 @@ interface TeacherOption {
 }
 
 const SALARY_TYPES = [
-  { value: 'fixed', label: 'Fixed' },
-  { value: 'percent', label: 'Percent' },
-  { value: 'per_student', label: 'Per student' },
+  { value: 'fixed', label: 'Фиксированная' },
+  { value: 'percent', label: 'Процент' },
+  { value: 'per_student', label: 'За студента' },
 ] as const;
 
 // Tabs
 const activeTab = ref<'payroll' | 'settings'>('payroll');
 
 // Payroll State
-const selectedMonth = ref(new Date().toISOString().slice(0, 7));
+const selectedMonth = ref(currentMonthIso());
 const payrollRows = ref<PayrollRow[]>([]);
 const payrollSummary = ref<PayrollSummary>({
   total_accrued: 0,
@@ -172,7 +179,7 @@ function shiftMonth(delta: number) {
 }
 
 function setThisMonth() {
-  selectedMonth.value = new Date().toISOString().slice(0, 7);
+  selectedMonth.value = currentMonthIso();
   void loadPayroll();
 }
 
@@ -341,7 +348,7 @@ onMounted(async () => {
 
       <div class="flex items-center gap-2">
         <button
-          v-if="activeTab === 'settings'"
+          v-if="activeTab === 'settings' && canWriteFinance"
           type="button"
           class="rounded-lg bg-fb-blue px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-fb-hoverBtn transition-colors"
           @click="openCreate"
@@ -568,6 +575,7 @@ onMounted(async () => {
                 <!-- Action Button -->
                 <td class="px-5 py-4 text-right">
                   <button
+                    v-if="canWriteFinance"
                     type="button"
                     class="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-40 transition-colors"
                     :disabled="row.accrued === 0 && row.balance === 0"
@@ -773,8 +781,8 @@ onMounted(async () => {
           </div>
           <div class="flex gap-2 border-t px-6 py-4">
             <template v-if="isReadOnly && detailRow">
-              <button type="button" class="rounded-lg bg-fb-blue px-5 py-2 text-sm text-white" @click="startEdit">Edit</button>
-              <button type="button" class="rounded-lg border border-red-300 px-5 py-2 text-sm text-fb-danger" :disabled="deleting" @click="deleteRow">Delete</button>
+              <button v-if="canWriteFinance" type="button" class="rounded-lg bg-fb-blue px-5 py-2 text-sm text-white" @click="startEdit">Edit</button>
+              <button v-if="canWriteFinance" type="button" class="rounded-lg border border-red-300 px-5 py-2 text-sm text-fb-danger" :disabled="deleting" @click="deleteRow">Delete</button>
             </template>
             <button v-else type="submit" class="rounded-lg bg-fb-blue px-5 py-2 text-sm text-white" :disabled="saving">
               {{ saving ? 'Saving…' : editingRow ? 'Save' : 'Create' }}

@@ -19,7 +19,7 @@ print(f'Студентов со статусом STUDYING (1, Обучается
 debtors = Student.objects.filter(company=company, paid_this_month=False)
 print(f'Должников (paid_this_month=False): {debtors.count()}')
 for s in debtors:
-    print(f'   -> Должник: {s.full_name} | Баланс: {s.balance:,} UZS | Группа: {s.group.name if s.group else "Без группы"}')
+    print(f'   -> Должник: {s.full_name} | Группа: {s.group.name if s.group else "Без группы"}')
 
 print(f'\nВсего лидов: {Lead.objects.filter(company=company).count()}')
 for stage in ['trial_booked', 'attended', 'rejected']:

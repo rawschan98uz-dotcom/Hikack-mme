@@ -21,6 +21,7 @@ export const PERM = {
   TEACHER_ATTENDANCE_WRITE: 'teacher_attendance.write',
   FINANCE_VIEW: 'finance.view',
   FINANCE_WRITE: 'finance.write',
+  FINANCE_COMPANY: 'finance.company',
   REPORTS_VIEW: 'reports.view',
   REPORTS_WRITE: 'reports.write',
   SETTINGS_COMPANY: 'settings.company',
@@ -61,6 +62,9 @@ export function canAny(permissions: readonly string[] | undefined, perms: string
 const ROUTE_PERMISSION_RULES: readonly [string, string | null][] = [
   ['/students/debtors', PERM.FINANCE_VIEW],
   ['/finance/', PERM.FINANCE_VIEW],
+  ['/finance/pnl', PERM.FINANCE_COMPANY],
+  ['/finance/cost', PERM.FINANCE_COMPANY],
+  ['/finance/withdraw', PERM.FINANCE_COMPANY],
   ['/reports/attendance', PERM.ATTENDANCE_VIEW],
   ['/reports/', PERM.REPORTS_VIEW],
   ['/attendance-reports', PERM.ATTENDANCE_VIEW],
@@ -106,6 +110,17 @@ export function permissionForRoute(path: string): string | null {
     }
   }
   return best;
+}
+
+/**
+ * Pages a teacher does not use: students are seen inside own groups, attendance and grading,
+ * and "Reports" only duplicated the student attendance page.
+ */
+const TEACHER_HIDDEN_PREFIXES = ['/students', '/reports/', '/left-students'];
+
+export function isHiddenForTeacher(path: string): boolean {
+  const normalized = path.split('?')[0];
+  return TEACHER_HIDDEN_PREFIXES.some((prefix) => normalized.startsWith(prefix));
 }
 
 export function canAccessRoute(path: string, permissions: readonly string[] | undefined): boolean {

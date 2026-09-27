@@ -57,6 +57,8 @@ urlpatterns = [
     path('reports/teacher-attendance', views_extended.report_teacher_attendance),
     path('reports/teacher-attendance/<int:record_id>', views_extended.teacher_attendance_detail),
     path('teacher-attendance/self-checkin', views_extended.teacher_attendance_self_checkin),
+    path('teacher-attendance/today', views_extended.teacher_attendance_today),
+    path('teacher-attendance/my', views_extended.teacher_attendance_my),
     path('reports/leads', views_extended.report_leads),
     path('reports/left-students', views_extended.report_left_students),
     path('reports/workly', views_extended.report_workly),

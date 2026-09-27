@@ -449,11 +449,10 @@ def run():
     for idx, (student, sd) in enumerate(created_students):
         if sd['is_debtor']:
             # Настраиваем должника: отрицательный баланс, paid_this_month = False
-            student.balance = - (student.group.course.price if student.group and student.group.course else 500000)
             student.paid_this_month = False
-            student.save(update_fields=['balance', 'paid_this_month'])
+            student.save(update_fields=['paid_this_month'])
             debtor_count += 1
-            print(f"-> Должник: {student.full_name} (Баланс: {student.balance:,} UZS, оплата в тек. месяце: НЕТ)")
+            print(f"-> Должник: {student.full_name} (оплата в тек. месяце: НЕТ)")
         else:
             amt = sd['payment_amount']
             method = methods[idx % len(methods)]
@@ -466,9 +465,8 @@ def run():
             }, format='json')
             if p_res.status_code == 200:
                 student.refresh_from_db()
-                student.balance = 0
                 student.paid_this_month = True
-                student.save(update_fields=['balance', 'paid_this_month'])
+                student.save(update_fields=['paid_this_month'])
                 paid_count += 1
                 print(f"-> Оплата: {student.full_name} — {amt:,} UZS ({method}) [Успешно]")
             else:

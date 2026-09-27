@@ -7,3 +7,6 @@ class CrmConfig(AppConfig):
 
     def ready(self):
         from crm import signals  # noqa: F401
+        from crm.sqlite_unicode import register
+
+        register()

@@ -1,8 +1,10 @@
 <script setup lang="ts">
+import { todayIso } from '../utils/dates';
 import { computed, onMounted, reactive, ref , watch} from 'vue';
 import { useRouter } from 'vue-router';
 
 import client, { type ApiEnvelope } from '../api/client';
+import { useAuthStore } from '../stores/auth';
 import { groupRoute, studentRoute, teacherRoute } from '../utils/crossLinks';
 import { downloadCsv } from '../utils/csvExport';
 
@@ -254,13 +256,20 @@ async function loadGroupScores() {
   }
 }
 
+// A teacher works only with own groups: no branch / teacher / course filters and no export
+const auth = useAuthStore();
+const isTeacher = computed(() => auth.role === 'teacher');
+
 async function loadOptions() {
+  // Teachers may not read the teacher and course lists; asking for them made the whole
+  // Promise.all fail, so "Add grade" and the grading sheet had empty group/student lists.
+  const empty = { data: { data: [] as never[] } };
   const [branchRes, groupRes, studentRes, teacherRes, courseRes] = await Promise.all([
-    client.get<ApiEnvelope<Branch[]>>('/branch'),
+    isTeacher.value ? Promise.resolve(empty) : client.get<ApiEnvelope<Branch[]>>('/branch'),
     client.get<ApiEnvelope<GroupOption[]>>('/groups'),
     client.get<ApiEnvelope<{ id: number; full_name: string; group_id?: number | null }[]>>('/students'),
-    client.get<ApiEnvelope<TeacherOption[]>>('/user', { params: { user_type: 'teacher' } }),
-    client.get<ApiEnvelope<CourseOption[]>>('/courses'),
+    isTeacher.value ? Promise.resolve(empty) : client.get<ApiEnvelope<TeacherOption[]>>('/user', { params: { user_type: 'teacher' } }),
+    isTeacher.value ? Promise.resolve(empty) : client.get<ApiEnvelope<CourseOption[]>>('/courses'),
   ]);
 
   branches.value = branchRes.data.data;
@@ -473,11 +482,12 @@ function exportRatingCsv() {
     r.is_passed ? 'Passed' : 'Needs Retake',
     summary.value.pass_score,
   ]);
-  const dateStr = new Date().toISOString().slice(0, 10);
+  const dateStr = todayIso();
   downloadCsv(`Rating_Report_${dateStr}.csv`, headers, exportRows);
 }
 
 function goStudent(score: RatingRow | { student_id: number }) {
+  if (isTeacher.value) return; // student cards are not a teacher page
   router.push(studentRoute(score.student_id));
 }
 
@@ -486,7 +496,7 @@ function goGroup(score: RatingRow | { group_id: number }) {
 }
 
 function goTeacher(teacherId?: number | null) {
-  if (teacherId) router.push(teacherRoute(teacherId));
+  if (teacherId && !isTeacher.value) router.push(teacherRoute(teacherId));
 }
 
 function medalClass(no: number) {
@@ -537,6 +547,7 @@ watch(
       </div>
       <div class="flex flex-wrap items-center gap-2">
         <button
+          v-if="!isTeacher"
           type="button"
           class="flex items-center gap-1.5 rounded-lg border border-fb-line bg-fb-card px-3.5 py-2 text-sm font-medium text-fb-text shadow-sm hover:border-fb-blue hover:text-fb-blue"
           @click="exportRatingCsv"
@@ -731,7 +742,7 @@ watch(
     <!-- Filter Bar -->
     <div class="rounded-2xl border border-fb-line bg-fb-card p-4 shadow-sm">
       <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-6">
-        <div>
+        <div v-if="!isTeacher">
           <label class="mb-1 block text-xs font-semibold text-fb-secondary">Branch</label>
           <select
             v-model="filters.branch_id"
@@ -759,7 +770,7 @@ watch(
           </select>
         </div>
 
-        <div>
+        <div v-if="!isTeacher">
           <label class="mb-1 block text-xs font-semibold text-fb-secondary">Teacher</label>
           <select
             v-model="filters.teacher_id"
@@ -773,7 +784,7 @@ watch(
           </select>
         </div>
 
-        <div>
+        <div v-if="!isTeacher">
           <label class="mb-1 block text-xs font-semibold text-fb-secondary">Course / Subject</label>
           <select
             v-model="filters.course_id"

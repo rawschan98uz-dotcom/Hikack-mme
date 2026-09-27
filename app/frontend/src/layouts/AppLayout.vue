@@ -6,10 +6,10 @@ import NavIcon from '../components/NavIcon.vue';
 import { APP_VERSION } from '../version';
 import QuickAddMenu, { type QuickAddMenuItem } from '../components/QuickAddMenu.vue';
 import ScheduleDrawer from '../components/ScheduleDrawer.vue';
-import { firstFlyoutLink, filterNavSections, flyoutSectionForPath, primaryNav, sectionForPath } from '../config/navigation';
+import { firstFlyoutLink, filterNavSections, flyoutSectionForPath, navForRole, primaryNav, sectionForPath } from '../config/navigation';
 import { useAuthStore } from '../stores/auth';
 import { useLocaleStore, type LocaleCode } from '../stores/locale';
-import { PERM } from '../utils/rbac';
+import { isHiddenForTeacher, PERM } from '../utils/rbac';
 import { withCreateQuery } from '../utils/crossLinks';
 
 type QuickAddItem = QuickAddMenuItem;
@@ -48,7 +48,7 @@ const quickAddItems = computed<QuickAddItem[]>(() => {
   });
 });
 
-const visibleNav = computed(() => filterNavSections(primaryNav, (p) => auth.can(p)));
+const visibleNav = computed(() => navForRole(filterNavSections(primaryNav, (p) => auth.can(p)), auth.role));
 
 const appGridItems = computed(() => {
   const items = [
@@ -61,7 +61,7 @@ const appGridItems = computed(() => {
     { label: 'Reports', path: '/reports/conversion', permission: PERM.REPORTS_VIEW },
     { label: 'Settings', path: '/auto-sms', permission: PERM.SETTINGS_INTEGRATIONS },
   ];
-  return items.filter((item) => auth.can(item.permission));
+  return items.filter((item) => auth.can(item.permission) && !(auth.role === 'teacher' && isHiddenForTeacher(item.path)));
 });
 
 const activeSection = computed(() => sectionForPath(route.path));

@@ -68,16 +68,16 @@ ROUTE_RULES: list[tuple[tuple[str, ...], str, str | None]] = [
     (('GET',), r'^replenishments/\d+$', P.PERM_FINANCE_VIEW),
     (('PATCH', 'DELETE'), r'^replenishments/\d+$', P.PERM_FINANCE_WRITE),
 
-    (('GET',), r'^withdraws$', P.PERM_FINANCE_VIEW),
+    (('GET',), r'^withdraws$', P.PERM_FINANCE_COMPANY),
     (('POST',), r'^withdraws$', P.PERM_FINANCE_WRITE),
-    (('GET',), r'^withdraws/\d+$', P.PERM_FINANCE_VIEW),
+    (('GET',), r'^withdraws/\d+$', P.PERM_FINANCE_COMPANY),
     (('PATCH', 'DELETE'), r'^withdraws/\d+$', P.PERM_FINANCE_WRITE),
 
-    (('GET',), r'^expense$', P.PERM_FINANCE_VIEW),
+    (('GET',), r'^expense$', P.PERM_FINANCE_COMPANY),
     (('POST',), r'^expense$', P.PERM_FINANCE_WRITE),
-    (('GET',), r'^expense_types$', P.PERM_FINANCE_VIEW),
+    (('GET',), r'^expense_types$', P.PERM_FINANCE_COMPANY),
     (('POST',), r'^expense_types$', P.PERM_FINANCE_WRITE),
-    (('GET',), r'^expense_types/\d+$', P.PERM_FINANCE_VIEW),
+    (('GET',), r'^expense_types/\d+$', P.PERM_FINANCE_COMPANY),
     (('PATCH', 'DELETE'), r'^expense_types/\d+$', P.PERM_FINANCE_WRITE),
     (('GET', 'PATCH', 'DELETE'), r'^expense/\d+$', P.PERM_FINANCE_WRITE),
 
@@ -87,7 +87,7 @@ ROUTE_RULES: list[tuple[tuple[str, ...], str, str | None]] = [
     (('GET',), r'^finance/payroll$', P.PERM_FINANCE_VIEW),
     (('POST',), r'^finance/payroll/pay$', P.PERM_FINANCE_WRITE),
 
-    (('GET',), r'^reports/pnl$', P.PERM_FINANCE_VIEW),
+    (('GET',), r'^reports/pnl$', P.PERM_FINANCE_COMPANY),
     (('GET',), r'^reports/conversion$', P.PERM_REPORTS_VIEW),
     (('GET',), r'^reports/leads$', P.PERM_REPORTS_VIEW),
     (('GET',), r'^reports/left-students$', P.PERM_REPORTS_VIEW),
@@ -101,6 +101,8 @@ ROUTE_RULES: list[tuple[tuple[str, ...], str, str | None]] = [
     (('GET',), r'^reports/teacher-attendance/\d+$', P.PERM_TEACHER_ATTENDANCE_VIEW),
     (('PATCH', 'DELETE'), r'^reports/teacher-attendance/\d+$', P.PERM_TEACHER_ATTENDANCE_WRITE),
     (('POST',), r'^teacher-attendance/self-checkin$', P.PERM_TEACHER_ATTENDANCE_VIEW),
+    (('GET',), r'^teacher-attendance/today$', P.PERM_TEACHER_ATTENDANCE_VIEW),
+    (('GET',), r'^teacher-attendance/my$', P.PERM_TEACHER_ATTENDANCE_VIEW),
 
     (('GET',), r'^reports/workly$', P.PERM_REPORTS_VIEW),
     (('POST',), r'^reports/workly$', P.PERM_REPORTS_WRITE),

@@ -2,7 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router';
 
 import { useAuthStore } from '../stores/auth';
 import { filterNavSections, primaryNav } from '../config/navigation';
-import { canAccessRoute } from '../utils/rbac';
+import { canAccessRoute, isHiddenForTeacher } from '../utils/rbac';
 import AppLayout from '../layouts/AppLayout.vue';
 import ActivityLogsView from '../views/ActivityLogsView.vue';
 import ArchiveView from '../views/ArchiveView.vue';
@@ -36,7 +36,7 @@ import SmsLogView from '../views/SmsLogView.vue';
 import StaffView from '../views/StaffView.vue';
 import StudentsView from '../views/StudentsView.vue';
 import TagsView from '../views/TagsView.vue';
-import TeacherAttendanceReportsView from '../views/TeacherAttendanceReportsView.vue';
+import TeacherAttendancePage from '../views/TeacherAttendancePage.vue';
 import TeachersView from '../views/TeachersView.vue';
 import VoipSettingsView from '../views/VoipSettingsView.vue';
 import WhatsNewView from '../views/WhatsNewView.vue';
@@ -63,7 +63,7 @@ const router = createRouter({
         { path: 'reminders', component: RemindersView },
         { path: 'rating', component: RatingView },
         { path: 'attendance-reports', component: ReportsAttendanceView },
-        { path: 'teacher-attendance-reports', component: TeacherAttendanceReportsView },
+        { path: 'teacher-attendance-reports', component: TeacherAttendancePage },
         { path: 'finance/payments', component: FinancePaymentsView },
         { path: 'finance/withdraw', component: FinanceWithdrawView },
         { path: 'finance/cost', component: FinanceExpensesView },
@@ -120,6 +120,9 @@ router.beforeEach(async (to) => {
       auth.logout();
       return '/login';
     }
+  }
+  if (auth.user?.role === 'teacher' && isHiddenForTeacher(to.path)) {
+    return '/dashboard/default';
   }
   if (auth.user && !canAccessRoute(to.path, auth.user.permissions)) {
     if (auth.can('dashboard.view')) {

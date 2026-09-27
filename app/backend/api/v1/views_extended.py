@@ -15,17 +15,28 @@ from accounts.rbac import (
     PERM_STAFF_WRITE,
     PERM_TEACHERS_WRITE,
     get_effective_role,
+    get_role_label,
     user_has_permission,
     user_is_teacher,
 )
 from api.archive import archive_teacher
-from finance.salary import find_overlapping_setting, overlap_error, resolve_salary_setting
+from finance.refunds import recalc_refunded_months
+from finance.wallet import current_month_price, recalc_student_wallet
+from finance.salary import find_overlapping_setting, overlap_error, resolve_salary_setting, students_in_groups_during
 from api.responses import fail, ok
 from api.scope import (
     filter_attendance_queryset,
     filter_teacher_attendance_queryset,
-    teacher_can_access_attendance,
-    teacher_can_access_group,
+    branch_allowed,
+    branch_limit,
+    branches_for,
+    can_access_attendance,
+    can_access_group,
+    can_access_payment,
+    can_access_student,
+    scope_branch,
+    scope_payments,
+    scope_teachers,
 )
 from api.utils import name_taken, normalize_phone, safe_int, parse_date_safe
 from crm.models import AttendanceRecord, Group, Lead, Student
@@ -119,6 +130,9 @@ def teacher_detail_view(request, teacher_id: int):
         teacher = _get_teacher(company, teacher_id)
     except User.DoesNotExist:
         return fail('Teacher not found', 404)
+    limit = branch_limit(request.user)
+    if limit is not None and not TeacherBranch.objects.filter(teacher=teacher, branch_id=limit).exists():
+        return fail('Teacher not found', 404)
 
     if request.method == 'GET':
         payload = _serialize_teacher(teacher)
@@ -131,15 +145,20 @@ def teacher_detail_view(request, teacher_id: int):
         if request.user.pk == teacher.pk:
             return fail('Cannot delete your own account', status_code=400)
 
+        # Payments, salary rates, payouts or groups keep the teacher for payroll/history:
+        # such a teacher is archived (deactivated), never deleted, so no money loses its teacher.
         has_history = (
-            TeacherAttendanceRecord.objects.filter(teacher=teacher).exists() or
-            AttendanceRecord.objects.filter(group__teacher=teacher).exists()
+            TeacherAttendanceRecord.objects.filter(teacher=teacher).exists()
+            or AttendanceRecord.objects.filter(group__teacher=teacher).exists()
+            or Group.objects.filter(teacher=teacher).exists()
+            or Payment.objects.filter(teacher=teacher).exists()
+            or SalarySetting.objects.filter(teacher=teacher).exists()
+            or PayrollPayment.objects.filter(teacher=teacher).exists()
         )
         if has_history:
             archive_teacher(company, teacher, reason='Deleted with history')
             return ok({'deleted': True, 'archived': True})
 
-        Group.objects.filter(teacher=teacher).update(teacher=None)
         teacher.delete()
         return ok({'deleted': True})
 
@@ -198,6 +217,15 @@ def teacher_detail_view(request, teacher_id: int):
         )
         if not valid_branch_ids:
             return fail('Select at least one branch')
+        busy = list(
+            Group.objects.filter(teacher=teacher, status=Group.Status.ACTIVE)
+            .exclude(branch_id__in=valid_branch_ids)
+            .values_list('name', flat=True),
+        )
+        if busy:
+            return fail(
+                'Сначала передайте другому учителю группы в убираемом филиале: ' + ', '.join(busy),
+            )
         TeacherBranch.objects.filter(teacher=teacher).delete()
         for branch_id in valid_branch_ids:
             TeacherBranch.objects.create(teacher=teacher, branch_id=branch_id)
@@ -217,11 +245,17 @@ def user_list(request):
         qs = qs.filter(user_type=user_type)
 
     if user_type == 'teacher':
+        limit = branch_limit(request.user)
+        if limit is not None:
+            qs = qs.filter(teacher_branches__branch_id=limit)
         teachers_qs = qs.filter(is_active=True).annotate(
             _groups_count=Count('teaching_groups')
         ).order_by('id')
         data = [_serialize_teacher(u) for u in teachers_qs]
         return ok(data)
+
+    if user_type == 'staff':
+        return ok([_serialize_staff(u) for u in qs.select_related('branch').order_by('id')])
 
     data = [
         {
@@ -245,7 +279,51 @@ def _serialize_staff(user: User) -> dict:
         'phone': user.phone,
         'role': user.user_type,
         'job_title': user.job_title or '—',
+        'staff_role': user.staff_role or '',
+        'staff_role_label': get_role_label(get_effective_role(user)),
+        'branch_id': user.branch_id,
+        'branch': user.branch.name if user.branch_id else '',
     }
+
+
+ASSIGNABLE_STAFF_ROLES = {choice[0] for choice in User.StaffRole.choices if choice[0] != User.StaffRole.CEO}
+
+
+def _apply_staff_role(staff: User, company: Company, data, actor: User, is_ceo: bool) -> tuple[str, int] | None:
+    """E3: role and director branch of a staff member — CEO only. Returns (error, status) or None."""
+    if 'staff_role' not in data and 'branch_id' not in data:
+        return None
+    if not is_ceo:
+        return 'Only CEO can change roles and branches', 403
+
+    role = staff.staff_role
+    if 'staff_role' in data:
+        role = str(data.get('staff_role') or '').strip().lower()
+        if role not in ASSIGNABLE_STAFF_ROLES:
+            return 'Invalid role', 400
+        if staff.pk and staff.pk == actor.pk and role != staff.staff_role:
+            return 'Нельзя менять свою собственную роль', 400
+
+    branch = staff.branch
+    if 'branch_id' in data:
+        raw = data.get('branch_id')
+        if raw in (None, ''):
+            branch = None
+        else:
+            try:
+                branch = Branch.objects.get(pk=int(raw), company=company)
+            except (Branch.DoesNotExist, TypeError, ValueError):
+                return 'Invalid branch', 400
+
+    if role == User.StaffRole.BRANCH_DIRECTOR:
+        if branch is None:
+            return 'Выберите филиал для директора филиала', 400
+    else:
+        branch = None  # only a branch director is bound to one branch
+
+    staff.staff_role = role
+    staff.branch = branch
+    return None
 
 
 def _get_staff(company: Company, staff_id: int) -> User:
@@ -291,6 +369,11 @@ def staff_create_view(request):
     if User.objects.filter(phone=phone).exists():
         return fail('Phone already exists')
 
+    user = User(company=company, user_type=User.UserType.STAFF)
+    role_error = _apply_staff_role(user, company, request.data, request.user, is_ceo)
+    if role_error:
+        return fail(role_error[0], status_code=role_error[1])
+
     user = User.objects.create_user(
         phone=phone,
         password=password,
@@ -299,6 +382,8 @@ def staff_create_view(request):
         company=company,
         user_type=User.UserType.STAFF,
         job_title=job_title,
+        staff_role=user.staff_role,
+        branch=user.branch,
     )
     payload = _serialize_staff(user)
     payload['generated_password'] = password if generated else None
@@ -361,6 +446,10 @@ def staff_detail_view(request, staff_id: int):
             return fail('Only CEO can change passwords for other staff members', status_code=403)
         staff.set_password(str(password))
 
+    role_error = _apply_staff_role(staff, company, request.data, request.user, is_ceo)
+    if role_error:
+        return fail(role_error[0], status_code=role_error[1])
+
     staff.save()
     return ok(_serialize_staff(staff))
 
@@ -403,10 +492,10 @@ def teacher_create(request, company: Company):
         return fail('Only CEO can assign multiple branches to a teacher', status_code=403)
 
     valid_branch_ids = list(
-        Branch.objects.filter(company=company, id__in=branch_ids).values_list('id', flat=True),
+        branches_for(request.user, company).filter(id__in=branch_ids).values_list('id', flat=True),
     )
     if not valid_branch_ids:
-        default_branch = Branch.objects.filter(company=company).order_by('id').first()
+        default_branch = branches_for(request.user, company).order_by('id').first()
         if default_branch:
             valid_branch_ids = [default_branch.id]
 
@@ -459,6 +548,10 @@ def _serialize_payment(payment: Payment) -> dict:
         'transaction_type': getattr(payment, 'transaction_type', 'payment') or 'payment',
         'reverses_payment_id': payment.reverses_payment_id,
         'months_covered': getattr(payment, 'months_covered', 1) if getattr(payment, 'months_covered', None) is not None else 1,
+        'refunded_months': getattr(payment, 'refunded_months', 0) or 0,
+        # Копилка payment (months counted from money) vs months entered by hand
+        'month_price': getattr(payment, 'month_price', None),
+        'months_auto': getattr(payment, 'month_price', None) is not None,
         'method': payment.method,
         'method_pay': payment.get_method_display(),
         'teacher': payment.teacher_name or '—',
@@ -556,6 +649,12 @@ def replenishments(request):
         gross_amount = amount + discount_amount
         net_amount = amount
 
+        # Копилка: with a known course price the months are counted from the money;
+        # otherwise the administrator's months are used as before.
+        month_price = current_month_price(student) if student else 0
+        if month_price > 0:
+            months_covered = 0  # filled in by recalc_student_wallet below
+
         payment = Payment.objects.create(
             company=company,
             student=student,
@@ -574,9 +673,13 @@ def replenishments(request):
             teacher_name=teacher_name,
             comment=str(request.data.get('comment') or '').strip(),
             created_by=request.user,
+            month_price=month_price or None,
         )
 
         if student:
+            if month_price > 0:
+                recalc_student_wallet(student)
+                payment.refresh_from_db()
             from crm.services import sync_student_paid_this_month
             sync_student_paid_this_month(student)
 
@@ -591,6 +694,7 @@ def replenishments(request):
 
     # GET: return list of payments
     qs = Payment.objects.filter(company=company).select_related('created_by', 'student').order_by('-payment_date', '-created_at')
+    qs = scope_payments(qs, request.user)
     date_from = request.query_params.get('date_from')
     if date_from:
         qs = qs.filter(Q(payment_date__gte=date_from) | Q(payment_date__isnull=True, created_at__date__gte=date_from))
@@ -672,6 +776,8 @@ def payment_refund(request, payment_id: int):
             comment=comment,
             created_by=request.user,
         )
+        # Owner's rule: whole months are taken back only when the refunded sum reaches the monthly price
+        recalc_refunded_months(original)
 
         if original.student:
             from crm.services import sync_student_paid_this_month
@@ -698,6 +804,8 @@ def payment_detail(request, payment_id: int):
         payment = Payment.objects.select_related('created_by', 'student').get(pk=payment_id, company=company)
     except Payment.DoesNotExist:
         return fail('Payment not found', status_code=404)
+    if not can_access_payment(request.user, payment):
+        return fail('Payment not found', status_code=404)
 
     if request.method == 'GET':
         return ok(_serialize_payment(payment))
@@ -707,7 +815,13 @@ def payment_detail(request, payment_id: int):
             return fail('Cannot delete a payment that has reversals or refunds', status_code=400)
         with transaction.atomic():
             student = payment.student
+            refunded_payment = payment.reverses_payment
             payment.delete()
+            if refunded_payment is not None:
+                # A refund record was removed -> its months come back to the original payment
+                recalc_refunded_months(refunded_payment)
+            elif student:
+                recalc_student_wallet(student)  # money of a копилка payment leaves the копилка
             if student:
                 from crm.services import sync_student_paid_this_month
                 sync_student_paid_this_month(student)
@@ -739,7 +853,8 @@ def payment_detail(request, payment_id: int):
             payment.amount = amt
         except (TypeError, ValueError):
             return fail('Valid amount is required')
-    if 'months_covered' in request.data:
+    if 'months_covered' in request.data and payment.month_price is None:
+        # Копилка payments count their months from the money; only hand-entered ones take a number
         try:
             payment.months_covered = max(1, int(request.data.get('months_covered') or 1))
         except (TypeError, ValueError):
@@ -756,6 +871,14 @@ def payment_detail(request, payment_id: int):
 
     with transaction.atomic():
         payment.save()
+        payment.refresh_from_db()
+        # Amount / months changed -> the months taken back by refunds may change too
+        recalc_refunded_months(payment.reverses_payment or payment)
+        # Копилка: the money moved or changed -> recount both students
+        if old_student and old_student != payment.student:
+            recalc_student_wallet(old_student)
+        if payment.student:
+            recalc_student_wallet(payment.student)
         payment.refresh_from_db()
 
         from crm.services import sync_student_paid_this_month
@@ -778,6 +901,8 @@ def student_payments(request, student_id: int):
     try:
         student = Student.objects.get(pk=student_id, company=company)
     except Student.DoesNotExist:
+        return fail('Student not found', status_code=404)
+    if not can_access_student(request.user, student):
         return fail('Student not found', status_code=404)
 
     same_name_count = Student.objects.filter(
@@ -1154,6 +1279,8 @@ def salary_settings(request):
         return ok(_serialize_salary(setting), status_code=201)
 
     qs = SalarySetting.objects.filter(company=company).select_related('created_by', 'updated_by', 'teacher', 'course', 'group')
+    if branch_limit(request.user) is not None:
+        qs = qs.filter(teacher__in=scope_teachers(User.objects.filter(company=company), request.user))
     query = (request.query_params.get('q') or '').strip()
     if query:
         qs = qs.filter(
@@ -1274,7 +1401,10 @@ def report_conversion(request):
     if company is None:
         return ok({'pipeline': {}, 'rows': [], 'total': 0, 'page': 1, 'total_pages': 1})
 
-    leads = Lead.objects.filter(company=company).select_related('course', 'branch').order_by('-created_at')
+    leads = scope_branch(
+        Lead.objects.filter(company=company).select_related('course', 'branch').order_by('-created_at'),
+        request.user,
+    )
     params = request.query_params
 
     is_active_param = params.get('is_active')
@@ -1283,11 +1413,11 @@ def report_conversion(request):
     elif is_active_param in ('false', '0'):
         leads = leads.filter(is_active=False)
 
-    date_from = params.get('date_from')
+    date_from = parse_date_safe(params.get('date_from'))
     if date_from:
         leads = leads.filter(created_at__date__gte=date_from)
 
-    date_to = params.get('date_to')
+    date_to = parse_date_safe(params.get('date_to'))
     if date_to:
         leads = leads.filter(created_at__date__lte=date_to)
 
@@ -1469,6 +1599,8 @@ def report_attendance(request):
 
         if attend_date > timezone.localdate():
             return fail('Attendance date cannot be in the future', 400)
+        if user_is_teacher(request.user) and attend_date != timezone.localdate():
+            return fail('Учитель отмечает посещаемость только за сегодня. За другие дни — администратор или CEO.', status_code=403)
 
         records_data = request.data.get('records')
         if isinstance(records_data, list):
@@ -1478,14 +1610,17 @@ def report_attendance(request):
             except (TypeError, ValueError, Group.DoesNotExist):
                 return fail('Valid group is required')
 
-            if user_is_teacher(request.user) and group.teacher_id != request.user.id:
+            if not can_access_group(request.user, group):
                 return fail('Group not found', 404)
 
             saved_count = 0
             # D5: the whole group's attendance is saved all-or-nothing
             with transaction.atomic():
+                # only current members: former (left / graduated) students are not marked
                 students_map = {
-                    s.id: s for s in Student.objects.filter(company=company, group=group)
+                    s.id: s for s in Student.objects.filter(
+                        company=company, group=group, status__in=Student.CURRENT_STATUSES,
+                    )
                 }
                 for item in records_data:
                     try:
@@ -1535,12 +1670,12 @@ def report_attendance(request):
         except Group.DoesNotExist:
             return fail('Group not found')
 
-        if user_is_teacher(request.user) and group.teacher_id != request.user.id:
+        if not can_access_group(request.user, group):
             return fail('Group not found', 404)
 
         if student.company_id != group.company_id:
             return fail('Student and group belong to different companies')
-        if student.group_id != group.id:
+        if student.group_id != group.id or student.status not in Student.CURRENT_STATUSES:
             return fail('Student does not belong to this group')
 
         note = str(request.data.get('note') or '').strip()
@@ -1603,11 +1738,19 @@ def attendance_detail(request, record_id: int):
     except AttendanceRecord.DoesNotExist:
         return fail('Attendance record not found', status_code=404)
 
-    if user_is_teacher(request.user) and (record.group is None or record.group.teacher_id != request.user.id):
+    if not can_access_attendance(request.user, record):
         return fail('Attendance record not found', status_code=404)
 
     if request.method == 'GET':
         return ok(_serialize_attendance(record))
+
+    # A teacher changes only today's marks and cannot move them to another day
+    if user_is_teacher(request.user) and (
+        record.attend_date != timezone.localdate()
+        or ('date' in request.data and str(request.data.get('date'))[:10] != timezone.localdate().isoformat())
+        or ('attend_date' in request.data and str(request.data.get('attend_date'))[:10] != timezone.localdate().isoformat())
+    ):
+        return fail('Учитель отмечает посещаемость только за сегодня. За другие дни — администратор или CEO.', status_code=403)
 
     if request.method == 'DELETE':
         old_val = {
@@ -1666,7 +1809,7 @@ def attendance_detail(request, record_id: int):
             )
         except (Group.DoesNotExist, TypeError, ValueError):
             return fail('Group not found')
-        if user_is_teacher(request.user) and target_group.teacher_id != request.user.id:
+        if not can_access_group(request.user, target_group):
             return fail('Group not found', 404)
         record.group = target_group
 
@@ -1688,7 +1831,7 @@ def attendance_detail(request, record_id: int):
     moved = record.student_id != old_val['student_id'] or record.group_id != old_val['group_id']
     if moved and record.student.group_id != record.group_id:
         return fail('Student does not belong to this group', 400)
-    if user_is_teacher(request.user) and record.group.teacher_id != request.user.id:
+    if not can_access_group(request.user, record.group):
         return fail('Group not found', 404)
     if AttendanceRecord.objects.filter(
         company=company, student_id=record.student_id, group_id=record.group_id, attend_date=record.attend_date,
@@ -1840,6 +1983,8 @@ def report_teacher_attendance(request):
         except Group.DoesNotExist:
             return fail('Group not found')
 
+        if not can_access_group(request.user, group):
+            return fail('Group not found')
         if group.teacher_id != teacher.id:
             return fail('Teacher is not the assigned teacher for this group', 400)
 
@@ -1910,6 +2055,8 @@ def teacher_attendance_detail(request, record_id: int):
 
     if user_is_teacher(request.user) and record.teacher_id != request.user.id:
         return fail('Teacher attendance record not found', status_code=404)
+    if not branch_allowed(request.user, record.group.branch_id if record.group_id else None):
+        return fail('Teacher attendance record not found', status_code=404)
 
     if request.method == 'GET':
         return ok(_serialize_teacher_attendance(record))
@@ -1971,6 +2118,8 @@ def teacher_attendance_detail(request, record_id: int):
             )
         except (Group.DoesNotExist, TypeError, ValueError):
             return fail('Group not found')
+        if not can_access_group(request.user, record.group):
+            return fail('Group not found')
 
     teacher_id = request.data.get('teacher_id')
     if teacher_id is not None:
@@ -2015,6 +2164,82 @@ def teacher_attendance_detail(request, record_id: int):
 
 
 
+def _no_lesson_reason(group: Group, day) -> str | None:
+    """Why the group has no lesson on `day` (None when it does): weekday schedule and the group's dates."""
+    from crm.services import group_weekdays
+    if group.status != Group.Status.ACTIVE:
+        return 'Группа в архиве'
+    if day.weekday() not in group_weekdays(group.days, group.weekdays):
+        return 'Сегодня у этой группы нет урока по расписанию'
+    if (group.group_start_date and day < group.group_start_date) or (
+        group.group_end_date and day > group.group_end_date
+    ):
+        return 'Сегодня группа не занимается (вне дат начала и окончания группы)'
+    return None
+
+
+@api_view(['GET'])
+def teacher_attendance_today(request):
+    """The teacher's lessons today with the check-in state — for the "I came" block on the dashboard."""
+    company = _company(request)
+    if company is None or not user_is_teacher(request.user):
+        return ok([])
+    today = timezone.localdate()
+    groups = Group.objects.filter(
+        company=company, teacher=request.user, status=Group.Status.ACTIVE,
+    ).select_related('branch', 'room').order_by('lesson_start_time', 'name')
+    records = {
+        r.group_id: r
+        for r in TeacherAttendanceRecord.objects.filter(company=company, teacher=request.user, attend_date=today)
+    }
+    rows = []
+    for group in groups:
+        if _no_lesson_reason(group, today):
+            continue
+        record = records.get(group.id)
+        rows.append({
+            'group_id': group.id,
+            'group': group.name,
+            'branch': group.branch.name,
+            'room': group.room.name if group.room_id else '',
+            'start_time': group.lesson_start_time.strftime('%H:%M') if group.lesson_start_time else '',
+            'end_time': group.lesson_end_time.strftime('%H:%M') if group.lesson_end_time else '',
+            'checked_in': record is not None,
+            'status': record.status if record else None,
+            'status_label': record.get_status_display() if record else '',
+            'checked_at': timezone.localtime(record.created_at).strftime('%H:%M') if record else '',
+        })
+    return ok(rows)
+
+
+@api_view(['GET'])
+def teacher_attendance_my(request):
+    """All attendance marks of the logged-in teacher (for the "Моя посещаемость" calendar)."""
+    company = _company(request)
+    if company is None or not user_is_teacher(request.user):
+        return ok({'start_date': None, 'today': timezone.localdate().isoformat(), 'records': []})
+    records = TeacherAttendanceRecord.objects.filter(
+        company=company, teacher=request.user,
+    ).select_related('group').order_by('attend_date', 'id')
+    first = records.first()
+    joined = timezone.localtime(request.user.date_joined).date() if request.user.date_joined else None
+    start = min(d for d in (joined, first.attend_date if first else None) if d) if (joined or first) else None
+    return ok({
+        'start_date': start.isoformat() if start else None,
+        'today': timezone.localdate().isoformat(),
+        'records': [
+            {
+                'date': r.attend_date.isoformat(),
+                'group': r.group.name,
+                'status': r.status,
+                'status_label': r.get_status_display(),
+                'time': timezone.localtime(r.created_at).strftime('%H:%M'),
+            }
+            for r in records
+        ],
+    })
+
+
 @api_view(['POST'])
 def teacher_attendance_self_checkin(request):
     company = _company(request)
@@ -2043,6 +2268,11 @@ def teacher_attendance_self_checkin(request):
     local_now = timezone.localtime(timezone.now())
     attend_date = local_now.date()
 
+    # A teacher can mark "I came" only on a lesson day of this group's schedule
+    no_lesson = _no_lesson_reason(group, attend_date)
+    if no_lesson:
+        return fail(no_lesson, status_code=400)
+
     if group.lesson_start_time:
         import datetime
         lesson_dt = timezone.make_aware(datetime.datetime.combine(attend_date, group.lesson_start_time))
@@ -2055,7 +2285,8 @@ def teacher_attendance_self_checkin(request):
         status = TeacherAttendanceRecord.Status.PRESENT
 
     note = str(request.data.get('note') or '').strip()
-    record, _created = TeacherAttendanceRecord.objects.update_or_create(
+    # A second press changes nothing: the first mark (or the admin's correction) stays as it is
+    record, _created = TeacherAttendanceRecord.objects.get_or_create(
         company=company,
         teacher=teacher,
         group=group,
@@ -2076,7 +2307,10 @@ def report_leads(request):
     if company is None:
         return ok({'total': 0, 'active': 0, 'by_stage': {}, 'rows': [], 'page': 1, 'total_pages': 1})
 
-    leads = Lead.objects.filter(company=company).select_related('course', 'branch').order_by('-created_at')
+    leads = scope_branch(
+        Lead.objects.filter(company=company).select_related('course', 'branch').order_by('-created_at'),
+        request.user,
+    )
     params = request.query_params
 
     if params.get('active') == '1':
@@ -2086,11 +2320,11 @@ def report_leads(request):
     if stage:
         leads = leads.filter(stage=stage)
 
-    date_from = params.get('date_from')
+    date_from = parse_date_safe(params.get('date_from'))
     if date_from:
         leads = leads.filter(created_at__date__gte=date_from)
 
-    date_to = params.get('date_to')
+    date_to = parse_date_safe(params.get('date_to'))
     if date_to:
         leads = leads.filter(created_at__date__lte=date_to)
 
@@ -2176,8 +2410,17 @@ def report_leads(request):
 LEFT_STUDENT_STATUSES = {Student.Status.LEFT_TRIAL, Student.Status.LEFT}
 
 
+def _left_debt(student: Student) -> dict | None:
+    # Unpaid months at the moment of leaving; "left after trial" never owes (the trial is free)
+    if student.status != Student.Status.LEFT:
+        return None
+    from api.v1.views import student_debt_on
+    return student_debt_on(student)
+
+
 def _serialize_left_student(student: Student) -> dict:
     left_dt = student.left_at or student.created_at
+    debt = _left_debt(student)
     return {
         'id': student.id,
         'full_name': student.full_name,
@@ -2188,9 +2431,11 @@ def _serialize_left_student(student: Student) -> dict:
         'branch': student.branch.name if student.branch_id else '—',
         'group_id': student.group_id,
         'group': student.group.name if student.group_id else '—',
-        'balance': student.balance,
         'comment': student.comment or '—',
         'left_at': left_dt.date().isoformat() if left_dt else '',
+        'debt_months': debt['months'] if debt else 0,
+        'debt_amount': debt['approx_amount'] if debt else 0,
+        'debt_since': debt['unpaid_since'].isoformat() if debt else None,
     }
 
 
@@ -2258,9 +2503,14 @@ def report_left_students(request):
     if company is None:
         return ok({'summary': {'left_active': 0, 'left_trial': 0, 'total': 0}, 'rows': [], 'page': 1, 'total_pages': 1, 'total': 0})
 
-    qs = _left_students_queryset(company, request.query_params)
+    qs = scope_branch(_left_students_queryset(company, request.query_params), request.user)
+    left_active = qs.filter(status=Student.Status.LEFT).select_related('group__course')
+    debtor_ids = [s.id for s in left_active if _left_debt(s)]
+    if request.query_params.get('with_debt') in ('1', 'true'):
+        qs = qs.filter(id__in=debtor_ids)
     total = qs.count()
     summary = _left_students_summary(qs)
+    summary['with_debt'] = len(debtor_ids)
 
     export = request.query_params.get('export', '0') == '1'
     if export:
@@ -2649,6 +2899,15 @@ def report_pnl(request):
     })
 
 
+def _paid_between(start_date, end_date) -> Q:
+    """Payments whose payment date (what the cashier entered) falls in the period;
+    old records without payment_date fall back to the day they were entered."""
+    return (
+        Q(payment_date__gte=start_date, payment_date__lte=end_date)
+        | Q(payment_date__isnull=True, created_at__date__gte=start_date, created_at__date__lte=end_date)
+    )
+
+
 @api_view(['GET'])
 def payroll_summary(request):
     import calendar
@@ -2671,11 +2930,11 @@ def payroll_summary(request):
         end_date = date_cls(year, month, num_days)
         month_str = today.strftime('%Y-%m')
 
-    teachers = User.objects.filter(
+    teachers = scope_teachers(User.objects.filter(
         company=company,
         user_type=User.UserType.TEACHER,
         is_active=True,
-    ).order_by('first_name', 'last_name')
+    ), request.user).order_by('first_name', 'last_name')
 
     total_accrued = 0
     total_paid = 0
@@ -2703,39 +2962,33 @@ def payroll_summary(request):
             ).values('attend_date').distinct().count()
 
         # Active students across groups
-        students_count = Student.objects.filter(
-            company=company,
-            group__in=groups,
-            status=Student.Status.STUDYING,
-        ).count()
+        # Per-student rate: students who were in the groups during that month (history), not today's list
+        students_count = students_in_groups_during(company, groups, start_date, end_date)
 
         # Payments received from these students in month:
         # 1. Snapshotted payments allocated to this teacher
         snap_payments = Payment.objects.filter(
+            _paid_between(start_date, end_date),
             company=company,
             teacher=t,
             transaction_type=Payment.TransactionType.PAYMENT,
-            created_at__date__gte=start_date,
-            created_at__date__lte=end_date,
         ).aggregate(total=Sum('amount'))['total'] or 0
 
         # 2. Minus snapshotted refunds for this teacher
         snap_refunds = Payment.objects.filter(
+            _paid_between(start_date, end_date),
             company=company,
             teacher=t,
             transaction_type=Payment.TransactionType.REFUND,
-            created_at__date__gte=start_date,
-            created_at__date__lte=end_date,
         ).aggregate(total=Sum('amount'))['total'] or 0
 
         # 3. Plus legacy payments with teacher IS NULL that belonged to this teacher's groups
         legacy_payments = Payment.objects.filter(
+            _paid_between(start_date, end_date),
             company=company,
             teacher__isnull=True,
             student__group__in=groups,
             transaction_type=Payment.TransactionType.PAYMENT,
-            created_at__date__gte=start_date,
-            created_at__date__lte=end_date,
         ).aggregate(total=Sum('amount'))['total'] or 0
 
         group_payments = max(0, snap_payments - snap_refunds + legacy_payments)
@@ -2848,31 +3101,28 @@ def payroll_pay(request):
         end_date = date_cls(year, m_num, num_days)
 
     t_groups = Group.objects.filter(company=company, teacher=teacher)
-    students_count = Student.objects.filter(company=company, group__in=t_groups, status=Student.Status.STUDYING).count()
+    students_count = students_in_groups_during(company, t_groups, start_date, end_date)
 
     snap_payments = Payment.objects.filter(
+        _paid_between(start_date, end_date),
         company=company,
         teacher=teacher,
         transaction_type=Payment.TransactionType.PAYMENT,
-        created_at__date__gte=start_date,
-        created_at__date__lte=end_date,
     ).aggregate(total=Sum('amount'))['total'] or 0
 
     snap_refunds = Payment.objects.filter(
+        _paid_between(start_date, end_date),
         company=company,
         teacher=teacher,
         transaction_type=Payment.TransactionType.REFUND,
-        created_at__date__gte=start_date,
-        created_at__date__lte=end_date,
     ).aggregate(total=Sum('amount'))['total'] or 0
 
     legacy_payments = Payment.objects.filter(
+        _paid_between(start_date, end_date),
         company=company,
         teacher__isnull=True,
         student__group__in=t_groups,
         transaction_type=Payment.TransactionType.PAYMENT,
-        created_at__date__gte=start_date,
-        created_at__date__lte=end_date,
     ).aggregate(total=Sum('amount'))['total'] or 0
 
     g_payments = max(0, snap_payments - snap_refunds + legacy_payments)

@@ -6,9 +6,19 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 
 from accounts.models import User
+from accounts.rbac import user_is_teacher
 from api.responses import fail, ok
 from api.archive import archive_teacher
-from api.scope import teacher_can_access_group
+from crm.debts import LOCKED_MESSAGE, close_unpaid_leave, unpaid_leave_state
+from api.scope import (
+    branch_allowed,
+    branches_for,
+    can_access_group,
+    filter_attendance_queryset,
+    filter_groups_queryset,
+    filter_reminders_queryset,
+    scope_branch,
+)
 from api.utils import name_taken
 from crm.models import Group, Student
 from operations.models import (
@@ -53,6 +63,11 @@ def _serialize_reminder(reminder: Reminder) -> dict:
         'status_label': Reminder.Status(reminder.current_status).label,
         'assigned_to_id': reminder.assigned_to_id,
         'assigned_to': reminder.assigned_to.display_name() if reminder.assigned_to else '—',
+        'student_id': reminder.student_id,
+        'kind': reminder.kind,
+        'resolution': reminder.resolution,
+        # "Left without paying": locked until the debt is paid; live remaining debt
+        **unpaid_leave_state(reminder),
         'created_at': reminder.created_at.isoformat(),
     }
 
@@ -142,12 +157,15 @@ def reminder_index(request):
         )
         return ok(_serialize_reminder(reminder), status_code=201)
 
-    qs = Reminder.objects.filter(
+    qs = filter_reminders_queryset(Reminder.objects.filter(
         company=company,
-    ).exclude(status=Reminder.Status.DONE).select_related('assigned_to').order_by('due_date', 'id')
+    ), request.user).exclude(status=Reminder.Status.DONE).select_related('assigned_to').order_by('due_date', 'id')
 
     data = [_serialize_reminder(reminder) for reminder in qs]
-    return ok({'items': data, 'buckets': _reminder_buckets(data)})
+    # Unpaid debts of students who left are pinned on top, outside the date tabs
+    pinned = [item for item in data if item['kind'] == Reminder.KIND_UNPAID_LEAVE]
+    regular = [item for item in data if item['kind'] != Reminder.KIND_UNPAID_LEAVE]
+    return ok({'items': data, 'pinned': pinned, 'buckets': _reminder_buckets(regular)})
 
 
 @api_view(['GET', 'PATCH', 'DELETE'])
@@ -157,7 +175,7 @@ def reminder_detail(request, reminder_id: int):
         return fail('Company not found', status_code=404)
 
     try:
-        reminder = Reminder.objects.select_related('assigned_to').get(
+        reminder = filter_reminders_queryset(Reminder.objects, request.user).select_related('assigned_to').get(
             pk=reminder_id,
             company=company,
         )
@@ -166,6 +184,10 @@ def reminder_detail(request, reminder_id: int):
 
     if request.method == 'GET':
         return ok(_serialize_reminder(reminder))
+
+    if unpaid_leave_state(reminder)['locked']:
+        # "Left without paying" cannot be edited or removed until the debt is paid (or written off by CEO)
+        return fail(LOCKED_MESSAGE)
 
     if request.method == 'DELETE':
         reminder.delete()
@@ -186,9 +208,15 @@ def reminder_complete(request, reminder_id: int):
         return fail('Company not found', status_code=404)
 
     try:
-        reminder = Reminder.objects.get(pk=reminder_id, company=company)
+        reminder = filter_reminders_queryset(Reminder.objects, request.user).get(pk=reminder_id, company=company)
     except Reminder.DoesNotExist:
         return fail('Reminder not found', status_code=404)
+
+    if reminder.kind == Reminder.KIND_UNPAID_LEAVE:
+        error = close_unpaid_leave(reminder, request.user, request.data.get('write_off_reason') or '')
+        if error:
+            return fail(error)
+        return ok({'id': reminder.id, 'status': reminder.status, 'resolution': reminder.resolution})
 
     reminder.status = Reminder.Status.DONE
     reminder.save(update_fields=['status'])
@@ -321,9 +349,9 @@ def scores_branch(request):
         except Group.DoesNotExist:
             return fail('Group not found')
 
-        if not teacher_can_access_group(request.user, group):
+        if not can_access_group(request.user, group):
             return fail('You can grade only your own groups', status_code=403)
-        if student.group_id != group.id:
+        if student.group_id != group.id or student.status not in Student.CURRENT_STATUSES:
             return fail('Student does not belong to this group')
 
         score, _created = StudentScore.objects.update_or_create(
@@ -342,7 +370,11 @@ def scores_branch(request):
         ).count() + 1
         return ok(_serialize_score(score, rank, company), status_code=201)
 
-    qs = _score_queryset(company, request.query_params)
+    # a teacher sees grades of own groups only (same group-based rule as attendance)
+    qs = filter_attendance_queryset(
+        scope_branch(_score_queryset(company, request.query_params), request.user, 'group__branch'),
+        request.user,
+    )
     total = qs.count()
     avg_grade = qs.aggregate(avg=Avg('grade'))['avg'] or 0
     passed_count = qs.filter(grade__gte=pass_score).count()
@@ -392,14 +424,16 @@ def scores_bulk(request):
     except (Group.DoesNotExist, TypeError, ValueError):
         return fail('Group not found', status_code=404)
 
-    if not teacher_can_access_group(request.user, group):
+    if not can_access_group(request.user, group):
         return fail('You can grade only your own groups', status_code=403)
 
     max_scale = company.grade_scale_max or 100
 
     student_ids = [item.get('student_id') for item in items if item.get('student_id')]
     students_map = {
-        s.id: s for s in Student.objects.filter(pk__in=student_ids, company=company, group=group)
+        s.id: s for s in Student.objects.filter(
+            pk__in=student_ids, company=company, group=group, status__in=Student.CURRENT_STATUSES,
+        )
     }
 
     saved_count = 0
@@ -447,6 +481,7 @@ def scores_groups(request):
     groups_qs = Group.objects.filter(company=company, status=Group.Status.ACTIVE).select_related(
         'branch', 'course', 'teacher'
     )
+    groups_qs = filter_groups_queryset(groups_qs, request.user)
     if branch_id:
         groups_qs = groups_qs.filter(branch_id=branch_id)
     if course_id:
@@ -519,6 +554,10 @@ def score_detail(request, score_id: int):
         )
     except StudentScore.DoesNotExist:
         return fail('Score not found', status_code=404)
+    if not branch_allowed(request.user, score.group.branch_id if score.group_id else None):
+        return fail('Score not found', status_code=404)
+    if user_is_teacher(request.user) and (score.group is None or score.group.teacher_id != request.user.id):
+        return fail('Score not found', status_code=404)
 
     if request.method == 'GET':
         rank = StudentScore.objects.filter(
@@ -528,7 +567,7 @@ def score_detail(request, score_id: int):
         ).count() + 1
         return ok(_serialize_score(score, rank, company))
 
-    if score.group is None or not teacher_can_access_group(request.user, score.group):
+    if score.group is None or not can_access_group(request.user, score.group):
         return fail('You can grade only your own groups', status_code=403)
 
     group_id = score.group_id
@@ -592,14 +631,14 @@ def room_list(request):
             return fail('Room name is required')
 
         try:
-            branch = Branch.objects.get(pk=branch_id, company=company)
+            branch = branches_for(request.user, company).get(pk=branch_id)
         except Branch.DoesNotExist:
             return fail('Branch not found')
 
         room = Room.objects.create(company=company, branch=branch, name=name, capacity=max(capacity, 1))
         return ok(_serialize_room(room), status_code=201)
 
-    rooms = Room.objects.filter(company=company).select_related('branch')
+    rooms = scope_branch(Room.objects.filter(company=company).select_related('branch'), request.user)
     return ok([_serialize_room(r) for r in rooms])
 
 
@@ -619,7 +658,7 @@ def room_detail(request, room_id: int):
     if company is None:
         return fail('Company not found', status_code=404)
 
-    room = Room.objects.filter(pk=room_id, company=company).select_related('branch').first()
+    room = scope_branch(Room.objects.filter(pk=room_id, company=company), request.user).select_related('branch').first()
     if room is None:
         return fail('Room not found', status_code=404)
 
@@ -646,7 +685,7 @@ def room_detail(request, room_id: int):
     branch_id = request.data.get('branch_id')
     if branch_id is not None:
         try:
-            room.branch = Branch.objects.get(pk=int(branch_id), company=company)
+            room.branch = branches_for(request.user, company).get(pk=int(branch_id))
         except (Branch.DoesNotExist, TypeError, ValueError):
             return fail('Branch not found')
 
@@ -688,7 +727,7 @@ def holiday_list(request):
 
         try:
             branch_id = int(request.data.get('branch_id'))
-            branch = Branch.objects.get(pk=branch_id, company=company)
+            branch = branches_for(request.user, company).get(pk=branch_id)
         except (Branch.DoesNotExist, TypeError, ValueError):
             return fail('Branch is required')
 
@@ -703,7 +742,7 @@ def holiday_list(request):
         )
         return ok(_serialize_holiday(holiday), status_code=201)
 
-    holidays = Holiday.objects.filter(company=company).select_related('branch').order_by('-holiday_date')
+    holidays = scope_branch(Holiday.objects.filter(company=company), request.user).select_related('branch').order_by('-holiday_date')
     return ok([_serialize_holiday(h) for h in holidays])
 
 
@@ -713,7 +752,7 @@ def holiday_detail(request, holiday_id: int):
     if company is None:
         return fail('Company not found', status_code=404)
 
-    holiday = Holiday.objects.filter(pk=holiday_id, company=company).select_related('branch').first()
+    holiday = scope_branch(Holiday.objects.filter(pk=holiday_id, company=company), request.user).select_related('branch').first()
     if holiday is None:
         return fail('Holiday not found', status_code=404)
 
@@ -743,7 +782,7 @@ def holiday_detail(request, holiday_id: int):
     branch_id = request.data.get('branch_id')
     if branch_id is not None:
         try:
-            holiday.branch = Branch.objects.get(pk=int(branch_id), company=company)
+            holiday.branch = branches_for(request.user, company).get(pk=int(branch_id))
         except (Branch.DoesNotExist, TypeError, ValueError):
             return fail('Branch not found')
 

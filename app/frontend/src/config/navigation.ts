@@ -133,10 +133,10 @@ export const primaryNav: NavSection[] = [
     paths: ['/finance', '/students/debtors'],
     children: [
       { type: 'link', label: 'All payments', to: '/finance/payments', icon: 'coins', permission: PERM.FINANCE_VIEW },
-      { type: 'link', label: 'Финансовый отчет (P&L)', to: '/finance/pnl', icon: 'reports', permission: PERM.FINANCE_VIEW },
-      { type: 'link', label: 'Total Expenses', to: '/finance/cost', icon: 'expenses', permission: PERM.FINANCE_VIEW },
+      { type: 'link', label: 'Финансовый отчет (P&L)', to: '/finance/pnl', icon: 'reports', permission: PERM.FINANCE_COMPANY },
+      { type: 'link', label: 'Total Expenses', to: '/finance/cost', icon: 'expenses', permission: PERM.FINANCE_COMPANY },
       { type: 'link', label: 'Salaries new', to: '/finance/new-salaries', icon: 'salaries', permission: PERM.FINANCE_VIEW },
-      { type: 'link', label: 'Withdraw', to: '/finance/withdraw', icon: 'coins', permission: PERM.FINANCE_VIEW },
+      { type: 'link', label: 'Withdraw', to: '/finance/withdraw', icon: 'coins', permission: PERM.FINANCE_COMPANY },
       { type: 'link', label: 'Debtors', to: '/students/debtors', icon: 'debtors', permission: PERM.FINANCE_VIEW },
     ],
   },
@@ -245,6 +245,14 @@ export function filterFlyoutChildren(
     filtered.push(item);
   }
   return filtered;
+}
+
+/** The teacher's menu: no Students / Reports, and teacher attendance is "Моя посещаемость". */
+export function navForRole(sections: NavSection[], role: string): NavSection[] {
+  if (role !== 'teacher') return sections;
+  return sections
+    .filter((section) => section.id !== 'students' && section.id !== 'reports')
+    .map((section) => (section.id === 'teacher-attendance' ? { ...section, label: 'Моя посещаемость' } : section));
 }
 
 export function filterNavSections(

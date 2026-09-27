@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 
 import client, { type ApiEnvelope } from '../api/client';
+import { useAuthStore } from '../stores/auth';
 
 interface Branch {
   id: number;
@@ -65,13 +66,25 @@ interface AttendanceSaveResult {
   date: string;
 }
 
+// A teacher marks only today's lessons of own groups: no date, branch, search or export
+const auth = useAuthStore();
+const isTeacher = computed(() => auth.role === 'teacher');
+const todayGroupIds = ref<Set<number>>(new Set());
+
+/** Local calendar date (toISOString() would give the UTC date, i.e. "yesterday" before 05:00 in Tashkent). */
+function localIsoDate(d: Date): string {
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${m}-${day}`;
+}
+
 // State
 const loadingGroups = ref(true);
 const branches = ref<Branch[]>([]);
 const allGroups = ref<GroupRow[]>([]);
 
 // Filter state
-const todayStr = new Date().toISOString().slice(0, 10);
+const todayStr = localIsoDate(new Date());
 const selectedDate = ref(todayStr);
 const selectedBranch = ref<string>('');
 const searchQuery = ref<string>('');
@@ -95,6 +108,9 @@ const saveErrorMessage = ref('');
 // Smart search & live filtering
 const filteredGroups = computed(() => {
   let list = allGroups.value;
+  if (isTeacher.value) {
+    return list.filter((g) => todayGroupIds.value.has(g.id));
+  }
 
   if (selectedBranch.value) {
     const branchId = Number(selectedBranch.value);
@@ -169,6 +185,10 @@ async function loadInitialData() {
       client.get<ApiEnvelope<Branch[]>>('/branch'),
       client.get<ApiEnvelope<any>>('/groups', { params: { limit: '1000', status: '2' } }),
     ]);
+    if (isTeacher.value) {
+      const todayRes = await client.get<ApiEnvelope<{ group_id: number }[]>>('/teacher-attendance/today');
+      todayGroupIds.value = new Set(todayRes.data.data.map((row) => row.group_id));
+    }
 
     branches.value = Array.isArray(branchRes.data.data) ? branchRes.data.data : [];
 
@@ -279,7 +299,7 @@ async function saveGroupAttendance() {
     saveSuccessMessage.value = `Посещаемость успешно сохранена! (отмечено учеников: ${records.length})`;
   } catch (err: any) {
     console.error('Failed to save group attendance:', err);
-    saveErrorMessage.value = err?.response?.data?.error || err?.message || 'Не удалось сохранить посещаемость';
+    saveErrorMessage.value = err?.response?.data?.message || err?.response?.data?.error || err?.message || 'Не удалось сохранить посещаемость';
   } finally {
     savingAttendance.value = false;
   }
@@ -308,7 +328,7 @@ function setDateToday() {
 function setDateYesterday() {
   const d = new Date();
   d.setDate(d.getDate() - 1);
-  selectedDate.value = d.toISOString().slice(0, 10);
+  selectedDate.value = localIsoDate(d);
   if (activeGroup.value) {
     openGroupRoster(activeGroup.value);
   }
@@ -396,12 +416,15 @@ onMounted(() => {
           <span>📋</span>
           <span>Посещаемость учеников</span>
         </h1>
-        <p class="text-xs text-fb-secondary mt-0.5">
+        <p v-if="isTeacher" class="text-xs text-fb-secondary mt-0.5">
+          Сегодня, {{ todayStr.split('-').reverse().join('.') }} — ваши группы с уроком сегодня. Нажмите «Отметить».
+        </p>
+        <p v-else class="text-xs text-fb-secondary mt-0.5">
           Журнал учета посещаемости по группам. Нажмите на название группы для просмотра списка учеников и быстрой отметки.
         </p>
       </div>
 
-      <div class="flex items-center gap-2">
+      <div v-if="!isTeacher" class="flex items-center gap-2">
         <button
           type="button"
           class="rounded-lg border border-fb-line bg-fb-card px-3.5 py-2 text-sm text-fb-secondary hover:border-fb-blue hover:text-fb-blue transition-colors flex items-center gap-1.5 shadow-sm"
@@ -415,7 +438,7 @@ onMounted(() => {
     </div>
 
     <!-- Filter & Control Panel -->
-    <div class="rounded-xl border border-fb-line bg-fb-card p-4 shadow-sm space-y-3">
+    <div v-if="!isTeacher" class="rounded-xl border border-fb-line bg-fb-card p-4 shadow-sm space-y-3">
       <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-12 items-end">
         <!-- Date Picker -->
         <div class="lg:col-span-4">
@@ -561,11 +584,12 @@ onMounted(() => {
         <div class="flex h-16 w-16 items-center justify-center rounded-full bg-fb-hover text-2xl mb-3 text-fb-icon">
           👥
         </div>
-        <h3 class="text-base font-semibold text-fb-text">Группы не найдены</h3>
+        <h3 class="text-base font-semibold text-fb-text">{{ isTeacher ? 'Сегодня уроков нет' : 'Группы не найдены' }}</h3>
         <p class="mt-1 text-sm text-fb-secondary max-w-sm">
-          По текущим параметрам поиска и фильтрам группы отсутствуют.
+          {{ isTeacher ? 'У ваших групп сегодня нет уроков по расписанию.' : 'По текущим параметрам поиска и фильтрам группы отсутствуют.' }}
         </p>
         <button
+          v-if="!isTeacher"
           type="button"
           class="mt-4 rounded-lg bg-fb-blue px-4 py-2 text-xs font-medium text-white hover:bg-fb-blue-dark transition-colors shadow-sm"
           @click="resetSearchAndFilters"
@@ -582,8 +606,8 @@ onMounted(() => {
               <tr>
                 <th class="px-5 py-3.5">Группа</th>
                 <th class="px-5 py-3.5">Курс</th>
-                <th class="px-5 py-3.5">Преподаватель</th>
-                <th class="px-5 py-3.5">Филиал</th>
+                <th v-if="!isTeacher" class="px-5 py-3.5">Преподаватель</th>
+                <th v-if="!isTeacher" class="px-5 py-3.5">Филиал</th>
                 <th class="px-5 py-3.5">Дни / Время</th>
                 <th class="px-5 py-3.5 text-center">Учеников</th>
                 <th class="px-5 py-3.5 text-right">Действие</th>
@@ -623,7 +647,7 @@ onMounted(() => {
                 </td>
 
                 <!-- Teacher -->
-                <td class="px-5 py-3.5 text-fb-secondary">
+                <td v-if="!isTeacher" class="px-5 py-3.5 text-fb-secondary">
                   <span v-if="group.teacher" class="font-medium text-fb-text">
                     {{ group.teacher }}
                   </span>
@@ -631,7 +655,7 @@ onMounted(() => {
                 </td>
 
                 <!-- Branch -->
-                <td class="px-5 py-3.5 text-fb-secondary">
+                <td v-if="!isTeacher" class="px-5 py-3.5 text-fb-secondary">
                   {{ group.branch }}
                 </td>
 
@@ -728,7 +752,9 @@ onMounted(() => {
             <!-- Inline Date Picker in Modal -->
             <div class="flex items-center gap-2">
               <span class="text-xs font-semibold text-fb-secondary">Дата:</span>
+              <span v-if="isTeacher" class="text-xs font-semibold text-fb-text">Сегодня, {{ selectedDate.split('-').reverse().join('.') }}</span>
               <input
+                v-else
                 v-model="selectedDate"
                 type="date"
                 class="rounded-lg border border-fb-line bg-white px-2.5 py-1 text-xs font-medium text-fb-text focus:border-fb-blue focus:outline-none"

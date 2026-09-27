@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { dateToIso } from '../utils/dates';
 import { onMounted, reactive, ref } from 'vue';
 
 import client, { type ApiEnvelope } from '../api/client';
@@ -58,24 +59,24 @@ function setPreset(preset: string) {
   if (preset === 'this_month') {
     const start = new Date(year, month, 1);
     const end = new Date(year, month + 1, 0);
-    filters.date_from = start.toISOString().slice(0, 10);
-    filters.date_to = end.toISOString().slice(0, 10);
+    filters.date_from = dateToIso(start);
+    filters.date_to = dateToIso(end);
   } else if (preset === 'last_month') {
     const start = new Date(year, month - 1, 1);
     const end = new Date(year, month, 0);
-    filters.date_from = start.toISOString().slice(0, 10);
-    filters.date_to = end.toISOString().slice(0, 10);
+    filters.date_from = dateToIso(start);
+    filters.date_to = dateToIso(end);
   } else if (preset === 'this_quarter') {
     const quarter = Math.floor(month / 3);
     const start = new Date(year, quarter * 3, 1);
     const end = new Date(year, (quarter + 1) * 3, 0);
-    filters.date_from = start.toISOString().slice(0, 10);
-    filters.date_to = end.toISOString().slice(0, 10);
+    filters.date_from = dateToIso(start);
+    filters.date_to = dateToIso(end);
   } else if (preset === 'this_year') {
     const start = new Date(year, 0, 1);
     const end = new Date(year, 11, 31);
-    filters.date_from = start.toISOString().slice(0, 10);
-    filters.date_to = end.toISOString().slice(0, 10);
+    filters.date_from = dateToIso(start);
+    filters.date_to = dateToIso(end);
   } else if (preset === 'all_time') {
     filters.date_from = '';
     filters.date_to = '';

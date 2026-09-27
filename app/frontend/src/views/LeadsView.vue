@@ -552,7 +552,8 @@ async function openConvertModal() {
   convertForm.level = form.level || editingLead.value.level || '';
   convertForm.group_id = '';
   convertForm.status = 1;
-  convertForm.trial_date = form.trial_date || (editingLead.value.trial_date ? editingLead.value.trial_date.slice(0, 10) : getTodayDateString());
+  // Payments are counted from this date, so default to today (not the old trial lesson date)
+  convertForm.trial_date = getTodayDateString();
   convertForm.attended_trial = true;
 
   await loadBranchAndGroupOptions();
@@ -598,7 +599,7 @@ async function handleConvert() {
     return;
   }
   if (!convertForm.trial_date) {
-    convertError.value = 'Укажите дату старта / пробного урока';
+    convertError.value = 'Укажите дату старта / число оплаты';
     return;
   }
 
@@ -1486,8 +1487,11 @@ onMounted(async () => {
 
           <div>
             <label class="mb-1 block text-sm font-medium text-fb-secondary">
-              Trial lesson date (Дата старта / пробного урока) <span class="text-rose-500">*</span>
+              Дата старта / число оплаты <span class="text-rose-500">*</span>
             </label>
+            <p class="mb-1 text-xs text-fb-secondary">
+              От этой даты считается оплата. Пробный урок был: {{ editingLead?.trial_date ? editingLead.trial_date.slice(0, 10) : '—' }}
+            </p>
             <input
               v-model="convertForm.trial_date"
               type="date"

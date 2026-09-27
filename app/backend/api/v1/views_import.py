@@ -13,14 +13,14 @@ from api.utils import is_valid_phone, parse_date_safe
 from api.responses import fail, ok
 from api.v1.views_extended import _company, _generate_password, teacher_create
 from crm.models import Group, Lead, Student
-from org.models import Branch
+from api.scope import branches_for, filter_groups_queryset
 
 VALID_STAFF_ROLES = {choice[0] for choice in User.StaffRole.choices if choice[0] != User.StaffRole.CEO}
 
 
-def _resolve_branch_ids(company, raw: str) -> list[int]:
+def _resolve_branch_ids(company, raw: str, user=None) -> list[int]:
     if not raw:
-        default = Branch.objects.filter(company=company).order_by('id').first()
+        default = branches_for(user, company).order_by('id').first()
         return [default.id] if default else []
 
     ids: list[int] = []
@@ -29,11 +29,11 @@ def _resolve_branch_ids(company, raw: str) -> list[int]:
         if not token:
             continue
         if token.isdigit():
-            branch = Branch.objects.filter(company=company, pk=int(token)).first()
+            branch = branches_for(user, company).filter(pk=int(token)).first()
             if branch:
                 ids.append(branch.id)
         else:
-            branch = Branch.objects.filter(company=company, name__iexact=token).first()
+            branch = branches_for(user, company).filter(name__iexact=token).first()
             if branch:
                 ids.append(branch.id)
     return list(dict.fromkeys(ids))
@@ -101,7 +101,6 @@ def teacher_import(request):
                 'branch_name': '—',
                 'group_name': '—',
                 'status_label': 'Преподаватель',
-                'balance': 0,
                 'school': job_title or '—',
                 'is_valid': False,
                 'message': msg,
@@ -122,14 +121,13 @@ def teacher_import(request):
                 'branch_name': '—',
                 'group_name': '—',
                 'status_label': 'Преподаватель',
-                'balance': 0,
                 'school': job_title or '—',
                 'is_valid': False,
                 'message': msg,
             })
             continue
 
-        branch_ids = _resolve_branch_ids(company, branch_raw)
+        branch_ids = _resolve_branch_ids(company, branch_raw, request.user)
         if not branch_ids:
             skipped += 1
             msg = 'Филиал не найден'
@@ -144,7 +142,6 @@ def teacher_import(request):
                 'branch_name': '—',
                 'group_name': '—',
                 'status_label': 'Преподаватель',
-                'balance': 0,
                 'school': job_title or '—',
                 'is_valid': False,
                 'message': msg,
@@ -168,7 +165,6 @@ def teacher_import(request):
             'branch_name': 'Основной',
             'group_name': '—',
             'status_label': 'Преподаватель',
-            'balance': 0,
             'school': job_title or '—',
             'is_valid': True,
             'message': '',
@@ -267,6 +263,17 @@ def staff_import(request):
             errors.append({'row': row_num, 'message': f'Phone {phone} already exists'})
             continue
 
+        # E3: a branch director must be bound to one branch
+        director_branch = None
+        if staff_role == User.StaffRole.BRANCH_DIRECTOR:
+            branch_raw = str(row.get('branch') or row.get('филиал') or row.get('filial') or '').strip()
+            branch_ids = _resolve_branch_ids(company, branch_raw, request.user) if branch_raw else []
+            if not branch_ids:
+                skipped += 1
+                errors.append({'row': row_num, 'message': 'Для директора филиала укажите филиал (колонка branch)'})
+                continue
+            director_branch = branch_ids[0]
+
         user = User.objects.create_user(
             phone=phone,
             password=password,
@@ -276,6 +283,7 @@ def staff_import(request):
             user_type=User.UserType.STAFF,
             staff_role=staff_role,
             job_title=job_title,
+            branch_id=director_branch,
         )
         created += 1
         if generated_password:
@@ -304,8 +312,10 @@ def student_import(request):
     errors: list[dict] = []
     preview_rows: list[dict] = []
     valid_students_to_create: list[dict] = []
+    seen_in_file: set[tuple[str, str, str]] = set()
+    from api.v1.views import _active_student_duplicate
 
-    default_branch = Branch.objects.filter(company=company).order_by('id').first()
+    default_branch = branches_for(request.user, company).order_by('id').first()
 
     status_map = {
         'trial': Student.Status.STUDYING,
@@ -446,7 +456,6 @@ def student_import(request):
                 'branch_name': '—',
                 'group_name': '—',
                 'status_label': '—',
-                'balance': 0,
                 'school': '',
                 'parent_telegram': '',
                 'is_valid': False,
@@ -468,13 +477,39 @@ def student_import(request):
                 'branch_name': '—',
                 'group_name': '—',
                 'status_label': '—',
-                'balance': 0,
                 'school': '',
                 'parent_telegram': '',
                 'is_valid': False,
                 'message': msg,
             })
             continue
+
+        # Same rule as adding a student by hand: an active student with the same name + phone
+        # already exists (or appeared earlier in this file) -> skip, so loading a file twice
+        # does not create twins. Students who left are not counted: a returning student can be loaded.
+        file_key = (phone, first_name.casefold(), last_name.casefold())
+        existing = _active_student_duplicate(company, phone, first_name, last_name)
+        if existing or file_key in seen_in_file:
+            skipped += 1
+            msg = 'Уже есть в базе — пропущено' if existing else 'Повтор в этом файле — пропущено'
+            errors.append({'row': row_num, 'message': f'{first_name} {last_name}'.strip() + f': {msg}'})
+            preview_rows.append({
+                'row': row_num,
+                'first_name': first_name,
+                'last_name': last_name,
+                'full_name': f"{first_name} {last_name}".strip(),
+                'phone': phone,
+                'formatted_phone': phone,
+                'branch_name': '—',
+                'group_name': '—',
+                'status_label': '—',
+                'school': '',
+                'parent_telegram': '',
+                'is_valid': False,
+                'message': msg,
+            })
+            continue
+        seen_in_file.add(file_key)
 
         branch_raw = (
             row.get('branch')
@@ -487,9 +522,9 @@ def student_import(request):
         if branch_raw:
             token = str(branch_raw).strip()
             if token.isdigit():
-                branch = Branch.objects.filter(company=company, pk=int(token)).first()
+                branch = branches_for(request.user, company).filter(pk=int(token)).first()
             else:
-                branch = Branch.objects.filter(company=company, name__iexact=token).first()
+                branch = branches_for(request.user, company).filter(name__iexact=token).first()
         if not branch:
             branch = default_branch
         if not branch:
@@ -506,7 +541,6 @@ def student_import(request):
                 'branch_name': '—',
                 'group_name': '—',
                 'status_label': '—',
-                'balance': 0,
                 'school': '',
                 'parent_telegram': '',
                 'is_valid': False,
@@ -525,9 +559,9 @@ def student_import(request):
         if group_raw:
             token = str(group_raw).strip()
             if token.isdigit():
-                group = Group.objects.filter(company=company, pk=int(token)).first()
+                group = filter_groups_queryset(Group.objects.filter(company=company, pk=int(token)), request.user).first()
             else:
-                group = Group.objects.filter(company=company, name__iexact=token).first()
+                group = filter_groups_queryset(Group.objects.filter(company=company, name__iexact=token), request.user).first()
 
         status_raw = str(
             row.get('status')
@@ -549,14 +583,6 @@ def student_import(request):
             or ''
         )
         trial_date = parse_date_safe(str(trial_date_raw).strip()) or timezone.localdate()
-
-        balance = 0
-        balance_raw = row.get('balance') or row.get('баланс') or row.get('balans')
-        if balance_raw is not None and str(balance_raw).strip():
-            try:
-                balance = int(float(str(balance_raw).replace(' ', '').replace(',', '')))
-            except ValueError:
-                balance = 0
 
         school = str(row.get('school') or row.get('школа') or row.get('maktab') or '').strip()
         telegram = str(row.get('telegram') or row.get('телеграм') or '').strip()
@@ -587,7 +613,6 @@ def student_import(request):
             'group_name': group.name if group else (str(group_raw) if group_raw else '—'),
             'status_label': status_label_map.get(status, 'Обучается'),
             'trial_date': trial_date.isoformat(),
-            'balance': balance,
             'school': school or '—',
             'parent_telegram': parent_telegram or '—',
             'is_valid': True,
@@ -603,7 +628,6 @@ def student_import(request):
             'phone': phone,
             'status': status,
             'trial_date': trial_date,
-            'balance': balance,
             'school': school,
             'telegram': telegram,
             'parent_telegram': parent_telegram,

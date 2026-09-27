@@ -10,6 +10,8 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 
 from accounts.rbac import user_is_teacher
+from finance.wallet import current_month_price, recalc_student_wallet
+from api.scope import can_access_student
 from api.responses import fail, ok
 from crm.models import Student
 from finance.gateways import get_student_payment_links
@@ -36,6 +38,8 @@ def student_payment_links(request, student_id: int):
         )
     except Student.DoesNotExist:
         return fail('Student not found', status_code=404)
+    if not can_access_student(request.user, student):
+        return fail('Student not found', status_code=404)
 
     amount = request.query_params.get('amount')
     try:
@@ -59,6 +63,8 @@ def student_send_payment_link(request, student_id: int):
         )
     except Student.DoesNotExist:
         return fail('Student not found', status_code=404)
+    if not can_access_student(request.user, student):
+        return fail('Student not found', status_code=404)
 
     amount = request.data.get('amount')
     try:
@@ -76,6 +82,28 @@ def student_send_payment_link(request, student_id: int):
 # =========================================================================
 # Click Merchant API Webhook (Prepare / Complete)
 # =========================================================================
+
+
+def _after_online_payment(student, payment) -> None:
+    """Копилка for online payments; without a course price the office must set the months by hand."""
+    if payment.month_price:
+        recalc_student_wallet(student)
+        return
+    from operations.models import Reminder
+
+    money = f'{payment.amount:,}'.replace(',', ' ')
+    Reminder.objects.create(
+        company_id=payment.company_id,
+        student=student,
+        kind='online_payment_check',
+        title=f'Онлайн-оплата без цены курса: {student.full_name}',
+        details=(
+            f'Пришло {money} сум ({payment.get_method_display()}), но у ученика нет группы с ценой курса, '
+            'поэтому месяцы не засчитаны. Откройте оплату в разделе оплат и укажите, за сколько месяцев.'
+        ),
+        due_date=timezone.localdate(),
+        status=Reminder.Status.TODAY,
+    )
 
 @csrf_exempt
 def click_webhook(request):
@@ -208,10 +236,10 @@ def click_webhook(request):
             })
 
         student = tx.student
-        course_price = student.group.course.price if (student.group and student.group.course) else 0
-        months_covered = 1
-        if course_price and course_price > 0 and amount >= course_price:
-            months_covered = max(1, round(amount / course_price))
+        # Копилка: months are counted from the money (finance/wallet.py); unknown price -> 0 months
+        # and a reminder for the office to set them by hand.
+        month_price = current_month_price(student)
+        months_covered = 0
 
         payment = Payment.objects.create(
             company=company,
@@ -225,6 +253,8 @@ def click_webhook(request):
             gross_amount=amount,
             net_amount=amount,
             months_covered=months_covered,
+            month_price=month_price or None,
+            payment_date=timezone.localdate(),
             method=Payment.Method.CARD,
             comment=f'Click trans #{click_trans_id}',
         )
@@ -232,6 +262,7 @@ def click_webhook(request):
         tx.status = PaymentTransaction.Status.COMPLETED
         tx.payment = payment
         tx.save()
+        _after_online_payment(student, payment)
 
         # Update paid_this_month
         from crm.services import sync_student_paid_this_month
@@ -425,10 +456,10 @@ def payme_webhook(request):
             })
 
         student = tx.student
-        course_price = student.group.course.price if (student.group and student.group.course) else 0
-        months_covered = 1
-        if course_price and course_price > 0 and tx.amount >= course_price:
-            months_covered = max(1, round(tx.amount / course_price))
+        # Копилка: months are counted from the money (finance/wallet.py); unknown price -> 0 months
+        # and a reminder for the office to set them by hand.
+        month_price = current_month_price(student)
+        months_covered = 0
 
         payment = Payment.objects.create(
             company=company,
@@ -442,6 +473,8 @@ def payme_webhook(request):
             gross_amount=tx.amount,
             net_amount=tx.amount,
             months_covered=months_covered,
+            month_price=month_price or None,
+            payment_date=timezone.localdate(),
             method=Payment.Method.CARD,
             comment=f'Payme trans #{trans_id}',
         )
@@ -449,6 +482,7 @@ def payme_webhook(request):
         tx.status = PaymentTransaction.Status.COMPLETED
         tx.payment = payment
         tx.save()
+        _after_online_payment(student, payment)
 
         # Update paid_this_month
         from crm.services import sync_student_paid_this_month

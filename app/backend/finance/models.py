@@ -5,14 +5,14 @@ from django.db.models.functions import Lower
 
 class Payment(models.Model):
     class Method(models.TextChoices):
-        CASH = 'cash', 'Cash'
-        CARD = 'card', 'Card'
-        TRANSFER = 'transfer', 'Transfer'
+        CASH = 'cash', 'Наличные'
+        CARD = 'card', 'Карта'
+        TRANSFER = 'transfer', 'Перевод'
 
     class TransactionType(models.TextChoices):
-        PAYMENT = 'payment', 'Payment'
-        REFUND = 'refund', 'Refund'
-        ADJUSTMENT = 'adjustment', 'Adjustment'
+        PAYMENT = 'payment', 'Оплата'
+        REFUND = 'refund', 'Возврат'
+        ADJUSTMENT = 'adjustment', 'Корректировка'
 
     company = models.ForeignKey('org.Company', on_delete=models.CASCADE, related_name='payments')
     student = models.ForeignKey(
@@ -26,6 +26,14 @@ class Payment(models.Model):
     payment_date = models.DateField(null=True, blank=True, db_index=True)
     amount = models.BigIntegerField()
     months_covered = models.PositiveIntegerField(default=1)
+    # Months taken back by refunds of this payment (finance/refunds.py). Only whole months:
+    # a refund smaller than the price of one month does not change the paid period.
+    refunded_months = models.PositiveIntegerField(default=0)
+    # "Копилка" mode (finance/wallet.py). Price of one month when the payment was made.
+    # NULL = months were set by hand (payments before the копилка, or the student had no course price).
+    month_price = models.BigIntegerField(null=True, blank=True)
+    # Money given back by refunds of this payment (копилка mode takes it out of the student's money)
+    refunded_amount = models.BigIntegerField(default=0)
     method = models.CharField(max_length=20, choices=Method.choices, default=Method.CASH)
     transaction_type = models.CharField(
         max_length=20,
@@ -104,9 +112,9 @@ class ExpenseCategory(models.Model):
 
 class Expense(models.Model):
     class Method(models.TextChoices):
-        CASH = 'cash', 'Cash'
-        CARD = 'card', 'Card'
-        TRANSFER = 'transfer', 'Transfer'
+        CASH = 'cash', 'Наличные'
+        CARD = 'card', 'Карта'
+        TRANSFER = 'transfer', 'Перевод'
 
     company = models.ForeignKey('org.Company', on_delete=models.CASCADE, related_name='expenses')
     category = models.ForeignKey(ExpenseCategory, on_delete=models.SET_NULL, null=True)
@@ -125,9 +133,9 @@ class Expense(models.Model):
 
 class SalarySetting(models.Model):
     class SalaryType(models.TextChoices):
-        FIXED = 'fixed', 'Fixed'
-        PERCENT = 'percent', 'Percent'
-        PER_STUDENT = 'per_student', 'Per student'
+        FIXED = 'fixed', 'Фиксированная'
+        PERCENT = 'percent', 'Процент'
+        PER_STUDENT = 'per_student', 'За студента'
 
     company = models.ForeignKey('org.Company', on_delete=models.CASCADE, related_name='salary_settings')
     teacher = models.ForeignKey(
@@ -176,9 +184,9 @@ class SalarySetting(models.Model):
 
 class PayrollPayment(models.Model):
     class Method(models.TextChoices):
-        CASH = 'cash', 'Cash'
-        CARD = 'card', 'Card'
-        TRANSFER = 'transfer', 'Transfer'
+        CASH = 'cash', 'Наличные'
+        CARD = 'card', 'Карта'
+        TRANSFER = 'transfer', 'Перевод'
 
     company = models.ForeignKey('org.Company', on_delete=models.CASCADE, related_name='payroll_payments')
     teacher = models.ForeignKey(
@@ -216,9 +224,9 @@ class PaymentTransaction(models.Model):
         UZUM = 'uzum', 'Uzum'
 
     class Status(models.TextChoices):
-        PENDING = 'pending', 'Pending'
-        COMPLETED = 'completed', 'Completed'
-        CANCELLED = 'cancelled', 'Cancelled'
+        PENDING = 'pending', 'Ожидает'
+        COMPLETED = 'completed', 'Проведён'
+        CANCELLED = 'cancelled', 'Отменён'
 
     company = models.ForeignKey('org.Company', on_delete=models.CASCADE, related_name='payment_transactions')
     student = models.ForeignKey(

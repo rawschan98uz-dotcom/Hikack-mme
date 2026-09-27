@@ -104,34 +104,34 @@ interface ColumnDef {
 }
 
 const DAYS_OPTIONS = [
-  { value: 1, label: 'Odd days' },
-  { value: 2, label: 'Even days' },
-  { value: 3, label: 'Weekend days' },
-  { value: 4, label: 'Every day' },
-  { value: 5, label: 'Other' },
+  { value: 1, label: 'Нечётные дни' },
+  { value: 2, label: 'Чётные дни' },
+  { value: 3, label: 'Выходные' },
+  { value: 4, label: 'Каждый день' },
+  { value: 5, label: 'Свои дни' },
 ] as const;
 
 const CUSTOM_DAYS = 5;
 
 /** 0 = Monday … 6 = Sunday (same as backend). */
 const WEEKDAY_OPTIONS = [
-  { value: 0, label: 'Mon' },
-  { value: 1, label: 'Tue' },
-  { value: 2, label: 'Wed' },
-  { value: 3, label: 'Thu' },
-  { value: 4, label: 'Fri' },
-  { value: 5, label: 'Sat' },
-  { value: 6, label: 'Sun' },
+  { value: 0, label: 'Пн' },
+  { value: 1, label: 'Вт' },
+  { value: 2, label: 'Ср' },
+  { value: 3, label: 'Чт' },
+  { value: 4, label: 'Пт' },
+  { value: 5, label: 'Сб' },
+  { value: 6, label: 'Вс' },
 ] as const;
 
 const STATUS_FILTER_OPTIONS: { value: number; label: string }[] = [
-  { value: 2, label: 'Active groups' },
-  { value: 3, label: 'Archive' },
+  { value: 2, label: 'Активные группы' },
+  { value: 3, label: 'В архиве' },
 ];
 
 const STATUS_FORM_OPTIONS = [
-  { value: 2, label: 'Active' },
-  { value: 3, label: 'Archive' },
+  { value: 2, label: 'Активная' },
+  { value: 3, label: 'В архиве' },
 ] as const;
 
 const TABLE_COLUMNS: ColumnDef[] = [
@@ -148,10 +148,13 @@ const TABLE_COLUMNS: ColumnDef[] = [
 ];
 
 const COLUMN_STORAGE_KEY = 'groups-visible-columns';
+// A teacher sees only own groups: these columns and all filters / export add nothing for them
+const TEACHER_HIDDEN_COLUMNS = ['teacher', 'tagsText', 'weekOfStudy', 'actions'];
 
 const router = useRouter();
 const route = useRoute();
 const auth = useAuthStore();
+const isTeacher = computed(() => auth.role === 'teacher');
 
 const rows = ref<GroupRow[]>([]);
 const branches = ref<Branch[]>([]);
@@ -317,7 +320,13 @@ function loadColumnPrefs() {
 }
 
 function saveColumnPrefs() {
-  localStorage.setItem(COLUMN_STORAGE_KEY, JSON.stringify(visibleColumns.value));
+  // the teacher's reduced column set must not overwrite the staff layout in a shared browser
+  if (isTeacher.value) return;
+  try {
+    localStorage.setItem(COLUMN_STORAGE_KEY, JSON.stringify(visibleColumns.value));
+  } catch {
+    // storage unavailable — keep the columns for this visit only
+  }
 }
 
 function toggleSort(key: SortKey) {
@@ -444,6 +453,8 @@ async function loadGroups() {
 }
 
 async function loadOptions() {
+  // Filter / form lists are staff-only (a teacher may not read courses, teachers, tags or rooms)
+  if (isTeacher.value) return;
   const [branchRes, courseRes, teacherRes, tagRes, roomRes] = await Promise.all([
     client.get<ApiEnvelope<Branch[]>>('/branch'),
     client.get<ApiEnvelope<CourseOption[]>>('/courses'),
@@ -560,20 +571,24 @@ function exportCsv() {
   );
 }
 
+// Student and teacher pages are not open to a teacher, so these links do nothing for them
 function goStudents(groupId: number) {
+  if (isTeacher.value) return;
   router.push(studentsByGroup(groupId));
 }
 
 function goTeacher(group: GroupRow) {
-  if (!group.teacher_id) return;
+  if (!group.teacher_id || isTeacher.value) return;
   router.push(teacherRoute(group.teacher_id));
 }
 
 function goStudent(studentId: number) {
+  if (isTeacher.value) return;
   router.push(studentRoute(studentId));
 }
 
 function goTeacherFromTable(teacherId: number) {
+  if (isTeacher.value) return;
   router.push(teacherRoute(teacherId));
 }
 
@@ -621,6 +636,9 @@ watch(
 
 onMounted(async () => {
   loadColumnPrefs();
+  if (isTeacher.value) {
+    for (const key of TEACHER_HIDDEN_COLUMNS) visibleColumns.value[key] = false;
+  }
   syncFiltersFromRoute();
   try {
     await Promise.all([loadOptions(), loadGroups()]);
@@ -644,7 +662,7 @@ onMounted(async () => {
       </button>
     </div>
 
-    <div class="flex flex-wrap items-center gap-2">
+    <div v-if="!isTeacher" class="flex flex-wrap items-center gap-2">
       <FilterSelect
         v-model="filters.status"
         :options="STATUS_FILTER_OPTIONS"
@@ -681,7 +699,7 @@ onMounted(async () => {
       </button>
     </div>
 
-    <div class="relative flex flex-wrap items-center justify-end gap-2">
+    <div v-if="!isTeacher" class="relative flex flex-wrap items-center justify-end gap-2">
       <div class="relative">
         <button type="button" class="groups-toolbar-btn-fb" @click="showFiltersPanel = !showFiltersPanel">
           <svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">

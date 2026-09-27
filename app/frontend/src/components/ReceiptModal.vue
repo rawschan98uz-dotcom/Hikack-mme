@@ -122,7 +122,7 @@ function printReceipt() {
           <div class="flex justify-between py-1 border-b border-gray-100">
             <span class="text-gray-500">Оплаченный период:</span>
             <span class="font-semibold text-fb-blue">
-              {{ payment.months_covered || 1 }} мес.
+              {{ payment.months_covered ?? 1 }} мес.
             </span>
           </div>
           <div class="flex justify-between py-1 border-b border-gray-100">

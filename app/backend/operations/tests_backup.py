@@ -1,11 +1,65 @@
 import sqlite3
 import tempfile
+from datetime import timedelta
 from pathlib import Path
 from unittest import mock
 
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, TestCase
+from django.utils import timezone
 
+from accounts.models import User
 from operations import backup
+from operations.models import Reminder
+from org.models import Company
+
+
+class BackupReminderTests(TestCase):
+    def setUp(self):
+        self.company = Company.objects.create(name='Bk Co', subdomain='bkco')
+        self.ceo = User.objects.create_user(
+            phone='998907771001', password=None, first_name='Ceo', company=self.company,
+            user_type=User.UserType.STAFF, staff_role=User.StaffRole.CEO,
+        )
+        self.today = timezone.localdate()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.base = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def succeeded(self, days_ago):
+        (self.base / 'last_success.txt').write_text((self.today - timedelta(days=days_ago)).isoformat())
+
+    def open_reminders(self):
+        return Reminder.objects.filter(kind=Reminder.KIND_BACKUP_FAILED).exclude(status=Reminder.Status.DONE)
+
+    def test_no_reminder_while_backup_is_recent(self):
+        self.succeeded(2)
+        backup.warn_if_stale(self.base, self.today)
+        self.assertFalse(self.open_reminders().exists())
+
+    def test_ceo_is_warned_once_after_three_days(self):
+        self.succeeded(3)
+        backup.warn_if_stale(self.base, self.today)
+        backup.warn_if_stale(self.base, self.today)  # the hourly retry does not duplicate it
+        reminder = self.open_reminders().get()
+        self.assertEqual(reminder.assigned_to, self.ceo)
+        self.assertEqual(reminder.due_date, self.today)
+
+    def test_closed_by_hand_is_not_recreated_the_same_day(self):
+        self.succeeded(5)
+        backup.warn_if_stale(self.base, self.today)
+        self.open_reminders().update(status=Reminder.Status.DONE)
+        backup.warn_if_stale(self.base, self.today)
+        self.assertFalse(self.open_reminders().exists())
+
+    def test_success_closes_the_warning(self):
+        self.succeeded(4)
+        backup.warn_if_stale(self.base, self.today)
+        backup.mark_success(self.base, self.today)
+        self.assertFalse(self.open_reminders().exists())
+        self.assertEqual(backup.last_success(self.base), self.today)
+        self.assertIn('закрыто автоматически', Reminder.objects.get(kind=Reminder.KIND_BACKUP_FAILED).resolution)
 
 
 class BackupTests(SimpleTestCase):

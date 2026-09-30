@@ -49,6 +49,8 @@ class Reminder(models.Model):
     KIND_UNPAID_LEAVE = 'unpaid_leave'
     # Online payment came while the student had no course price: the money waits in the копилка
     KIND_ONLINE_PAYMENT_CHECK = 'online_payment_check'
+    # The daily GitHub backup has not worked for several days (operations/backup.py); closes by itself
+    KIND_BACKUP_FAILED = 'backup_failed'
     TITLE_MAX_LENGTH = 255
 
     @property

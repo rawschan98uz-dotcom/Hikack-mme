@@ -18,6 +18,6 @@ class Command(BaseCommand):
         base.mkdir(parents=True, exist_ok=True)
         if not backup.run_backup(base):
             raise CommandError(f'Бэкап не удался, подробности в {base / "backup.log"}')
-        (base / 'last_success.txt').write_text(timezone.localdate().isoformat(), encoding='utf-8')
+        backup.mark_success(base, timezone.localdate())
         backup._log(base, 'OK (вручную)')
         self.stdout.write(self.style.SUCCESS('Бэкап отправлен в GitHub'))

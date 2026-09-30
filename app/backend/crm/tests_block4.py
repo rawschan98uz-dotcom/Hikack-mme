@@ -37,9 +37,13 @@ class Block4Base(TestCase):
         )
         for t in (self.teacher, self.other_teacher):
             TeacherBranch.objects.create(teacher=t, branch=self.branch)
-        self.own_group = Group.objects.create(company=self.company, branch=self.branch, name='Own', teacher=self.teacher)
+        # Every day: grading needs a lesson of the group that day, whatever weekday the tests run on
+        self.own_group = Group.objects.create(
+            company=self.company, branch=self.branch, name='Own', teacher=self.teacher, days=Group.Days.EVERY_DAY,
+        )
         self.other_group = Group.objects.create(
             company=self.company, branch=self.branch, name='Other', teacher=self.other_teacher,
+            days=Group.Days.EVERY_DAY,
         )
         self.own_student = Student.objects.create(
             company=self.company, branch=self.branch, group=self.own_group, first_name='Mine', phone='901110001',
@@ -206,12 +210,9 @@ class UniquenessTests(Block4Base):
 
     def test_salary_category_reused_case_insensitively(self):
         ExpenseCategory.objects.create(company=self.company, name='зарплата')
-        SalarySetting.objects.create(
-            company=self.company, teacher=self.teacher, teacher_name='Own', amount=1000000,
-            salary_type=SalarySetting.SalaryType.FIXED,
-        )
         self.client.force_authenticate(self.ceo)
-        res = self.client.post('/v1/finance/payroll/pay', {'teacher_id': self.teacher.id, 'amount': 100000})
+        # Nothing accrued (no lessons): the CEO pays anyway with force, the category must be reused
+        res = self.client.post('/v1/finance/payroll/pay', {'teacher_id': self.teacher.id, 'amount': 100000, 'force': True})
         self.assertIn(res.status_code, (200, 201), res.content)
         self.assertEqual(ExpenseCategory.objects.filter(company=self.company).count(), 1)
 
@@ -276,7 +277,7 @@ class SalaryTests(Block4Base):
 
     def test_overlapping_setting_rejected(self):
         self.client.force_authenticate(self.ceo)
-        base = {'teacher_id': self.teacher.id, 'salary_type': 'fixed', 'amount': 1000000}
+        base = {'teacher_id': self.teacher.id, 'salary_type': 'percent', 'amount': 30}  # teachers: percent only
         self.assertEqual(self.client.post('/v1/salary-settings', {**base, 'effective_from': '2026-01-01'}).status_code, 201)
         res = self.client.post('/v1/salary-settings', {**base, 'effective_from': '2026-06-01'})
         self.assertEqual(res.status_code, 400)

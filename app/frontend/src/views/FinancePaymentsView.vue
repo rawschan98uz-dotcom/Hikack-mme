@@ -3,33 +3,45 @@ import { computed, onMounted, reactive, ref, watch } from 'vue';
 
 import client, { type ApiEnvelope } from '../api/client';
 import { formatSum, walletPreview } from '../utils/wallet';
+import { todayIso } from '../utils/dates';
 import { useAuthStore } from '../stores/auth';
 import { PERM } from '../utils/rbac';
 import ReceiptModal, { type ReceiptPayment } from '../components/ReceiptModal.vue';
 import PaymentLinkModal, { type StudentPaymentLinkTarget } from '../components/PaymentLinkModal.vue';
 
 const auth = useAuthStore();
-// Branch director sees money read-only: add/edit/pay buttons need finance.write
-const canWriteFinance = computed(() => auth.can(PERM.FINANCE_WRITE));
+// The administrator takes and corrects payments and gives refunds; only the CEO deletes one (owner, 2026-09-28)
+const canWriteFinance = computed(() => auth.can(PERM.PAYMENTS_WRITE));
+const canDeletePayment = computed(() => auth.can(PERM.PAYMENTS_DELETE));
 
 interface PaymentRow {
   id: number;
   date: string;
+  payment_date?: string;
   name: string;
   student_id: number | null;
   student_name: string;
   sum: number;
+  /** 'payment' or 'refund' (money given back — shown red with a minus). */
+  transaction_type?: string;
+  reverses_payment_id?: number | null;
+  discount_amount?: number;
   months_covered?: number;
   /** Months taken back by refunds of this payment. */
   refunded_months?: number;
   /** true = months counted from the money (копилка), false = entered by hand. */
   months_auto?: boolean;
+  /** Price of a month for копилка payments; 0 = money waiting in the копилка for a course price. */
+  month_price?: number | null;
   method: string;
   method_pay: string;
   teacher: string;
   teacher_name: string;
   comment: string;
   creator: string;
+  /** Detail only: already given back / still possible to give back. */
+  refunded_total?: number;
+  refundable?: number;
 }
 
 interface StudentOption {
@@ -42,6 +54,8 @@ interface StudentOption {
   wallet?: number;
 }
 
+type PageArray<T> = T[] & { has_more?: boolean; next_offset?: number | null };
+
 const METHODS = [
   { value: 'cash', label: 'Наличные' },
   { value: 'card', label: 'Карта' },
@@ -49,6 +63,9 @@ const METHODS = [
 ] as const;
 
 const rows = ref<PaymentRow[]>([]);
+const hasMore = ref(false);
+const nextOffset = ref<number | null>(null);
+const loadingMore = ref(false);
 const studentsList = ref<StudentOption[]>([]);
 const studentSearchQuery = ref('');
 const showStudentDropdown = ref(false);
@@ -65,6 +82,10 @@ const detailRow = ref<PaymentRow | null>(null);
 
 const showReceiptModal = ref(false);
 const receiptPayment = ref<ReceiptPayment | null>(null);
+
+function isRefund(row: PaymentRow | null | undefined) {
+  return row?.transaction_type === 'refund';
+}
 
 function printPayment(row: PaymentRow) {
   receiptPayment.value = {
@@ -117,7 +138,10 @@ const filters = reactive({ date_from: '', date_to: '', method: '', q: '' });
 const form = reactive({
   student_id: null as number | null,
   student_name: '',
-  amount: 0,
+  amount: '' as number | '',
+  /** Discount as a sum, given by hand; empty when there is none (owner, 2026-09-28) */
+  discount: '' as number | '',
+  payment_date: todayIso(),
   months_covered: 1,
   method: 'cash' as (typeof METHODS)[number]['value'],
   teacher_name: '',
@@ -125,23 +149,14 @@ const form = reactive({
 });
 
 const isReadOnly = computed(() => Boolean(detailRow.value && !editingRow.value));
-const panelTitle = computed(() =>
-  editingRow.value ? 'Edit payment' : detailRow.value ? 'Payment details' : 'Add payment',
-);
-const tableRows = computed(() =>
-  rows.value.map((r) => ({
-    id: r.id,
-    date: r.date,
-    name: r.name,
-    sum: r.sum.toLocaleString(),
-    months_covered: r.months_covered ?? 1,
-    refunded_months: r.refunded_months || 0,
-    method_pay: r.method_pay,
-    teacher: r.teacher,
-    comment: r.comment || '—',
-    creator: r.creator,
-  })),
-);
+const panelTitle = computed(() => {
+  if (isRefund(detailRow.value)) return 'Возврат денег';
+  return editingRow.value ? 'Edit payment' : detailRow.value ? 'Payment details' : 'Add payment';
+});
+
+function formatMoney(value: number) {
+  return Math.round(value).toLocaleString('ru-RU');
+}
 
 const filteredStudents = computed(() => {
   const q = studentSearchQuery.value.trim().toLowerCase();
@@ -151,6 +166,13 @@ const filteredStudents = computed(() => {
     .slice(0, 20);
 });
 
+/** New payment: the sum follows months × price − discount while the cashier has not typed it by hand. */
+function refillAmount() {
+  if (editingRow.value || detailRow.value) return;
+  const price = selectedStudent.value?.course_price || 0;
+  if (price) form.amount = Math.max(0, price * form.months_covered - (Number(form.discount) || 0));
+}
+
 function selectStudent(student: StudentOption) {
   selectedStudent.value = student;
   form.student_id = student.id;
@@ -159,9 +181,7 @@ function selectStudent(student: StudentOption) {
   if (student.group_teacher) {
     form.teacher_name = student.group_teacher;
   }
-  if (student.course_price) {
-    form.amount = student.course_price * form.months_covered;
-  }
+  refillAmount();
   showStudentDropdown.value = false;
 }
 
@@ -169,20 +189,26 @@ function selectStudent(student: StudentOption) {
 const payPreview = computed(() =>
   editingRow.value || detailRow.value
     ? null
-    : walletPreview(selectedStudent.value?.course_price, selectedStudent.value?.wallet, form.amount),
+    : walletPreview(
+        selectedStudent.value?.course_price,
+        selectedStudent.value?.wallet,
+        Number(form.amount) || 0,
+        Number(form.discount) || 0,
+      ),
 );
 
 function onMonthsChange() {
   if (form.months_covered < 1) form.months_covered = 1;
-  if (selectedStudent.value?.course_price) {
-    form.amount = selectedStudent.value.course_price * form.months_covered;
-  }
+  // Editing money that already came: the amount is what was really paid, never recount it from months
+  refillAmount();
 }
 
 function resetForm() {
   form.student_id = null;
   form.student_name = '';
-  form.amount = 0;
+  form.amount = '';
+  form.discount = '';
+  form.payment_date = todayIso();
   form.months_covered = 1;
   form.method = 'cash';
   form.teacher_name = '';
@@ -199,7 +225,10 @@ function fillForm(row: PaymentRow) {
   form.student_id = row.student_id ?? null;
   form.student_name = row.student_name;
   form.amount = row.sum;
-  form.months_covered = row.months_covered || 1;
+  form.discount = row.discount_amount ? row.discount_amount : '';
+  form.payment_date = row.payment_date || row.date;
+  // Копилка payments may close 0 months (money waiting); hand-entered ones are at least 1
+  form.months_covered = row.months_auto ? (row.months_covered ?? 0) : (row.months_covered || 1);
   form.method = row.method as (typeof METHODS)[number]['value'];
   form.teacher_name = row.teacher_name;
   form.comment = row.comment;
@@ -225,18 +254,40 @@ async function loadStudentsList() {
   }
 }
 
+function listParams(offset = 0) {
+  const params: Record<string, string | number> = { offset };
+  if (filters.date_from) params.date_from = filters.date_from;
+  if (filters.date_to) params.date_to = filters.date_to;
+  if (filters.method) params.method = filters.method;
+  if (filters.q.trim()) params.q = filters.q.trim();
+  return params;
+}
+
 async function loadRows() {
   loading.value = true;
   try {
-    const params: Record<string, string> = {};
-    if (filters.date_from) params.date_from = filters.date_from;
-    if (filters.date_to) params.date_to = filters.date_to;
-    if (filters.method) params.method = filters.method;
-    if (filters.q.trim()) params.q = filters.q.trim();
-    const { data } = await client.get<ApiEnvelope<PaymentRow[]>>('/replenishments', { params });
-    rows.value = data.data;
+    const { data } = await client.get<ApiEnvelope<PageArray<PaymentRow>>>('/replenishments', { params: listParams() });
+    rows.value = [...data.data];
+    hasMore.value = Boolean(data.data.has_more);
+    nextOffset.value = data.data.next_offset ?? null;
   } finally {
     loading.value = false;
+  }
+}
+
+/** "Show more": the next 200 payments (older ones). */
+async function loadMore() {
+  if (nextOffset.value === null) return;
+  loadingMore.value = true;
+  try {
+    const { data } = await client.get<ApiEnvelope<PageArray<PaymentRow>>>('/replenishments', {
+      params: listParams(nextOffset.value),
+    });
+    rows.value = [...rows.value, ...data.data];
+    hasMore.value = Boolean(data.data.has_more);
+    nextOffset.value = data.data.next_offset ?? null;
+  } finally {
+    loadingMore.value = false;
   }
 }
 
@@ -273,50 +324,122 @@ function closePanel() {
   resetForm();
 }
 
+function apiError(err: any, fallback: string) {
+  return err?.response?.data?.message || err?.response?.data?.error || fallback;
+}
+
 async function submitForm() {
   formError.value = '';
-  if (!form.student_name.trim()) {
-    formError.value = 'Enter student name';
+  if (!editingRow.value && !form.student_id) {
+    formError.value = 'Выберите ученика из списка.';
     return;
   }
-  if (!form.amount) {
-    formError.value = 'Enter amount';
+  if (!Number.isInteger(form.amount) || Number(form.amount) <= 0) {
+    formError.value = 'Сумма — целое положительное число.';
+    return;
+  }
+  if (form.discount !== '' && (!Number.isInteger(form.discount) || Number(form.discount) < 0)) {
+    formError.value = 'Скидка — целое число (сумма), или оставьте поле пустым.';
+    return;
+  }
+  if (!form.payment_date || form.payment_date > todayIso()) {
+    formError.value = 'Дата оплаты не может быть позже сегодняшнего дня.';
     return;
   }
   saving.value = true;
   try {
-    const payload = {
-      student_id: form.student_id,
-      student_name: form.student_name.trim(),
-      amount: form.amount,
-      months_covered: form.months_covered || 1,
-      method: form.method,
-      teacher_name: form.teacher_name.trim(),
-      comment: form.comment.trim(),
-    };
     if (editingRow.value) {
+      const payload: Record<string, unknown> = {
+        amount: form.amount,
+        payment_date: form.payment_date,
+        method: form.method,
+        comment: form.comment.trim(),
+      };
+      if (!isRefund(editingRow.value)) {
+        payload.discount_amount = form.discount === '' ? 0 : form.discount;
+        payload.teacher_name = form.teacher_name.trim();
+        if (!editingRow.value.months_auto) payload.months_covered = form.months_covered || 1;
+      }
       await client.patch(`/replenishments/${editingRow.value.id}`, payload);
     } else {
-      await client.post('/replenishments', payload);
+      await client.post('/replenishments', {
+        student_id: form.student_id,
+        amount: form.amount,
+        discount_amount: form.discount === '' ? 0 : form.discount,
+        payment_date: form.payment_date,
+        months_covered: form.months_covered || 1,
+        method: form.method,
+        comment: form.comment.trim(),
+      });
     }
     closePanel();
     await loadRows();
-  } catch {
-    formError.value = 'Could not save payment';
+  } catch (err: any) {
+    formError.value = apiError(err, 'Could not save payment');
   } finally {
     saving.value = false;
   }
 }
 
 async function deleteRow() {
-  if (!detailRow.value || !window.confirm('Delete this payment?')) return;
+  if (!detailRow.value || !window.confirm('Удалить эту запись? Удаление попадёт в журнал действий.')) return;
   deleting.value = true;
   try {
     await client.delete(`/replenishments/${detailRow.value.id}`);
     closePanel();
     await loadRows();
+  } catch (err: any) {
+    formError.value = apiError(err, 'Не удалось удалить');
   } finally {
     deleting.value = false;
+  }
+}
+
+// "Вернуть деньги": a refund of this payment (sum + reason), shown in the list in red with a minus
+const refundModal = reactive({
+  show: false,
+  amount: '' as number | '',
+  reason: '',
+  error: '',
+  saving: false,
+});
+
+function openRefund() {
+  if (!detailRow.value) return;
+  refundModal.amount = detailRow.value.refundable ?? detailRow.value.sum;
+  refundModal.reason = '';
+  refundModal.error = '';
+  refundModal.show = true;
+}
+
+async function confirmRefund() {
+  if (!detailRow.value) return;
+  const max = detailRow.value.refundable ?? detailRow.value.sum;
+  if (!Number.isInteger(refundModal.amount) || Number(refundModal.amount) <= 0) {
+    refundModal.error = 'Сумма возврата — целое положительное число.';
+    return;
+  }
+  if (Number(refundModal.amount) > max) {
+    refundModal.error = `Можно вернуть не больше ${formatMoney(max)} сум.`;
+    return;
+  }
+  if (refundModal.reason.trim().length < 3) {
+    refundModal.error = 'Укажите причину возврата.';
+    return;
+  }
+  refundModal.saving = true;
+  try {
+    await client.post(`/replenishments/${detailRow.value.id}/refund`, {
+      amount: refundModal.amount,
+      comment: `Возврат: ${refundModal.reason.trim()}`,
+    });
+    refundModal.show = false;
+    closePanel();
+    await loadRows();
+  } catch (err: any) {
+    refundModal.error = apiError(err, 'Не удалось сделать возврат');
+  } finally {
+    refundModal.saving = false;
   }
 }
 
@@ -373,7 +496,7 @@ watch(
 
     <div class="overflow-hidden rounded-xl border border-fb-line bg-fb-card">
       <div v-if="loading" class="p-8 text-center text-fb-secondary">Loading…</div>
-      <div v-else-if="!tableRows.length" class="p-8 text-center text-fb-icon">No payments</div>
+      <div v-else-if="!rows.length" class="p-8 text-center text-fb-icon">No payments</div>
       <table v-else class="w-full text-base">
         <thead class="border-b bg-fb-canvas">
           <tr>
@@ -389,28 +512,49 @@ watch(
           </tr>
         </thead>
         <tbody>
-          <tr v-for="row in tableRows" :key="row.id" class="cursor-pointer border-b hover:bg-fb-hover/40" @click="openDetail(row.id)">
+          <tr
+            v-for="row in rows"
+            :key="row.id"
+            class="cursor-pointer border-b hover:bg-fb-hover/40"
+            :class="isRefund(row) ? 'bg-rose-50/40' : ''"
+            @click="openDetail(row.id)"
+          >
             <td class="px-5 py-4">{{ row.date }}</td>
             <td class="px-5 py-4 font-medium">{{ row.name }}</td>
-            <td class="px-5 py-4 font-semibold text-fb-blue">{{ row.sum }}</td>
+            <td class="px-5 py-4 font-semibold" :class="isRefund(row) ? 'text-rose-700' : 'text-fb-blue'">
+              <template v-if="isRefund(row)">−{{ formatMoney(row.sum) }}</template>
+              <template v-else>{{ formatMoney(row.sum) }}</template>
+              <span v-if="row.discount_amount" class="ml-1 block text-[11px] font-medium text-amber-700">
+                скидка {{ formatMoney(row.discount_amount) }}
+              </span>
+            </td>
             <td class="px-5 py-4">
-              <span class="inline-flex items-center rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-fb-blue">
-                {{ row.months_covered }} mo
-              </span>
               <span
-                v-if="row.refunded_months"
-                class="ml-1 inline-flex items-center rounded-full bg-rose-50 px-2 py-0.5 text-xs font-medium text-rose-700"
-                title="Столько месяцев этого платежа отменено возвратом"
+                v-if="isRefund(row)"
+                class="inline-flex items-center rounded-full bg-rose-100 px-2.5 py-0.5 text-xs font-semibold text-rose-700"
               >
-                −{{ row.refunded_months }} возврат
+                Возврат
               </span>
+              <template v-else>
+                <span class="inline-flex items-center rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-fb-blue">
+                  {{ row.months_covered ?? 1 }} mo
+                </span>
+                <span
+                  v-if="row.refunded_months"
+                  class="ml-1 inline-flex items-center rounded-full bg-rose-50 px-2 py-0.5 text-xs font-medium text-rose-700"
+                  title="Столько месяцев этого платежа отменено возвратом"
+                >
+                  −{{ row.refunded_months }} возврат
+                </span>
+              </template>
             </td>
             <td class="px-5 py-4">{{ row.method_pay }}</td>
             <td class="px-5 py-4">{{ row.teacher }}</td>
-            <td class="px-5 py-4">{{ row.comment }}</td>
+            <td class="px-5 py-4">{{ row.comment || '—' }}</td>
             <td class="px-5 py-4">{{ row.creator }}</td>
             <td class="px-5 py-4 text-right" @click.stop>
               <button
+                v-if="!isRefund(row)"
                 type="button"
                 title="Печать квитанции"
                 class="inline-flex items-center gap-1 rounded-lg border border-fb-line bg-white px-2.5 py-1 text-xs font-medium text-fb-secondary shadow-sm hover:border-fb-blue hover:text-fb-blue transition-colors"
@@ -423,6 +567,16 @@ watch(
           </tr>
         </tbody>
       </table>
+      <div v-if="hasMore" class="border-t border-fb-line p-3 text-center">
+        <button
+          type="button"
+          class="rounded-lg border border-fb-line px-4 py-2 text-sm font-medium text-fb-blue hover:bg-fb-hover disabled:opacity-50"
+          :disabled="loadingMore"
+          @click="loadMore"
+        >
+          {{ loadingMore ? 'Загрузка…' : 'Показать ещё' }}
+        </button>
+      </div>
     </div>
 
     <div v-if="showPanel" class="fixed inset-0 z-50 flex justify-end">
@@ -435,17 +589,20 @@ watch(
         <div v-if="panelLoading" class="p-6 text-fb-secondary">Loading…</div>
         <form v-else class="flex flex-1 flex-col overflow-hidden" @submit.prevent="submitForm">
           <div class="flex-1 space-y-4 overflow-y-auto p-6">
+            <p v-if="isRefund(detailRow)" class="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-800">
+              Это возврат денег по оплате #{{ detailRow?.reverses_payment_id }}.
+            </p>
             <div>
               <label class="mb-1 block text-sm font-medium text-fb-secondary">Student</label>
-              <div v-if="!isReadOnly" class="relative">
+              <div v-if="!detailRow" class="relative">
                 <input
                   v-model="studentSearchQuery"
                   type="text"
                   required
-                  placeholder="Type to search or enter name…"
+                  placeholder="Начните вводить имя и выберите ученика из списка…"
                   class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none"
                   @focus="showStudentDropdown = true"
-                  @input="showStudentDropdown = true; form.student_name = studentSearchQuery; form.student_id = null"
+                  @input="showStudentDropdown = true; form.student_name = studentSearchQuery; form.student_id = null; selectedStudent = null"
                 />
                 <div
                   v-if="showStudentDropdown && filteredStudents.length"
@@ -467,6 +624,9 @@ watch(
                     </span>
                   </button>
                 </div>
+                <p v-if="studentSearchQuery && !form.student_id" class="mt-1 text-xs text-amber-700">
+                  Выберите ученика из выпадающего списка.
+                </p>
               </div>
               <input
                 v-else
@@ -476,9 +636,29 @@ watch(
               />
             </div>
             <div>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">Дата оплаты</label>
+              <input
+                v-model="form.payment_date"
+                type="date"
+                :max="todayIso()"
+                :readonly="isReadOnly"
+                required
+                class="w-full rounded-lg border px-3 py-2 text-sm read-only:bg-fb-canvas focus:border-fb-blue focus:outline-none"
+              />
+            </div>
+            <div v-if="!isRefund(detailRow)">
               <label class="mb-1 block text-sm font-medium text-fb-secondary">
-                {{ detailRow?.months_auto ? 'Months closed (посчитано по сумме)' : 'Months (подставит сумму)' }}
+                {{
+                  detailRow?.months_auto
+                    ? 'Months closed (посчитано по сумме)'
+                    : editingRow
+                      ? 'Months (сумма не меняется)'
+                      : 'Months (подставит сумму)'
+                }}
               </label>
+              <p v-if="detailRow?.months_auto && detailRow?.month_price === 0" class="mb-1 text-xs text-amber-700">
+                Деньги в копилке: у ученика нет группы с ценой курса. Добавьте его в группу — месяцы засчитаются сами.
+              </p>
               <input
                 v-model.number="form.months_covered"
                 type="number"
@@ -489,11 +669,31 @@ watch(
                 @input="onMonthsChange"
               />
             </div>
+            <div v-if="!isRefund(detailRow)">
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">Скидка (сумма)</label>
+              <input
+                v-model.number="form.discount"
+                type="number"
+                min="0"
+                step="1"
+                placeholder="Нет скидки"
+                :readonly="isReadOnly"
+                class="w-full rounded-lg border px-3 py-2 text-sm read-only:bg-fb-canvas focus:border-fb-blue focus:outline-none"
+                @input="refillAmount"
+              />
+              <p v-if="!detailRow" class="mt-1 text-[11px] text-fb-secondary">
+                Заполняйте только когда скидка нужна. Не больше цены оплачиваемых месяцев.
+              </p>
+            </div>
             <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Amount (Сумма)</label>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">
+                {{ isRefund(detailRow) ? 'Сумма возврата' : 'Amount (Сумма)' }}
+              </label>
               <input
                 v-model.number="form.amount"
                 type="number"
+                min="1"
+                step="1"
                 :readonly="isReadOnly"
                 required
                 class="w-full rounded-lg border px-3 py-2 text-sm read-only:bg-fb-canvas focus:border-fb-blue focus:outline-none"
@@ -504,7 +704,10 @@ watch(
                 (до следующего месяца не хватит {{ formatSum(payPreview.missing) }})</span>.
               </p>
               <p v-else-if="selectedStudent && !selectedStudent.course_price && !detailRow" class="mt-1 text-xs text-amber-700">
-                У ученика нет цены курса — будет засчитано столько месяцев, сколько указано выше.
+                У ученика нет цены курса — деньги лягут в копилку и засчитаются, когда ученика добавят в группу с ценой.
+              </p>
+              <p v-if="detailRow && !isRefund(detailRow) && detailRow.refunded_total" class="mt-1 text-xs text-rose-700">
+                По этой оплате уже возвращено {{ formatMoney(detailRow.refunded_total) }} сум.
               </p>
             </div>
             <div>
@@ -513,7 +716,7 @@ watch(
                 <option v-for="m in METHODS" :key="m.value" :value="m.value">{{ m.label }}</option>
               </select>
             </div>
-            <div>
+            <div v-if="detailRow && !isRefund(detailRow)">
               <label class="mb-1 block text-sm font-medium text-fb-secondary">Teacher</label>
               <input v-model="form.teacher_name" :readonly="isReadOnly" class="w-full rounded-lg border px-3 py-2 text-sm read-only:bg-fb-canvas focus:border-fb-blue focus:outline-none" />
             </div>
@@ -523,9 +726,10 @@ watch(
             </div>
             <p v-if="formError" class="text-sm text-fb-danger">{{ formError }}</p>
           </div>
-          <div class="flex gap-2 border-t px-6 py-4">
+          <div class="flex flex-wrap gap-2 border-t px-6 py-4">
             <template v-if="isReadOnly && detailRow">
               <button
+                v-if="!isRefund(detailRow)"
                 type="button"
                 class="inline-flex items-center gap-1.5 rounded-lg border border-fb-line bg-white px-4 py-2 text-sm font-medium text-fb-text hover:border-fb-blue hover:text-fb-blue transition-colors"
                 @click="printPayment(detailRow)"
@@ -534,7 +738,7 @@ watch(
                 <span>Печать чека</span>
               </button>
               <button
-                v-if="detailRow.student_id"
+                v-if="detailRow.student_id && !isRefund(detailRow)"
                 type="button"
                 class="inline-flex items-center gap-1.5 rounded-lg border border-fb-line bg-white px-3 py-2 text-sm font-medium text-fb-text hover:border-fb-blue hover:text-fb-blue transition-colors"
                 @click="openPaymentLink(detailRow)"
@@ -543,7 +747,15 @@ watch(
                 <span>Ссылка</span>
               </button>
               <button v-if="canWriteFinance" type="button" class="rounded-lg bg-fb-blue px-5 py-2 text-sm text-white" @click="startEdit">Edit</button>
-              <button v-if="canWriteFinance" type="button" class="rounded-lg border border-red-300 px-5 py-2 text-sm text-fb-danger" :disabled="deleting" @click="deleteRow">Delete</button>
+              <button
+                v-if="canWriteFinance && !isRefund(detailRow) && (detailRow.refundable ?? 0) > 0"
+                type="button"
+                class="rounded-lg border border-rose-300 px-4 py-2 text-sm font-medium text-rose-700 hover:bg-rose-50"
+                @click="openRefund"
+              >
+                Вернуть деньги
+              </button>
+              <button v-if="canDeletePayment" type="button" class="rounded-lg border border-red-300 px-5 py-2 text-sm text-fb-danger" :disabled="deleting" @click="deleteRow">Delete</button>
             </template>
             <template v-else>
               <button
@@ -562,6 +774,50 @@ watch(
             <button type="button" class="rounded-lg border px-5 py-2 text-sm" @click="closePanel">Cancel</button>
           </div>
         </form>
+      </div>
+    </div>
+
+    <!-- "Вернуть деньги" -->
+    <div v-if="refundModal.show" class="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
+      <div class="w-full max-w-md overflow-hidden rounded-2xl bg-fb-card shadow-2xl">
+        <div class="border-b border-fb-line px-6 py-4">
+          <h2 class="text-lg font-semibold text-rose-700">Вернуть деньги</h2>
+          <p class="text-sm text-fb-secondary">{{ detailRow?.student_name }} · оплата {{ formatMoney(detailRow?.sum ?? 0) }} сум</p>
+        </div>
+        <div class="space-y-3 px-6 py-5">
+          <div>
+            <label class="mb-1 block text-sm font-medium text-fb-secondary">Сумма возврата</label>
+            <input
+              v-model.number="refundModal.amount"
+              type="number"
+              min="1"
+              step="1"
+              class="w-full rounded-lg border border-fb-line px-3 py-2 focus:border-fb-blue focus:outline-none"
+            />
+            <p class="mt-1 text-[11px] text-fb-secondary">Можно вернуть до {{ formatMoney(detailRow?.refundable ?? 0) }} сум.</p>
+          </div>
+          <div>
+            <label class="mb-1 block text-sm font-medium text-fb-secondary">Причина (обязательно)</label>
+            <textarea
+              v-model="refundModal.reason"
+              rows="3"
+              class="w-full rounded-lg border border-fb-line px-3 py-2 focus:border-fb-blue focus:outline-none"
+              placeholder="Например: ученик ушёл, возвращаем неиспользованный месяц"
+            />
+          </div>
+          <p v-if="refundModal.error" class="text-sm text-fb-danger">{{ refundModal.error }}</p>
+        </div>
+        <div class="flex justify-end gap-3 border-t border-fb-line px-6 py-4">
+          <button type="button" class="rounded-lg border border-fb-line px-5 py-2 text-sm" @click="refundModal.show = false">Отмена</button>
+          <button
+            type="button"
+            class="rounded-lg bg-rose-600 px-5 py-2 text-sm font-medium text-white hover:bg-rose-700 disabled:opacity-50"
+            :disabled="refundModal.saving"
+            @click="confirmRefund"
+          >
+            {{ refundModal.saving ? 'Сохраняю…' : 'Вернуть' }}
+          </button>
+        </div>
       </div>
     </div>
 

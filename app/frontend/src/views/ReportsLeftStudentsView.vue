@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { todayIso } from '../utils/dates';
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 
 import client, { type ApiEnvelope } from '../api/client';
+import { downloadCsv } from '../utils/csvExport';
 import { groupRoute, studentRoute } from '../utils/crossLinks';
 
 interface Branch {
@@ -33,6 +34,11 @@ interface LeftStudentRow {
   debt_months?: number;
   debt_amount?: number;
   debt_since?: string | null;
+  /** The CEO wrote the debt off: it is not a debt any more, shown as "Списано" with the reason. */
+  written_off?: boolean;
+  written_off_months?: number;
+  written_off_amount?: number;
+  written_off_note?: string;
 }
 
 interface Summary {
@@ -40,6 +46,7 @@ interface Summary {
   left_trial: number;
   total: number;
   with_debt?: number;
+  written_off?: number;
 }
 
 interface Payload {
@@ -58,8 +65,6 @@ const STATUS_OPTIONS = [
 
 const router = useRouter();
 const route = useRoute();
-
-const isSettingsView = computed(() => route.path === '/left-students');
 
 const rows = ref<LeftStudentRow[]>([]);
 const summary = ref<Summary>({ left_active: 0, left_trial: 0, total: 0 });
@@ -155,31 +160,23 @@ async function exportCsv() {
     if (filters.with_debt) params.with_debt = '1';
 
     const { data } = await client.get<ApiEnvelope<Payload>>('/reports/left-students', { params });
-    const csvRows = [
-      ['ID', 'ФИО (Name)', 'Телефон (Phone)', 'Статус (Status)', 'Группа (Group)', 'Филиал (Branch)', 'Долг при уходе, мес.', 'Долг при уходе, сум (примерно)', 'Причина ухода / Комментарий (Comment)', 'Дата ухода (Left Date)'],
-    ];
-    for (const row of data.data.rows) {
-      csvRows.push([
-        String(row.id),
-        `"${row.full_name}"`,
-        `"${row.phone}"`,
-        `"${row.status_label}"`,
-        `"${row.group}"`,
-        `"${row.branch}"`,
-        String(row.debt_months ?? 0),
-        String(row.debt_amount ?? 0),
-        `"${row.comment || ''}"`,
-        `"${row.left_at}"`,
-      ]);
-    }
-    const csvContent = 'data:text/csv;charset=utf-8,﻿' + csvRows.map((e) => e.join(',')).join('\n');
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `left_students_${todayIso()}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    downloadCsv(
+      `left_students_${todayIso()}.csv`,
+      ['ID', 'ФИО', 'Телефон', 'Статус', 'Группа', 'Филиал', 'Долг при уходе, мес.', 'Долг при уходе, сум (примерно)', 'Списано CEO', 'Причина ухода / Комментарий', 'Дата ухода'],
+      data.data.rows.map((row) => [
+        row.id,
+        row.full_name,
+        row.phone,
+        row.status_label,
+        row.group,
+        row.branch,
+        row.debt_months ?? 0,
+        row.debt_amount ?? 0,
+        row.written_off ? `${row.written_off_months} мес.; ${row.written_off_note || ''}` : '',
+        row.comment || '',
+        row.left_at,
+      ]),
+    );
   } catch (err) {
     console.error(err);
     alert('Не удалось экспортировать отчет в CSV');
@@ -197,8 +194,10 @@ function openGroup(groupId: number) {
 }
 
 onMounted(async () => {
-  // Link from the dashboard block "Ушли, не заплатив"
+  // Links from the dashboard: "Ушли, не заплатив" and the cards "Left active group" / "Left after trial period"
   if (route.query.with_debt === '1') filters.with_debt = true;
+  const status = String(route.query.status ?? '');
+  if (STATUS_OPTIONS.some((o) => o.value === status)) filters.status = status;
   await loadMeta();
   await loadRows();
 });
@@ -233,7 +232,6 @@ watch(
           {{ exporting ? 'Экспорт…' : '📥 Экспорт CSV' }}
         </button>
         <router-link
-          v-if="!isSettingsView"
           to="/students"
           class="text-sm font-medium text-fb-blue hover:underline"
         >
@@ -243,7 +241,7 @@ watch(
     </div>
 
     <!-- Summary KPI cards -->
-    <div v-if="!isSettingsView" class="grid grid-cols-1 gap-3 md:grid-cols-4">
+    <div class="grid grid-cols-1 gap-3 md:grid-cols-4">
       <div class="rounded-xl border border-fb-line bg-fb-card p-5 text-center shadow-sm">
         <div class="text-3xl font-bold text-fb-text">{{ summary.total }}</div>
         <div class="mt-1 text-xs font-medium uppercase tracking-wider text-fb-secondary">Всего ушло</div>
@@ -264,6 +262,7 @@ watch(
       >
         <div class="text-3xl font-bold text-rose-700">{{ summary.with_debt ?? 0 }}</div>
         <div class="mt-1 text-xs font-medium uppercase tracking-wider text-rose-700">Ушли с долгом</div>
+        <div v-if="summary.written_off" class="mt-1 text-[11px] text-fb-secondary">+ списано CEO: {{ summary.written_off }}</div>
       </button>
     </div>
 
@@ -388,6 +387,13 @@ watch(
               <td class="px-5 py-3.5">
                 <span v-if="row.debt_months" class="font-semibold text-rose-700">
                   {{ row.debt_months }} мес.<span v-if="row.debt_amount"> · ≈ {{ formatMoney(row.debt_amount) }} сум</span>
+                </span>
+                <span v-else-if="row.written_off" class="text-fb-secondary" :title="row.written_off_note">
+                  <span class="rounded-full border border-gray-300 bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700">Списано</span>
+                  <span class="ml-1 text-xs">
+                    {{ row.written_off_months }} мес.<span v-if="row.written_off_amount"> · ≈ {{ formatMoney(row.written_off_amount) }} сум</span>
+                  </span>
+                  <span class="mt-0.5 block max-w-[260px] text-[11px] leading-snug">{{ row.written_off_note }}</span>
                 </span>
                 <span v-else class="text-fb-secondary">—</span>
               </td>

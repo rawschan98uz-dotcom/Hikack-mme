@@ -7,6 +7,13 @@
       "runtimeArgs": ["D:/Projects/HiJackLMS/app/backend/manage.py", "runserver", "127.0.0.1:8000"],
       "port": 8000,
       "url": "http://127.0.0.1:8000"
+    },
+    {
+      "name": "frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "D:/Projects/HiJackLMS/app/frontend", "run", "dev"],
+      "port": 5173,
+      "url": "http://localhost:5173"
     }
   ]
 }

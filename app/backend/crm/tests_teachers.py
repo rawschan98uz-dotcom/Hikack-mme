@@ -101,12 +101,16 @@ class TeacherPayrollHistoryTests(TestCase):
             company=self.company, branch=self.branch, name='G', teacher=self.teacher, days=Group.Days.EVERY_DAY,
         )
 
-    def test_per_student_rate_counts_students_of_that_month(self):
+    def test_salary_counts_students_of_that_month_by_group_history(self):
+        # Owner (2026-09-28): percent of (course price ÷ possible lessons) for every student in the group that day
         from datetime import date
-        from crm.models import GroupEnrollment
+        from crm.models import Course, GroupEnrollment
+        from operations.models import TeacherAttendanceRecord
+        self.group.course = Course.objects.create(company=self.company, name='C', price=3_100_000)
+        self.group.save()
         SalarySetting.objects.create(
             company=self.company, teacher=self.teacher, teacher_name='Tom',
-            salary_type=SalarySetting.SalaryType.PER_STUDENT, amount=100000,
+            salary_type=SalarySetting.SalaryType.PERCENT, amount=100,
         )
         for i in range(3):
             s = Student.objects.create(company=self.company, branch=self.branch, first_name=f'S{i}', phone=f'90188{i:04d}')
@@ -117,14 +121,18 @@ class TeacherPayrollHistoryTests(TestCase):
                 left_date=date(2026, 9, 20) if i < 2 else None,
                 status=GroupEnrollment.Status.LEFT if i < 2 else GroupEnrollment.Status.ACTIVE,
             )
+        for day in (date(2026, 7, 10), date(2026, 8, 10)):
+            TeacherAttendanceRecord.objects.create(company=self.company, teacher=self.teacher, group=self.group,
+                                                   attend_date=day, status=1)
         self.client.force_authenticate(self.ceo)
 
         def accrued(month):
             rows = self.client.get(f'/v1/finance/payroll?month={month}').json()['data']['rows']
             return next(r['accrued'] for r in rows if r['teacher_id'] == self.teacher.id)
 
-        self.assertEqual(accrued('2026-08'), 300000)  # 3 students in August, even if they left later
-        self.assertEqual(accrued('2026-07'), 0)       # nobody was in the group yet
+        # every day is a lesson day: 31 possible lessons in August; 3 students × 3 100 000 ÷ 31 × 1 lesson
+        self.assertEqual(accrued('2026-08'), 3 * 3_100_000 // 31)  # even if two left later
+        self.assertEqual(accrued('2026-07'), 0)                     # nobody was in the group yet
 
     def test_self_checkin_only_on_lesson_days(self):
         from django.utils import timezone
@@ -205,7 +213,10 @@ class TeacherScreensTests(TestCase):
 
     def test_teacher_marks_students_only_today_admin_any_past_day(self):
         from datetime import timedelta
-        from crm.models import AttendanceRecord
+        from crm.models import AttendanceRecord, Group
+        # A lesson every day: attendance is marked only on lesson days, the test must not depend on the weekday
+        self.group.days = Group.Days.EVERY_DAY
+        self.group.save()
         self.client.force_authenticate(self.teacher)
         self.assertEqual(self.mark(self.today).status_code, 200)
         self.assertEqual(self.mark(self.today - timedelta(days=1)).status_code, 403)

@@ -11,6 +11,7 @@ import { PERM } from '../utils/rbac';
 interface Assignee {
   id: number;
   name: string;
+  role?: string;
 }
 
 interface ReminderRow {
@@ -90,6 +91,24 @@ const alertModal = reactive({
 
 const canWriteReminders = computed(() => auth.can(PERM.REMINDERS_WRITE));
 
+/** Office staff close any reminder they see; a teacher only the ones given to them. */
+function canComplete(reminder: ReminderRow) {
+  if (reminder.kind === 'unpaid_leave') return canWriteReminders.value;
+  return canWriteReminders.value || reminder.assigned_to_id === auth.user?.id;
+}
+
+/** The clock counter in the header listens to this. */
+function notifyRemindersChanged() {
+  window.dispatchEvent(new Event('reminders-changed'));
+}
+
+const writeOffModal = reactive({
+  show: false,
+  reminder: null as ReminderRow | null,
+  reason: '',
+  error: '',
+});
+
 const panelTitle = computed(() => {
   if (editingReminder.value) return 'Edit reminder';
   if (detailReminder.value) return 'Reminder details';
@@ -134,9 +153,9 @@ async function loadReminders() {
 }
 
 async function loadAssignees() {
-  const { data } = await client.get<ApiEnvelope<Assignee[]>>('/user', {
-    params: { user_type: 'staff' },
-  });
+  // Only people who create reminders need the list (active staff and teachers, never students)
+  if (!canWriteReminders.value) return;
+  const { data } = await client.get<ApiEnvelope<Assignee[]>>('/reminders/assignees');
   assignees.value = data.data;
   if (!form.assigned_to_id && auth.user?.id) {
     form.assigned_to_id = auth.user.id;
@@ -159,6 +178,23 @@ async function openDetailPanel(reminderId: number) {
   } finally {
     panelLoading.value = false;
   }
+}
+
+/**
+ * A click opens the window that solves the problem:
+ * online money without a course price -> the student's edit form (put them into a group, the копилка counts the months);
+ * "left without paying" -> the student's card (take the payment); anything else -> the reminder itself.
+ */
+function openReminder(row: ReminderRow) {
+  if (row.kind === 'online_payment_check' && row.student_id) {
+    router.push(studentRoute(row.student_id, { edit: '1' }));
+    return;
+  }
+  if (row.kind === 'unpaid_leave' && row.student_id) {
+    router.push(studentRoute(row.student_id));
+    return;
+  }
+  openDetailPanel(row.id);
 }
 
 function startEdit() {
@@ -201,6 +237,7 @@ async function submitReminder() {
     }
     closePanel();
     await loadReminders();
+    notifyRemindersChanged();
   } catch (err: any) {
     formError.value =
       err.response?.data?.message ||
@@ -217,14 +254,21 @@ function formatMoney(value: number) {
 
 // CEO only: close a "left without paying" reminder without payment; the reason is kept
 function writeOffReminder(reminder: ReminderRow) {
-  const reason = window.prompt(`Списать долг без оплаты?\n${reminder.title}\n\nУкажите причину (обязательно):`);
-  if (reason === null) return;
-  if (reason.trim().length < 3) {
-    alertModal.message = 'Причина обязательна.';
-    alertModal.show = true;
+  writeOffModal.reminder = reminder;
+  writeOffModal.reason = '';
+  writeOffModal.error = '';
+  writeOffModal.show = true;
+}
+
+async function confirmWriteOff() {
+  if (!writeOffModal.reminder) return;
+  const reason = writeOffModal.reason.trim();
+  if (reason.length < 3) {
+    writeOffModal.error = 'Укажите причину (минимум 3 символа).';
     return;
   }
-  completeReminder(reminder, reason.trim());
+  writeOffModal.show = false;
+  await completeReminder(writeOffModal.reminder, reason);
 }
 
 async function completeReminder(reminder: ReminderRow, writeOffReason = '') {
@@ -234,6 +278,7 @@ async function completeReminder(reminder: ReminderRow, writeOffReason = '') {
     await client.post(`/reminders/${reminder.id}/complete`, writeOffReason ? { write_off_reason: writeOffReason } : {});
     closePanel();
     await loadReminders();
+    notifyRemindersChanged();
   } catch (err: any) {
     alertModal.message =
       err.response?.data?.message ||
@@ -262,6 +307,7 @@ async function executeDeleteReminder() {
     await client.delete(`/reminders/${detailReminder.value.id}`);
     closePanel();
     await loadReminders();
+    notifyRemindersChanged();
   } catch (err: any) {
     alertModal.message =
       err.response?.data?.message ||
@@ -326,7 +372,7 @@ onMounted(async () => {
           :key="item.id"
           class="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-rose-200 bg-white px-4 py-3"
         >
-          <div class="min-w-0">
+          <div class="min-w-0 cursor-pointer" title="Открыть карточку ученика" @click="openReminder(item)">
             <p class="text-sm font-semibold text-fb-text">{{ item.title }}</p>
             <p class="mt-0.5 whitespace-pre-line text-xs text-fb-secondary">{{ item.details }}</p>
             <p v-if="item.locked" class="mt-1 text-xs font-semibold text-rose-700">
@@ -396,6 +442,7 @@ onMounted(async () => {
             <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Due date</th>
             <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Status</th>
             <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Assigned to</th>
+            <th class="px-5 py-4" />
           </tr>
         </thead>
         <tbody>
@@ -403,7 +450,7 @@ onMounted(async () => {
             v-for="row in rows"
             :key="row.id"
             class="cursor-pointer border-b border-fb-line hover:bg-fb-hover/40"
-            @click="openDetailPanel(row.id)"
+            @click="openReminder(row)"
           >
             <td class="px-5 py-4 font-medium text-fb-text">
               {{ row.title }}
@@ -424,6 +471,17 @@ onMounted(async () => {
               </span>
             </td>
             <td class="px-5 py-4 text-fb-secondary">{{ row.assigned_to }}</td>
+            <td class="px-5 py-4 text-right">
+              <button
+                v-if="canComplete(row)"
+                type="button"
+                class="whitespace-nowrap rounded-lg border border-emerald-300 px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+                :disabled="completing"
+                @click.stop="completeReminder(row)"
+              >
+                ✓ Выполнено
+              </button>
+            </td>
           </tr>
         </tbody>
       </table>
@@ -447,6 +505,7 @@ onMounted(async () => {
                 v-model="form.title"
                 type="text"
                 required
+                maxlength="255"
                 :readonly="isReadOnly"
                 class="w-full rounded-lg border border-fb-line px-3 py-2 read-only:bg-fb-canvas focus:border-fb-blue focus:outline-none"
               />
@@ -480,9 +539,15 @@ onMounted(async () => {
                 :disabled="isReadOnly"
                 class="w-full rounded-lg border border-fb-line px-3 py-2 disabled:bg-fb-canvas"
               >
-                <option value="">— Unassigned —</option>
+                <option value="">— Общее (видит весь офис) —</option>
+                <option
+                  v-if="form.assigned_to_id !== '' && !assignees.some((p) => p.id === form.assigned_to_id)"
+                  :value="form.assigned_to_id"
+                >
+                  {{ detailReminder?.assigned_to || '—' }}
+                </option>
                 <option v-for="person in assignees" :key="person.id" :value="person.id">
-                  {{ person.name }}
+                  {{ person.name }}{{ person.role ? ` — ${person.role}` : '' }}
                 </option>
               </select>
             </div>
@@ -518,7 +583,7 @@ onMounted(async () => {
                 Edit
               </button>
               <button
-                v-if="canWriteReminders"
+                v-if="canComplete(detailReminder)"
                 type="button"
                 class="rounded-lg border border-emerald-300 px-5 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-35"
                 :disabled="completing || detailReminder.locked"
@@ -590,6 +655,48 @@ onMounted(async () => {
             @click="confirmModal.onConfirm?.()"
           >
             Delete
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Write-off modal (CEO): close a "left without paying" reminder without payment -->
+    <div v-if="writeOffModal.show" class="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
+      <div class="w-full max-w-md overflow-hidden rounded-2xl bg-fb-card shadow-2xl">
+        <div class="border-b border-fb-line px-6 py-4">
+          <h2 class="text-lg font-semibold text-rose-700">Списать долг без оплаты?</h2>
+        </div>
+        <div class="space-y-3 px-6 py-5">
+          <p class="text-[15px] font-medium text-fb-text">{{ writeOffModal.reminder?.title }}</p>
+          <p v-if="writeOffModal.reminder?.debt_months" class="text-sm text-fb-secondary">
+            Будет списано: {{ writeOffModal.reminder.debt_months }} мес.<span v-if="writeOffModal.reminder.debt_amount">
+              (≈ {{ formatMoney(writeOffModal.reminder.debt_amount) }} сум)</span>.
+            Долг исчезнет из отчётов, в отчёте «Ушедшие» останется пометка «Списано» с причиной.
+          </p>
+          <label class="block text-sm font-medium text-fb-secondary">Причина (обязательно)</label>
+          <textarea
+            v-model="writeOffModal.reason"
+            rows="3"
+            class="w-full rounded-lg border border-fb-line px-3 py-2 focus:border-fb-blue focus:outline-none"
+            placeholder="Например: переехал в другой город, связаться не удалось"
+          />
+          <p v-if="writeOffModal.error" class="text-sm text-fb-danger">{{ writeOffModal.error }}</p>
+        </div>
+        <div class="flex justify-end gap-3 border-t border-fb-line px-6 py-4">
+          <button
+            type="button"
+            class="rounded-lg border border-fb-line px-5 py-2 text-sm font-medium text-fb-secondary hover:bg-fb-hover"
+            @click="writeOffModal.show = false"
+          >
+            Отмена
+          </button>
+          <button
+            type="button"
+            class="rounded-lg bg-rose-600 px-5 py-2 text-sm font-medium text-white hover:bg-rose-700 disabled:opacity-50"
+            :disabled="completing"
+            @click="confirmWriteOff"
+          >
+            Списать
           </button>
         </div>
       </div>

@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from django.db import IntegrityError
 from django.test import TestCase
 from django.utils import timezone
@@ -47,7 +49,7 @@ class UserDeletionPermissionTests(TestCase):
             last_name='Member',
             company=self.company,
             user_type=User.UserType.STAFF,
-            staff_role=User.StaffRole.LIMITED_ADMIN,
+            staff_role=User.StaffRole.ADMINISTRATOR,
         )
 
         # Teacher user
@@ -459,9 +461,13 @@ class SubscriptionBillingAndCategoryTests(TestCase):
 
     def test_payment_with_months_covered_and_paid_this_month(self):
         self.client.force_authenticate(user=self.ceo)
+        # Months come from the money and the course price (копилка): 1 000 000 at 500 000 = 2 months
+        course = Course.objects.create(company=self.company, name='Billing course', price=500000)
+        group = Group.objects.create(company=self.company, branch=self.branch, name='Billing group', course=course)
         student = Student.objects.create(
             company=self.company,
             branch=self.branch,
+            group=group,
             first_name='Dilshod',
             last_name='Ergashev',
             phone='901110022',
@@ -561,17 +567,21 @@ class SubscriptionBillingAndCategoryTests(TestCase):
 
     def test_payroll_calculation_and_pay(self):
         self.client.force_authenticate(user=self.ceo)
+        # A fixed monthly salary is for office staff (owner, 2026-09-28); teachers get a percent of lessons
         teacher = User.objects.create_user(
             phone='998909998877',
             password='password123',
             first_name='Aziz',
             last_name='Karimov',
             company=self.company,
-            user_type=User.UserType.TEACHER,
+            user_type=User.UserType.STAFF,
+            staff_role=User.StaffRole.ADMINISTRATOR,
+            branch=self.branch,
         )
         from finance.models import SalarySetting
         SalarySetting.objects.create(
             company=self.company,
+            teacher=teacher,
             teacher_name=teacher.display_name(),
             salary_type=SalarySetting.SalaryType.FIXED,
             amount=3000000,
@@ -649,6 +659,8 @@ class SubscriptionBillingAndCategoryTests(TestCase):
                 self.assertTrue(send_res.json()['data']['sent'])
                 mock_tg.assert_called_once()
 
+    # Switched off for now (owner, 2026-09-28); the test keeps the logic ready for when they come back
+    @patch('api.v1.views_payments.ONLINE_PAYMENTS_ENABLED', True)
     def test_click_webhook_prepare_and_complete(self):
         self.company.click_service_id = '5001'
         self.company.click_secret_key = 'testsecret'
@@ -722,6 +734,8 @@ class SubscriptionBillingAndCategoryTests(TestCase):
         sres = self.client.get(f'/v1/students/{student.id}')
         self.assertEqual(sres.json()['data']['next_payment_date'], '2026-07-01')
 
+    # Switched off for now (owner, 2026-09-28); the test keeps the logic ready for when they come back
+    @patch('api.v1.views_payments.ONLINE_PAYMENTS_ENABLED', True)
     def test_payme_webhook_lifecycle(self):
         import base64
         import json
@@ -1122,7 +1136,7 @@ class CoreAuditedFeaturesTests(TestCase):
         self.assertEqual(res_conv.status_code, 200)
         self.assertEqual(res_conv.json()['data']['page'], 1)
 
-        res_leads = self.client.get('/v1/reports/leads?page=0')
+        res_leads = self.client.get('/v1/reports/conversion?page=0')
         self.assertEqual(res_leads.status_code, 200)
         self.assertEqual(res_leads.json()['data']['page'], 1)
 
@@ -1707,7 +1721,8 @@ class P1RegressionTests(TestCase):
             'amount': 300000,
         })
         self.assertEqual(res.status_code, 400)
-        self.assertIn('несколько учеников', res.json()['message'])
+        # Payments by name are gone (owner, 2026-09-28): the student must be chosen from the list
+        self.assertIn('Выберите ученика', res.json()['message'])
 
 
 class P2RegressionTests(TestCase):
@@ -1748,7 +1763,7 @@ class P2RegressionTests(TestCase):
         res_fail = self.client.post('/v1/reports/attendance', {
             'student_id': student.id,
             'group_id': self.group2.id,
-            'date': '2026-09-20',
+            'date': '2026-09-21',
             'status': AttendanceRecord.Status.PRESENT,
         })
         self.assertEqual(res_fail.status_code, 400)
@@ -1758,10 +1773,10 @@ class P2RegressionTests(TestCase):
         res_ok = self.client.post('/v1/reports/attendance', {
             'student_id': student.id,
             'group_id': self.group1.id,
-            'date': '2026-09-20',
+            'date': '2026-09-21',
             'status': AttendanceRecord.Status.PRESENT,
         })
-        self.assertEqual(res_ok.status_code, 201)
+        self.assertEqual(res_ok.status_code, 201, res_ok.json())
 
     def test_lead_student_deleted_flag_reflects_soft_delete(self):
         """
@@ -2014,18 +2029,13 @@ class Phase1SecurityTests(TestCase):
         })
         self.assertEqual(checkin_fail.status_code, 404)
 
-        # Admin marks teacher attendance with mismatch between teacher and group -> 400
+        # Owner (2026-09-29): the office may mark another teacher in a group — a substitution
+        # (the old rule «only the group's own teacher» is gone; see crm/tests_reports.py)
         self.client.force_authenticate(user=self.admin)
-        admin_mismatch = self.client.post('/v1/reports/teacher-attendance', {
-            'teacher_id': self.teacher_a.id,
-            'group_id': self.group_b.id,
-            'date': self.today.isoformat(),
-            'status': TeacherAttendanceRecord.Status.PRESENT,
-        })
-        self.assertEqual(admin_mismatch.status_code, 400)
-        self.assertIn('Teacher is not the assigned teacher for this group', admin_mismatch.json()['message'])
 
-        # Admin creates valid record for Teacher B
+        # Admin creates valid record for Teacher B (a lesson every day: a mark only on a lesson day)
+        self.group_b.days = Group.Days.EVERY_DAY
+        self.group_b.save()
         admin_ok = self.client.post('/v1/reports/teacher-attendance', {
             'teacher_id': self.teacher_b.id,
             'group_id': self.group_b.id,
@@ -2457,284 +2467,147 @@ class Phase3PayrollAndSalaryTests(TestCase):
         self.assertEqual(self.client.get('/v1/salary-settings').status_code, 200)
         self.assertEqual(self.client.get('/v1/finance/payroll').status_code, 200)
 
+    # --- Salaries by lessons (owner, 2026-09-28): percent of (course price ÷ possible lessons) per held lesson ---
+
+    def _student_in(self, group, name, phone, joined):
+        student = Student.objects.create(
+            company=self.company, branch=self.branch, group=group, first_name=name, last_name='Student',
+            phone=phone, status=Student.Status.STUDYING, trial_date=joined,
+        )
+        GroupEnrollment.objects.filter(student=student).update(joined_date=joined)
+        return student
+
+    def _held(self, teacher, group, day):
+        TeacherAttendanceRecord.objects.create(
+            company=self.company, teacher=teacher, group=group, attend_date=day, status=1,
+        )
+
+    def _row(self, teacher, month):
+        rows = self.client.get(f'/v1/finance/payroll?month={month}').json()['data']['rows']
+        return next(r for r in rows if r['teacher_id'] == teacher.id)
+
+    def _lessons(self, group, month):
+        from finance.payroll import lesson_days, parse_month
+        _, start, end = parse_month(month)
+        return len(lesson_days(group, start, end))
+
     def test_salary_setting_teacher_fk_and_rename_resilience(self):
         """Salary setting linked by teacher FK survives teacher name changes without breaking calculations."""
+        import datetime as dt
         self.client.force_authenticate(user=self.ceo)
-
-        # Create setting linked by teacher_id
         res = self.client.post('/v1/salary-settings', {
             'teacher_id': self.teacher_a.id,
             'salary_type': SalarySetting.SalaryType.PERCENT,
             'amount': 40,
         })
         self.assertEqual(res.status_code, 201)
-        setting_id = res.json()['data']['id']
+        self.assertEqual(SalarySetting.objects.get(pk=res.json()['data']['id']).teacher_id, self.teacher_a.id)
 
-        setting = SalarySetting.objects.get(pk=setting_id)
-        self.assertEqual(setting.teacher_id, self.teacher_a.id)
+        self._student_in(self.group_a, 'Alisher', '998909991111', dt.date(2026, 9, 1))
+        self._held(self.teacher_a, self.group_a, dt.date(2026, 9, 7))  # a Monday (odd-days group)
 
-        # Create student and payment in Group Alpha (Teacher A)
-        student = Student.objects.create(
-            company=self.company,
-            branch=self.branch,
-            group=self.group_a,
-            first_name='Alisher',
-            last_name='Student',
-            phone='998909991111',
-            status=Student.Status.STUDYING,
-            trial_date='2026-09-01',
-        )
-        self.client.post('/v1/replenishments', {
-            'student_id': student.id,
-            'amount': 1000000,
-            'method': 'cash',
-        })
-
-        # Rename Teacher A
         self.teacher_a.first_name = 'Anvarjon'
         self.teacher_a.last_name = 'Qodirov'
         self.teacher_a.save()
 
-        # Check payroll calculation: setting is still resolved by FK and accrues 40% of 1,000,000 = 400,000
-        payroll_res = self.client.get('/v1/finance/payroll')
-        self.assertEqual(payroll_res.status_code, 200)
-        rows = payroll_res.json()['data']['rows']
-        teacher_row = next(r for r in rows if r['teacher_id'] == self.teacher_a.id)
-        self.assertEqual(teacher_row['accrued'], 400000)
+        expected = 1_000_000 * 40 // (self._lessons(self.group_a, '2026-09') * 100)
+        self.assertEqual(self._row(self.teacher_a, '2026-09')['accrued'], expected)
 
     def test_effective_dates_scoping(self):
         """Historical payroll calculation respects effective date ranges."""
-        self.client.force_authenticate(user=self.ceo)
-
-        # August rate: 30%
-        SalarySetting.objects.create(
-            company=self.company,
-            teacher=self.teacher_a,
-            teacher_name=self.teacher_a.display_name(),
-            salary_type=SalarySetting.SalaryType.PERCENT,
-            amount=30,
-            effective_from='2026-08-01',
-            effective_to='2026-08-31',
-        )
-
-        # September rate: 50%
-        SalarySetting.objects.create(
-            company=self.company,
-            teacher=self.teacher_a,
-            teacher_name=self.teacher_a.display_name(),
-            salary_type=SalarySetting.SalaryType.PERCENT,
-            amount=50,
-            effective_from='2026-09-01',
-        )
-
-        student = Student.objects.create(
-            company=self.company,
-            branch=self.branch,
-            group=self.group_a,
-            first_name='Vali',
-            last_name='Student',
-            phone='998909991112',
-            status=Student.Status.STUDYING,
-            trial_date='2026-08-01',
-        )
-
-        # August payment
-        p_aug = Payment.objects.create(
-            company=self.company,
-            student=student,
-            group=self.group_a,
-            course=self.course,
-            teacher=self.teacher_a,
-            student_name=student.full_name,
-            amount=1000000,
-            gross_amount=1000000,
-            net_amount=1000000,
-            transaction_type=Payment.TransactionType.PAYMENT,
-        )
         import datetime as dt
-        p_aug.created_at = timezone.make_aware(dt.datetime(2026, 8, 15, 12, 0))
-        p_aug.save()
-
-        # September payment
-        p_sep = Payment.objects.create(
-            company=self.company,
-            student=student,
-            group=self.group_a,
-            course=self.course,
-            teacher=self.teacher_a,
-            student_name=student.full_name,
-            amount=1000000,
-            gross_amount=1000000,
-            net_amount=1000000,
-            transaction_type=Payment.TransactionType.PAYMENT,
-        )
-        p_sep.created_at = timezone.make_aware(dt.datetime(2026, 9, 15, 12, 0))
-        p_sep.save()
-
-        # Check August payroll: 30% of 1,000,000 = 300,000
-        res_aug = self.client.get('/v1/finance/payroll?month=2026-08')
-        row_aug = next(r for r in res_aug.json()['data']['rows'] if r['teacher_id'] == self.teacher_a.id)
-        self.assertEqual(row_aug['accrued'], 300000)
-
-        # Check September payroll: 50% of 1,000,000 = 500,000
-        res_sep = self.client.get('/v1/finance/payroll?month=2026-09')
-        row_sep = next(r for r in res_sep.json()['data']['rows'] if r['teacher_id'] == self.teacher_a.id)
-        self.assertEqual(row_sep['accrued'], 500000)
-
-    def test_immutable_payment_allocation_on_student_group_transfer(self):
-        """Student transfer to another group does not move historical payment percentage to the new teacher."""
         self.client.force_authenticate(user=self.ceo)
-
-        # Both teachers have 40%
         SalarySetting.objects.create(
-            company=self.company,
-            teacher=self.teacher_a,
-            salary_type=SalarySetting.SalaryType.PERCENT,
-            amount=40,
+            company=self.company, teacher=self.teacher_a, teacher_name=self.teacher_a.display_name(),
+            salary_type=SalarySetting.SalaryType.PERCENT, amount=30,
+            effective_from='2026-08-01', effective_to='2026-08-31',
         )
         SalarySetting.objects.create(
-            company=self.company,
-            teacher=self.teacher_b,
-            salary_type=SalarySetting.SalaryType.PERCENT,
-            amount=40,
+            company=self.company, teacher=self.teacher_a, teacher_name=self.teacher_a.display_name(),
+            salary_type=SalarySetting.SalaryType.PERCENT, amount=50, effective_from='2026-09-01',
+        )
+        self._student_in(self.group_a, 'Vali', '998909991112', dt.date(2026, 8, 1))
+        self._held(self.teacher_a, self.group_a, dt.date(2026, 8, 3))
+        self._held(self.teacher_a, self.group_a, dt.date(2026, 9, 7))
+
+        self.assertEqual(
+            self._row(self.teacher_a, '2026-08')['accrued'],
+            1_000_000 * 30 // (self._lessons(self.group_a, '2026-08') * 100),
+        )
+        self.assertEqual(
+            self._row(self.teacher_a, '2026-09')['accrued'],
+            1_000_000 * 50 // (self._lessons(self.group_a, '2026-09') * 100),
         )
 
-        # Student starts in Teacher A's group
-        student = Student.objects.create(
-            company=self.company,
-            branch=self.branch,
-            group=self.group_a,
-            first_name='Bobur',
-            last_name='Student',
-            phone='998909991113',
-            status=Student.Status.STUDYING,
-            trial_date='2026-09-01',
-        )
-
-        # Student pays tuition while in Group Alpha
-        res_pay = self.client.post('/v1/replenishments', {
-            'student_id': student.id,
-            'amount': 2000000,
-            'method': 'cash',
-        })
-        self.assertEqual(res_pay.status_code, 201)
-        payment_id = res_pay.json()['data']['id']
-        pay_obj = Payment.objects.get(pk=payment_id)
-        self.assertEqual(pay_obj.teacher_id, self.teacher_a.id)
-        self.assertEqual(pay_obj.group_id, self.group_a.id)
-
-        # Later, student is transferred to Teacher B's group
+    def test_student_transfer_counts_for_each_teacher_by_the_days_in_their_group(self):
+        """A transferred student counts for the old teacher before the transfer and for the new one after it."""
+        import datetime as dt
+        self.client.force_authenticate(user=self.ceo)
+        for teacher in (self.teacher_a, self.teacher_b):
+            SalarySetting.objects.create(company=self.company, teacher=teacher,
+                                         salary_type=SalarySetting.SalaryType.PERCENT, amount=40)
+        student = self._student_in(self.group_a, 'Bobur', '998909991113', dt.date(2026, 9, 1))
         student.group = self.group_b
         student.save()
+        # history: in A until the 15th, in B from the 15th
+        GroupEnrollment.objects.filter(student=student, group=self.group_a).update(left_date=dt.date(2026, 9, 15))
+        GroupEnrollment.objects.filter(student=student, group=self.group_b).update(joined_date=dt.date(2026, 9, 15))
+        self._held(self.teacher_a, self.group_a, dt.date(2026, 9, 7))    # before: Bobur counts for A
+        self._held(self.teacher_a, self.group_a, dt.date(2026, 9, 16))   # after: not any more
+        self._held(self.teacher_b, self.group_b, dt.date(2026, 9, 17))   # counts for B
 
-        # Recalculate payroll for the month of payment
-        current_month = timezone.localdate().strftime('%Y-%m')
-        payroll_res = self.client.get(f'/v1/finance/payroll?month={current_month}')
-        rows = payroll_res.json()['data']['rows']
+        a = self._row(self.teacher_a, '2026-09')['groups'][0]
+        b = self._row(self.teacher_b, '2026-09')['groups'][0]
+        self.assertEqual((a['held_lessons'], a['student_lessons']), (2, 1))
+        self.assertEqual(b['student_lessons'], 1)
 
-        teacher_a_row = next(r for r in rows if r['teacher_id'] == self.teacher_a.id)
-        teacher_b_row = next(r for r in rows if r['teacher_id'] == self.teacher_b.id)
-
-        # Teacher A keeps the payment (40% of 2,000,000 = 800,000)
-        self.assertEqual(teacher_a_row['group_payments'], 2000000)
-        self.assertEqual(teacher_a_row['accrued'], 800000)
-
-        # Teacher B does NOT get the historical payment
-        self.assertEqual(teacher_b_row['group_payments'], 0)
-        self.assertEqual(teacher_b_row['accrued'], 0)
-
-    def test_refund_reduces_eligible_revenue(self):
-        """Refund endpoint correctly deducts from eligible group payments and accrued salary."""
+    def test_refund_does_not_change_teacher_salary(self):
+        """The base is the course price, not the money: a refund to the student does not cut the teacher's pay."""
+        import datetime as dt
         self.client.force_authenticate(user=self.ceo)
-
-        SalarySetting.objects.create(
-            company=self.company,
-            teacher=self.teacher_a,
-            salary_type=SalarySetting.SalaryType.PERCENT,
-            amount=50,
-        )
-
-        student = Student.objects.create(
-            company=self.company,
-            branch=self.branch,
-            group=self.group_a,
-            first_name='Davron',
-            last_name='Student',
-            phone='998909991114',
-            status=Student.Status.STUDYING,
-            trial_date='2026-09-01',
-        )
-
-        # Initial payment 1,000,000
-        res_pay = self.client.post('/v1/replenishments', {
-            'student_id': student.id,
-            'amount': 1000000,
-            'method': 'cash',
-        })
-        payment_id = res_pay.json()['data']['id']
-
-        # Refund 300,000
-        res_refund = self.client.post(f'/v1/payments/{payment_id}/refund', {
-            'amount': 300000,
-            'comment': 'Partial course refund',
-        })
+        SalarySetting.objects.create(company=self.company, teacher=self.teacher_a,
+                                     salary_type=SalarySetting.SalaryType.PERCENT, amount=50)
+        student = self._student_in(self.group_a, 'Davron', '998909991114', dt.date(2026, 9, 1))
+        self._held(self.teacher_a, self.group_a, dt.date(2026, 9, 7))
+        before = self._row(self.teacher_a, '2026-09')['accrued']
+        payment_id = self.client.post('/v1/replenishments', {
+            'student_id': student.id, 'amount': 1000000, 'method': 'cash', 'payment_date': '2026-09-02',
+        }).json()['data']['id']
+        res_refund = self.client.post(f'/v1/payments/{payment_id}/refund', {'amount': 300000, 'comment': 'Partial'})
         self.assertEqual(res_refund.status_code, 201)
         self.assertEqual(res_refund.json()['data']['transaction_type'], 'refund')
-
-        # Check payroll: net payments = 700,000; accrued = 50% of 700,000 = 350,000
-        current_month = timezone.localdate().strftime('%Y-%m')
-        payroll_res = self.client.get(f'/v1/finance/payroll?month={current_month}')
-        teacher_a_row = next(r for r in payroll_res.json()['data']['rows'] if r['teacher_id'] == self.teacher_a.id)
-
-        self.assertEqual(teacher_a_row['group_payments'], 700000)
-        self.assertEqual(teacher_a_row['accrued'], 350000)
+        self.assertEqual(self._row(self.teacher_a, '2026-09')['accrued'], before)
 
     def test_payroll_pay_and_overpayment_protection(self):
         """Payroll payment creates first-class PayrollPayment record and guards against overpayments."""
+        import datetime as dt
         self.client.force_authenticate(user=self.ceo)
+        SalarySetting.objects.create(company=self.company, teacher=self.teacher_a,
+                                     salary_type=SalarySetting.SalaryType.PERCENT, amount=100)
+        self._student_in(self.group_a, 'Eldor', '998909991115', dt.date(2026, 9, 1))
+        for day in (7, 9, 11):
+            self._held(self.teacher_a, self.group_a, dt.date(2026, 9, day))
+        accrued = self._row(self.teacher_a, '2026-09')['accrued']
+        self.assertGreater(accrued, 0)
 
-        # Fixed salary 500,000
-        SalarySetting.objects.create(
-            company=self.company,
-            teacher=self.teacher_a,
-            salary_type=SalarySetting.SalaryType.FIXED,
-            amount=500000,
-        )
-
-        current_month = timezone.localdate().strftime('%Y-%m')
-
-        # Attempt to pay 600,000 without force (exceeds 500,000 accrued) -> 400 Bad Request
         res_over = self.client.post('/v1/finance/payroll/pay', {
-            'teacher_id': self.teacher_a.id,
-            'amount': 600000,
-            'month': current_month,
+            'teacher_id': self.teacher_a.id, 'amount': accrued + 1, 'month': '2026-09',
         })
         self.assertEqual(res_over.status_code, 400)
         self.assertEqual(res_over.json()['code'], 'overpayment')
 
-        # Pay valid partial amount 300,000 -> 201 Created
+        part = accrued // 2
         res_pay1 = self.client.post('/v1/finance/payroll/pay', {
-            'teacher_id': self.teacher_a.id,
-            'amount': 300000,
-            'method': 'cash',
-            'month': current_month,
+            'teacher_id': self.teacher_a.id, 'amount': part, 'method': 'cash', 'month': '2026-09',
         })
         self.assertEqual(res_pay1.status_code, 201)
-        self.assertTrue(PayrollPayment.objects.filter(teacher=self.teacher_a, amount=300000, payroll_period=current_month).exists())
+        self.assertTrue(PayrollPayment.objects.filter(teacher=self.teacher_a, amount=part, payroll_period='2026-09').exists())
 
-        # Check payroll: accrued=500,000, paid=300,000, balance=200,000, status='partial'
-        res_payroll = self.client.get(f'/v1/finance/payroll?month={current_month}')
-        teacher_row = next(r for r in res_payroll.json()['data']['rows'] if r['teacher_id'] == self.teacher_a.id)
-        self.assertEqual(teacher_row['paid'], 300000)
-        self.assertEqual(teacher_row['balance'], 200000)
-        self.assertEqual(teacher_row['status'], 'partial')
+        row = self._row(self.teacher_a, '2026-09')
+        self.assertEqual((row['paid'], row['balance'], row['status']), (part, accrued - part, 'partial'))
 
-        # CEO can override with force=True
         res_force = self.client.post('/v1/finance/payroll/pay', {
-            'teacher_id': self.teacher_a.id,
-            'amount': 300000,
-            'month': current_month,
-            'force': True,
+            'teacher_id': self.teacher_a.id, 'amount': accrued, 'month': '2026-09', 'force': True,
         })
         self.assertEqual(res_force.status_code, 201)
 
@@ -3139,25 +3012,25 @@ class Block2FinanceRemediationTests(TestCase):
         # GET /v1/replenishments must return list of payments
         res = self.client.get('/v1/replenishments')
         self.assertEqual(res.status_code, 200)
-        items = res.json()['data']
+        items = res.json()['data']['results']
         self.assertTrue(len(items) >= 2)
 
         # Filter by method
         res_cash = self.client.get('/v1/replenishments?method=cash')
         self.assertEqual(res_cash.status_code, 200)
-        cash_items = res_cash.json()['data']
+        cash_items = res_cash.json()['data']['results']
         self.assertTrue(all(item['method'] == 'cash' for item in cash_items))
 
         # Filter by student_id
         res_s2 = self.client.get(f'/v1/replenishments?student_id={s2.id}')
         self.assertEqual(res_s2.status_code, 200)
-        self.assertEqual(len(res_s2.json()['data']), 1)
-        self.assertEqual(res_s2.json()['data'][0]['name'], 'Bobur Zahir')
+        self.assertEqual(len(res_s2.json()['data']['results']), 1)
+        self.assertEqual(res_s2.json()['data']['results'][0]['name'], 'Bobur Zahir')
 
         # Filter by search q
         res_q = self.client.get('/v1/replenishments?q=Bobur')
         self.assertEqual(res_q.status_code, 200)
-        self.assertEqual(len(res_q.json()['data']), 1)
+        self.assertEqual(len(res_q.json()['data']['results']), 1)
 
     def test_p1_4_unfreeze_preserves_prepaid_months(self):
         """

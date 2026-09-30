@@ -22,11 +22,10 @@ interface StaffRow {
 
 // Roles a CEO can give in the staff card (CEO itself is not assignable)
 const STAFF_ROLES = [
+  // "Ограниченный админ" and "Кассир" are the same person as the administrator (owner, 2026-09-28)
   { value: 'administrator', label: 'Администратор' },
   { value: 'branch_director', label: 'Директор филиала' },
-  { value: 'limited_admin', label: 'Ограниченный админ' },
   { value: 'marketer', label: 'Маркетолог' },
-  { value: 'cashier', label: 'Кассир' },
 ];
 
 const rows = ref<StaffRow[]>([]);
@@ -112,7 +111,7 @@ function fillForm(row: StaffRow) {
   form.phone = row.phone;
   form.job_title = row.job_title === '—' ? '' : row.job_title;
   form.password = '';
-  form.staff_role = row.staff_role || 'limited_admin';
+  form.staff_role = row.staff_role || 'administrator';
   form.branch_id = row.branch_id ?? '';
 }
 
@@ -355,7 +354,7 @@ onMounted(loadRows);
       template-filename="staff-import-template.csv"
       :template-header="['first_name', 'last_name', 'phone', 'password', 'job_title', 'staff_role', 'branch']"
       :template-example="['Kamola', 'Yusupova', '901002010', 'demo1234', 'Administrator', 'administrator', '']"
-      columns-help="Required: first_name, phone. Optional: last_name, password (auto-generated if empty), job_title, staff_role (administrator, marketer, cashier, branch_director, limited_admin), branch (обязателен для branch_director: название или id филиала)."
+      columns-help="Required: first_name, phone. Optional: last_name, password (auto-generated if empty), job_title, staff_role (administrator, marketer, branch_director), branch (обязателен для branch_director: название или id филиала)."
       @imported="loadRows"
     />
   </div>

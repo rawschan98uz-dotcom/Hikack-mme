@@ -62,11 +62,13 @@ ROUTE_RULES: list[tuple[tuple[str, ...], str, str | None]] = [
     (('DELETE',), r'^user/teacher/\d+$', P.PERM_TEACHERS_DELETE),
 
     (('POST',), r'^user/staff/import$', P.PERM_STAFF_WRITE),
-    (('GET',), r'^replenishments$', P.PERM_FINANCE_VIEW),
-    (('POST',), r'^replenishments$', P.PERM_FINANCE_WRITE),
-    (('POST',), r'^(?:replenishments|payments)/\d+/refund$', P.PERM_FINANCE_WRITE),
-    (('GET',), r'^replenishments/\d+$', P.PERM_FINANCE_VIEW),
-    (('PATCH', 'DELETE'), r'^replenishments/\d+$', P.PERM_FINANCE_WRITE),
+    # Student payments: the administrator takes payments and gives refunds; only the CEO deletes
+    (('GET',), r'^replenishments$', P.PERM_PAYMENTS_VIEW),
+    (('POST',), r'^replenishments$', P.PERM_PAYMENTS_WRITE),
+    (('POST',), r'^(?:replenishments|payments)/\d+/refund$', P.PERM_PAYMENTS_WRITE),
+    (('GET',), r'^replenishments/\d+$', P.PERM_PAYMENTS_VIEW),
+    (('PATCH',), r'^replenishments/\d+$', P.PERM_PAYMENTS_WRITE),
+    (('DELETE',), r'^replenishments/\d+$', P.PERM_PAYMENTS_DELETE),
 
     (('GET',), r'^withdraws$', P.PERM_FINANCE_COMPANY),
     (('POST',), r'^withdraws$', P.PERM_FINANCE_WRITE),
@@ -86,38 +88,48 @@ ROUTE_RULES: list[tuple[tuple[str, ...], str, str | None]] = [
     (('GET', 'PATCH', 'DELETE'), r'^salary-settings/\d+$', P.PERM_FINANCE_WRITE),
     (('GET',), r'^finance/payroll$', P.PERM_FINANCE_VIEW),
     (('POST',), r'^finance/payroll/pay$', P.PERM_FINANCE_WRITE),
+    (('DELETE',), r'^finance/payroll/payouts/\d+$', P.PERM_FINANCE_WRITE),
+    # Closing a month and salary corrections: finance.write here, and the CEO only (checked in the view)
+    (('POST',), r'^finance/payroll/adjustments$', P.PERM_FINANCE_WRITE),
+    (('DELETE',), r'^finance/payroll/adjustments/\d+$', P.PERM_FINANCE_WRITE),
+    (('GET',), r'^finance/months$', P.PERM_FINANCE_VIEW),
+    (('POST',), r'^finance/months/(?:close|reopen)$', P.PERM_FINANCE_WRITE),
 
     (('GET',), r'^reports/pnl$', P.PERM_FINANCE_COMPANY),
     (('GET',), r'^reports/conversion$', P.PERM_REPORTS_VIEW),
-    (('GET',), r'^reports/leads$', P.PERM_REPORTS_VIEW),
-    (('GET',), r'^reports/left-students$', P.PERM_REPORTS_VIEW),
+    # Debts of the students who left are money: not for the marketer (reports audit, 2026-09-29)
+    (('GET',), r'^reports/left-students$', P.PERM_PAYMENTS_VIEW),
     (('GET',), r'^reports/attendance$', P.PERM_ATTENDANCE_VIEW),
     (('POST',), r'^reports/attendance$', P.PERM_ATTENDANCE_WRITE),
+    (('GET',), r'^reports/attendance/(day|month)$', P.PERM_ATTENDANCE_VIEW),
     (('GET',), r'^reports/attendance/\d+$', P.PERM_ATTENDANCE_VIEW),
     (('PATCH', 'DELETE'), r'^reports/attendance/\d+$', P.PERM_ATTENDANCE_WRITE),
 
     (('GET',), r'^reports/teacher-attendance$', P.PERM_TEACHER_ATTENDANCE_VIEW),
     (('POST',), r'^reports/teacher-attendance$', P.PERM_TEACHER_ATTENDANCE_WRITE),
+    (('GET',), r'^reports/teacher-attendance/lessons$', P.PERM_TEACHER_ATTENDANCE_VIEW),
     (('GET',), r'^reports/teacher-attendance/\d+$', P.PERM_TEACHER_ATTENDANCE_VIEW),
     (('PATCH', 'DELETE'), r'^reports/teacher-attendance/\d+$', P.PERM_TEACHER_ATTENDANCE_WRITE),
     (('POST',), r'^teacher-attendance/self-checkin$', P.PERM_TEACHER_ATTENDANCE_VIEW),
     (('GET',), r'^teacher-attendance/today$', P.PERM_TEACHER_ATTENDANCE_VIEW),
     (('GET',), r'^teacher-attendance/my$', P.PERM_TEACHER_ATTENDANCE_VIEW),
 
-    (('GET',), r'^reports/workly$', P.PERM_REPORTS_VIEW),
-    (('POST',), r'^reports/workly$', P.PERM_REPORTS_WRITE),
-    (('GET', 'PATCH', 'DELETE'), r'^reports/workly/\d+$', P.PERM_REPORTS_WRITE),
 
     (('GET',), r'^reminders$', P.PERM_REMINDERS_VIEW),
     (('POST',), r'^reminders$', P.PERM_REMINDERS_WRITE),
     (('GET',), r'^reminders/\d+$', P.PERM_REMINDERS_VIEW),
     (('PATCH', 'DELETE'), r'^reminders/\d+$', P.PERM_REMINDERS_WRITE),
-    (('POST',), r'^reminders/\d+/complete$', P.PERM_REMINDERS_WRITE),
+    # A teacher may close reminders given to them (checked in the view)
+    (('POST',), r'^reminders/\d+/complete$', P.PERM_REMINDERS_VIEW),
+    (('GET',), r'^reminders/assignees$', P.PERM_REMINDERS_WRITE),
+    (('GET',), r'^reminders/summary$', P.PERM_REMINDERS_VIEW),
 
     (('GET',), r'^scores/branch$', P.PERM_RATING_VIEW),
     (('POST',), r'^scores/branch$', P.PERM_RATING_WRITE),
     (('POST',), r'^scores/bulk$', P.PERM_RATING_WRITE),
     (('GET',), r'^scores/groups$', P.PERM_RATING_VIEW),
+    (('GET',), r'^scores/sheet$', P.PERM_RATING_WRITE),
+    (('GET',), r'^scores/history$', P.PERM_RATING_VIEW),
     (('GET', 'PATCH', 'DELETE'), r'^scores/\d+$', P.PERM_RATING_WRITE),
 
     (('POST',), r'^room$', P.PERM_ROOMS_WRITE),

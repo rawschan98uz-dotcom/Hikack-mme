@@ -2,6 +2,9 @@
 import { computed, onMounted, reactive, ref , watch} from 'vue';
 
 import client, { type ApiEnvelope } from '../api/client';
+import { todayIso } from '../utils/dates';
+
+type PageArray<T> = T[] & { has_more?: boolean; next_offset?: number | null };
 
 interface WithdrawRow {
   id: number;
@@ -14,6 +17,9 @@ interface WithdrawRow {
 }
 
 const rows = ref<WithdrawRow[]>([]);
+const hasMore = ref(false);
+const nextOffset = ref<number | null>(null);
+const loadingMore = ref(false);
 const loading = ref(true);
 const saving = ref(false);
 const deleting = ref(false);
@@ -23,7 +29,8 @@ const formError = ref('');
 const editingRow = ref<WithdrawRow | null>(null);
 const detailRow = ref<WithdrawRow | null>(null);
 const filters = reactive({ date_from: '', date_to: '', q: '' });
-const form = reactive({ name: '', amount: 0, comment: '' });
+// The day the money was taken: today by default, can be changed (owner, 2026-09-28)
+const form = reactive({ name: '', amount: 0, comment: '', withdrawal_date: todayIso() });
 
 const isReadOnly = computed(() => Boolean(detailRow.value && !editingRow.value));
 const panelTitle = computed(() =>
@@ -41,6 +48,7 @@ const tableRows = computed(() =>
 );
 
 function resetForm() {
+  form.withdrawal_date = todayIso();
   form.name = '';
   form.amount = 0;
   form.comment = '';
@@ -50,22 +58,45 @@ function resetForm() {
 }
 
 function fillForm(row: WithdrawRow) {
+  form.withdrawal_date = row.date;
   form.name = row.name;
   form.amount = row.sum;
   form.comment = row.comment;
 }
 
+function listParams(offset = 0) {
+  const params: Record<string, string | number> = { offset };
+  if (filters.date_from) params.date_from = filters.date_from;
+  if (filters.date_to) params.date_to = filters.date_to;
+  if (filters.q.trim()) params.q = filters.q.trim();
+  return params;
+}
+
 async function loadRows() {
   loading.value = true;
   try {
-    const params: Record<string, string> = {};
-    if (filters.date_from) params.date_from = filters.date_from;
-    if (filters.date_to) params.date_to = filters.date_to;
-    if (filters.q.trim()) params.q = filters.q.trim();
-    const { data } = await client.get<ApiEnvelope<WithdrawRow[]>>('/withdraws', { params });
-    rows.value = data.data;
+    const { data } = await client.get<ApiEnvelope<PageArray<WithdrawRow>>>('/withdraws', { params: listParams() });
+    rows.value = [...data.data];
+    hasMore.value = Boolean(data.data.has_more);
+    nextOffset.value = data.data.next_offset ?? null;
   } finally {
     loading.value = false;
+  }
+}
+
+/** "Show more": the next 200 (older) withdrawals. */
+async function loadMore() {
+  if (nextOffset.value === null) return;
+  loadingMore.value = true;
+  try {
+    const { data } = await client.get<ApiEnvelope<PageArray<WithdrawRow>>>('/withdraws', {
+      params: listParams(nextOffset.value),
+    });
+    rows.value = [...rows.value, ...data.data];
+    hasMore.value = Boolean(data.data.has_more);
+    nextOffset.value = data.data.next_offset ?? null;
+  } finally {
+    loadingMore.value = false;
   }
 }
 
@@ -98,13 +129,26 @@ function closePanel() {
 
 async function submitForm() {
   formError.value = '';
-  if (!form.name.trim() || !form.amount) {
+  if (!form.name.trim()) {
     formError.value = 'Fill name and amount';
+    return;
+  }
+  if (!Number.isInteger(form.amount) || form.amount <= 0) {
+    formError.value = 'Сумма — целое положительное число.';
+    return;
+  }
+  if (!form.withdrawal_date || form.withdrawal_date > todayIso()) {
+    formError.value = 'Дата изъятия не может быть позже сегодняшнего дня.';
     return;
   }
   saving.value = true;
   try {
-    const payload = { name: form.name.trim(), amount: form.amount, comment: form.comment.trim() };
+    const payload = {
+      name: form.name.trim(),
+      amount: form.amount,
+      comment: form.comment.trim(),
+      date: form.withdrawal_date,
+    };
     if (editingRow.value) {
       await client.patch(`/withdraws/${editingRow.value.id}`, payload);
     } else {
@@ -112,8 +156,8 @@ async function submitForm() {
     }
     closePanel();
     await loadRows();
-  } catch {
-    formError.value = 'Could not save';
+  } catch (err: any) {
+    formError.value = err?.response?.data?.message || 'Could not save';
   } finally {
     saving.value = false;
   }
@@ -126,6 +170,9 @@ async function deleteRow() {
     await client.delete(`/withdraws/${detailRow.value.id}`);
     closePanel();
     await loadRows();
+  } catch (err: any) {
+    // e.g. the month is closed
+    window.alert(err?.response?.data?.message || 'Не удалось удалить изъятие');
   } finally {
     deleting.value = false;
   }
@@ -195,6 +242,16 @@ watch(
           </tr>
         </tbody>
       </table>
+      <div v-if="hasMore" class="border-t border-fb-line p-3 text-center">
+        <button
+          type="button"
+          class="rounded-lg border border-fb-line px-4 py-2 text-sm font-medium text-fb-blue hover:bg-fb-hover disabled:opacity-50"
+          :disabled="loadingMore"
+          @click="loadMore"
+        >
+          {{ loadingMore ? 'Загрузка…' : 'Показать ещё' }}
+        </button>
+      </div>
     </div>
 
     <div v-if="showPanel" class="fixed inset-0 z-50 flex justify-end">
@@ -208,12 +265,23 @@ watch(
         <form v-else class="flex flex-1 flex-col overflow-hidden" @submit.prevent="submitForm">
           <div class="flex-1 space-y-4 overflow-y-auto p-6">
             <div>
+              <label class="mb-1 block text-sm font-medium">Дата изъятия</label>
+              <input
+                v-model="form.withdrawal_date"
+                type="date"
+                :max="todayIso()"
+                :readonly="isReadOnly"
+                required
+                class="w-full rounded-lg border px-3 py-2 read-only:bg-fb-canvas"
+              />
+            </div>
+            <div>
               <label class="mb-1 block text-sm font-medium">Name</label>
               <input v-model="form.name" :readonly="isReadOnly" required class="w-full rounded-lg border px-3 py-2 read-only:bg-fb-canvas" />
             </div>
             <div>
               <label class="mb-1 block text-sm font-medium">Amount</label>
-              <input v-model.number="form.amount" type="number" :readonly="isReadOnly" required class="w-full rounded-lg border px-3 py-2 read-only:bg-fb-canvas" />
+              <input v-model.number="form.amount" type="number" min="1" step="1" :readonly="isReadOnly" required class="w-full rounded-lg border px-3 py-2 read-only:bg-fb-canvas" />
             </div>
             <div>
               <label class="mb-1 block text-sm font-medium">Comment</label>

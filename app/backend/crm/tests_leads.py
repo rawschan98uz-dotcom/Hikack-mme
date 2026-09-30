@@ -56,7 +56,7 @@ class LeadAuditTests(TestCase):
         self.assertEqual(lead.branch_id, self.branch.id)
 
     def test_reports_ignore_bad_dates(self):
-        for url in ('/v1/reports/conversion?date_from=abc', '/v1/reports/leads?date_to=2026-13-40'):
+        for url in ('/v1/reports/conversion?date_from=abc', '/v1/reports/conversion?date_to=2026-13-40'):
             self.assertEqual(self.client.get(url).status_code, 200, url)
 
     def test_lead_list_does_not_query_per_lead(self):

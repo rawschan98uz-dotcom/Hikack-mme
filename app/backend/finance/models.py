@@ -87,6 +87,8 @@ class Withdrawal(models.Model):
     company = models.ForeignKey('org.Company', on_delete=models.CASCADE, related_name='withdrawals')
     name = models.CharField(max_length=255)
     amount = models.BigIntegerField()
+    # The day the money was taken (chosen in the form, today by default) — not the day it was typed in
+    withdrawal_date = models.DateField(null=True, blank=True, db_index=True)
     comment = models.TextField(blank=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -118,6 +120,15 @@ class Expense(models.Model):
 
     company = models.ForeignKey('org.Company', on_delete=models.CASCADE, related_name='expenses')
     category = models.ForeignKey(ExpenseCategory, on_delete=models.SET_NULL, null=True)
+    # Owner (2026-09-28): every expense belongs to a branch (the CEO picks it) and has its own date,
+    # so the September rent typed in on 2 October still goes to September of that branch
+    branch = models.ForeignKey('org.Branch', on_delete=models.PROTECT, null=True, blank=True, related_name='expenses')
+    expense_date = models.DateField(null=True, blank=True, db_index=True)
+    # A salary payout (finance/payroll.py): one expense per branch; it is changed or cancelled only
+    # in "Зарплаты", never in "Расходы", so the payroll and the P&L always agree
+    payroll_payment = models.ForeignKey(
+        'PayrollPayment', on_delete=models.CASCADE, null=True, blank=True, related_name='branch_expenses',
+    )
     description = models.TextField(blank=True)
     payee = models.CharField(max_length=255, blank=True)
     method = models.CharField(max_length=20, choices=Method.choices, default=Method.CASH)
@@ -133,9 +144,9 @@ class Expense(models.Model):
 
 class SalarySetting(models.Model):
     class SalaryType(models.TextChoices):
+        # Owner (2026-09-28): a teacher has only a percent; a fixed monthly amount is for office staff
         FIXED = 'fixed', 'Фиксированная'
         PERCENT = 'percent', 'Процент'
-        PER_STUDENT = 'per_student', 'За студента'
 
     company = models.ForeignKey('org.Company', on_delete=models.CASCADE, related_name='salary_settings')
     teacher = models.ForeignKey(
@@ -215,6 +226,55 @@ class PayrollPayment(models.Model):
 
     def __str__(self) -> str:
         return f'{self.teacher} — {self.payroll_period}: {self.amount}'
+
+
+class ClosedMonth(models.Model):
+    """
+    A month the CEO closed (owner, 2026-09-29; finance/closing.py). Its salaries are frozen in PayrollSnapshot,
+    and payments, expenses, withdrawals and teacher lesson marks dated in it can no longer be added, changed
+    or deleted — the numbers already seen never change silently. Only the CEO reopens it.
+    """
+    company = models.ForeignKey('org.Company', on_delete=models.CASCADE, related_name='closed_months')
+    month = models.CharField(max_length=7)  # 'YYYY-MM'
+    closed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='closed_months',
+    )
+    closed_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['company', 'month'], name='uniq_closed_month'),
+        ]
+
+    def __str__(self) -> str:
+        return f'{self.company_id}: {self.month}'
+
+
+class PayrollSnapshot(models.Model):
+    """The salary of one person for a closed month, as counted at closing time ("расчётный лист")."""
+    closed_month = models.ForeignKey(ClosedMonth, on_delete=models.CASCADE, related_name='payroll')
+    person = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='payroll_snapshots')
+    accrued = models.BigIntegerField(default=0)
+    # How it was counted: groups (teacher) or the fixed amount (staff), shown in "Как посчитано"
+    details = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['closed_month', 'person'], name='uniq_payroll_snapshot'),
+        ]
+
+
+class PayrollAdjustment(models.Model):
+    """A visible correction of a month's salary by the CEO (+ or −) with a reason, e.g. a forgotten lesson."""
+    company = models.ForeignKey('org.Company', on_delete=models.CASCADE, related_name='payroll_adjustments')
+    person = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='payroll_adjustments')
+    payroll_period = models.CharField(max_length=7)  # 'YYYY-MM'
+    amount = models.BigIntegerField()
+    reason = models.TextField()
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name='created_payroll_adjustments',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
 
 
 class PaymentTransaction(models.Model):

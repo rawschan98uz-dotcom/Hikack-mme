@@ -129,15 +129,15 @@ export const primaryNav: NavSection[] = [
     id: 'finance',
     label: 'Finance',
     icon: 'finance',
-    permission: PERM.FINANCE_VIEW,
+    permission: PERM.PAYMENTS_VIEW,
     paths: ['/finance', '/students/debtors'],
     children: [
-      { type: 'link', label: 'All payments', to: '/finance/payments', icon: 'coins', permission: PERM.FINANCE_VIEW },
+      { type: 'link', label: 'All payments', to: '/finance/payments', icon: 'coins', permission: PERM.PAYMENTS_VIEW },
       { type: 'link', label: 'Финансовый отчет (P&L)', to: '/finance/pnl', icon: 'reports', permission: PERM.FINANCE_COMPANY },
       { type: 'link', label: 'Total Expenses', to: '/finance/cost', icon: 'expenses', permission: PERM.FINANCE_COMPANY },
       { type: 'link', label: 'Salaries new', to: '/finance/new-salaries', icon: 'salaries', permission: PERM.FINANCE_VIEW },
       { type: 'link', label: 'Withdraw', to: '/finance/withdraw', icon: 'coins', permission: PERM.FINANCE_COMPANY },
-      { type: 'link', label: 'Debtors', to: '/students/debtors', icon: 'debtors', permission: PERM.FINANCE_VIEW },
+      { type: 'link', label: 'Debtors', to: '/students/debtors', icon: 'debtors', permission: PERM.PAYMENTS_VIEW },
     ],
   },
   {
@@ -147,11 +147,9 @@ export const primaryNav: NavSection[] = [
     permission: PERM.REPORTS_VIEW,
     paths: ['/reports'],
     children: [
-      { type: 'link', label: 'Отчет по конверсии', to: '/reports/conversion', icon: 'conversion', permission: PERM.REPORTS_VIEW },
+      { type: 'link', label: 'Лиды и конверсия', to: '/reports/conversion', icon: 'conversion', permission: PERM.REPORTS_VIEW },
       { type: 'link', label: 'Посещаемость учеников', to: '/reports/attendance', icon: 'attendance', permission: PERM.ATTENDANCE_VIEW },
-      { type: 'link', label: 'Отчет по лидам', to: '/reports/leads', icon: 'leads-report', permission: PERM.REPORTS_VIEW },
-      { type: 'link', label: 'Ушедшие студенты', to: '/reports/left-students', icon: 'left-students', permission: PERM.REPORTS_VIEW },
-      { type: 'link', label: 'Табель Workly', to: '/reports/workly', icon: 'conversion', permission: PERM.REPORTS_VIEW },
+      { type: 'link', label: 'Ушедшие студенты', to: '/reports/left-students', icon: 'left-students', permission: PERM.PAYMENTS_VIEW },
     ],
   },
   {
@@ -171,7 +169,6 @@ export const primaryNav: NavSection[] = [
       '/roadmap',
       '/auto-sms',
       '/admin',
-      '/left-students',
       '/blog',
     ],
     children: [
@@ -187,7 +184,6 @@ export const primaryNav: NavSection[] = [
       { type: 'link', label: 'Rooms', to: '/rooms', icon: 'rooms', permission: PERM.ROOMS_VIEW },
       { type: 'link', label: 'Holidays', to: '/holiday', icon: 'holidays', permission: PERM.HOLIDAYS_VIEW },
       { type: 'link', label: 'Archive', to: '/archive/list', icon: 'archive', permission: PERM.ARCHIVE_VIEW },
-      { type: 'link', label: 'Students left the group', to: '/left-students', icon: 'left-students', permission: PERM.REPORTS_VIEW },
       { type: 'header', label: 'Forms' },
       { type: 'link', label: 'Forms', to: '/form', icon: 'puzzle', permission: PERM.FORMS_VIEW },
       { type: 'header', label: 'Blog' },

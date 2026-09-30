@@ -1,47 +1,90 @@
 <script setup lang="ts">
 import { currentMonthIso } from '../utils/dates';
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { computed, onMounted, reactive, ref } from 'vue';
 
 import client, { type ApiEnvelope } from '../api/client';
 import { useAuthStore } from '../stores/auth';
 import { PERM } from '../utils/rbac';
 
 const auth = useAuthStore();
-// Branch director sees money read-only: add/edit/pay buttons need finance.write
+// Salaries and rates are the CEO's (finance.write); a branch director only looks
 const canWriteFinance = computed(() => auth.can(PERM.FINANCE_WRITE));
 
+/** A rate: a teacher's percent (general / course / group) or a staff member's fixed monthly sum. */
 interface SalaryRow {
   id: number;
-  calc_setting: string;
-  salary_type: string;
+  person_kind: 'teacher' | 'staff';
+  salary_type: 'percent' | 'fixed';
   salary_type_label: string;
   amount: number;
-  teacher_name: string;
+  teacher_id: number | null;
   teacher: string;
-  course_name: string;
+  course_id: number | null;
   course: string;
-  group_name: string;
+  group_id: number | null;
   group: string;
-  created_by: string;
+  effective_from: string | null;
+  effective_to: string | null;
   updated_by: string;
 }
 
+/** How a teacher's salary for one group was counted (finance/payroll.py). */
+interface GroupAccrual {
+  group_id: number;
+  group: string;
+  branch: string;
+  course_price: number;
+  possible_lessons: number;
+  held_lessons: number;
+  student_lessons: number;
+  percent: number;
+  percent_scope: string;
+  accrued: number;
+}
+
+interface Payout {
+  id: number | null;
+  amount: number;
+  method: string;
+  comment: string;
+  date: string;
+}
+
 interface PayrollRow {
+  person_id: number;
   teacher_id: number;
   teacher_name: string;
   phone: string;
-  groups_count: number;
-  groups_names: string;
-  lessons_count: number;
-  students_count: number;
-  group_payments: number;
-  salary_type: string;
-  salary_type_label: string;
-  rate_amount: number;
+  kind: 'teacher' | 'staff';
+  kind_label: string;
+  is_active: boolean;
+  branch_id: number | null;
+  groups: GroupAccrual[];
+  fixed_amount: number | null;
   accrued: number;
   paid: number;
   balance: number;
+  overpaid: number;
   status: 'paid' | 'partial' | 'unpaid' | 'none';
+  payouts: Payout[];
+  month_closed: boolean;
+  accrued_base: number;
+  adjustments: Adjustment[];
+}
+
+/** A visible correction of a month's salary by the CEO (+ or −) with a reason. */
+interface Adjustment {
+  id: number;
+  amount: number;
+  reason: string;
+  date: string;
+  by: string;
+}
+
+interface ClosedInfo {
+  month: string;
+  closed_at: string;
+  closed_by: string;
 }
 
 interface PayrollSummary {
@@ -51,119 +94,47 @@ interface PayrollSummary {
   teachers_count: number;
 }
 
-interface TeacherOption {
+interface Option {
   id: number;
   name: string;
 }
 
-const SALARY_TYPES = [
-  { value: 'fixed', label: 'Фиксированная' },
-  { value: 'percent', label: 'Процент' },
-  { value: 'per_student', label: 'За студента' },
-] as const;
-
-// Tabs
 const activeTab = ref<'payroll' | 'settings'>('payroll');
 
-// Payroll State
+function money(value: number | null | undefined) {
+  return Math.round(value || 0).toLocaleString('ru-RU');
+}
+
+// ================= Payroll =================
 const selectedMonth = ref(currentMonthIso());
 const payrollRows = ref<PayrollRow[]>([]);
-const payrollSummary = ref<PayrollSummary>({
-  total_accrued: 0,
-  total_paid: 0,
-  total_balance: 0,
-  teachers_count: 0,
-});
+const payrollSummary = ref<PayrollSummary>({ total_accrued: 0, total_paid: 0, total_balance: 0, teachers_count: 0 });
 const payrollLoading = ref(false);
+const payrollError = ref('');
+const expanded = ref<number | null>(null);
+// Closing the month (CEO): salaries frozen, money records dated in the month locked
+const monthClosed = ref<ClosedInfo | null>(null);
+const canClose = ref(false);
 
-// Pay Modal
-const showPayModal = ref(false);
-const payTeacher = ref<PayrollRow | null>(null);
-const payForm = reactive({
-  amount: 0,
-  method: 'cash' as 'cash' | 'card' | 'transfer',
-  comment: '',
-});
-const paySaving = ref(false);
-const payError = ref('');
-
-// Salary Settings State
-const rows = ref<SalaryRow[]>([]);
-const loading = ref(true);
-const saving = ref(false);
-const deleting = ref(false);
-const showPanel = ref(false);
-const panelLoading = ref(false);
-const formError = ref('');
-const editingRow = ref<SalaryRow | null>(null);
-const detailRow = ref<SalaryRow | null>(null);
-const teachers = ref<TeacherOption[]>([]);
-const filters = reactive({ q: '' });
-
-const filteredRows = computed(() => {
-  const q = filters.q.trim().toLowerCase();
-  if (!q) return rows.value;
-  return rows.value.filter((r) => {
-    return (
-      r.teacher?.toLowerCase().includes(q) ||
-      r.teacher_name?.toLowerCase().includes(q) ||
-      r.course?.toLowerCase().includes(q) ||
-      r.course_name?.toLowerCase().includes(q) ||
-      r.group?.toLowerCase().includes(q) ||
-      r.group_name?.toLowerCase().includes(q) ||
-      r.salary_type?.toLowerCase().includes(q) ||
-      r.salary_type_label?.toLowerCase().includes(q) ||
-      r.calc_setting?.toLowerCase().includes(q)
-    );
-  });
+const MONTH_NAMES = ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь'];
+const monthTitle = computed(() => {
+  const [y, m] = selectedMonth.value.split('-').map(Number);
+  return m ? `${MONTH_NAMES[m - 1]} ${y}` : selectedMonth.value;
 });
 
-let salarySearchDebounce: ReturnType<typeof setTimeout> | null = null;
-watch(
-  () => filters.q,
-  () => {
-    if (salarySearchDebounce) clearTimeout(salarySearchDebounce);
-    salarySearchDebounce = setTimeout(() => {
-      void loadRows();
-    }, 400);
-  },
-);
-
-const form = reactive({
-  teacher_name: '',
-  salary_type: 'fixed' as (typeof SALARY_TYPES)[number]['value'],
-  amount: 0,
-  course_name: '',
-  group_name: '',
-});
-
-const isReadOnly = computed(() => Boolean(detailRow.value && !editingRow.value));
-const panelTitle = computed(() =>
-  editingRow.value ? 'Edit salary setting' : detailRow.value ? 'Salary details' : 'Add salary setting',
-);
-const tableRows = computed(() =>
-  filteredRows.value.map((r) => ({
-    id: r.id,
-    calc_setting: r.calc_setting,
-    salary_type: r.salary_type_label,
-    amount: r.amount.toLocaleString(),
-    course: r.course,
-    group: r.group,
-    teacher: r.teacher,
-    created_by: r.created_by,
-  })),
-);
-
-// --- Payroll methods ---
 async function loadPayroll() {
   payrollLoading.value = true;
+  payrollError.value = '';
   try {
-    const { data } = await client.get<ApiEnvelope<{ month: string; summary: PayrollSummary; rows: PayrollRow[] }>>(
-      '/finance/payroll',
-      { params: { month: selectedMonth.value } },
-    );
+    const { data } = await client.get<
+      ApiEnvelope<{ month: string; closed: ClosedInfo | null; can_close: boolean; summary: PayrollSummary; rows: PayrollRow[] }>
+    >('/finance/payroll', { params: { month: selectedMonth.value } });
     payrollSummary.value = data.data.summary;
     payrollRows.value = data.data.rows;
+    monthClosed.value = data.data.closed;
+    canClose.value = data.data.can_close;
+  } catch (err: any) {
+    payrollError.value = err?.response?.data?.message || 'Не удалось загрузить ведомость';
   } finally {
     payrollLoading.value = false;
   }
@@ -171,625 +142,831 @@ async function loadPayroll() {
 
 function shiftMonth(delta: number) {
   const [y, m] = selectedMonth.value.split('-').map(Number);
-  const date = new Date(y, m - 1 + delta, 1);
-  const newY = date.getFullYear();
-  const newM = String(date.getMonth() + 1).padStart(2, '0');
-  selectedMonth.value = `${newY}-${newM}`;
+  const d = new Date(y, m - 1 + delta, 1);
+  selectedMonth.value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
   void loadPayroll();
 }
 
-function setThisMonth() {
-  selectedMonth.value = currentMonthIso();
-  void loadPayroll();
+function statusLabel(row: PayrollRow) {
+  if (row.status === 'paid') return row.overpaid ? `Выплачено (+${money(row.overpaid)} сверх)` : 'Выплачено';
+  if (row.status === 'partial') return 'Частично';
+  if (row.status === 'unpaid') return 'Не выплачено';
+  return '—';
 }
 
-function openPayModal(row: PayrollRow) {
-  payTeacher.value = row;
-  payForm.amount = row.balance > 0 ? row.balance : row.accrued;
-  payForm.method = 'cash';
-  payForm.comment = `Зарплата за ${selectedMonth.value}: ${row.teacher_name}`;
-  payError.value = '';
-  showPayModal.value = true;
+function statusClass(row: PayrollRow) {
+  if (row.status === 'paid') return 'bg-emerald-50 text-emerald-700';
+  if (row.status === 'partial') return 'bg-amber-50 text-amber-700';
+  if (row.status === 'unpaid') return 'bg-rose-50 text-rose-700';
+  return 'bg-fb-canvas text-fb-secondary';
 }
 
-async function submitSalaryPayment() {
-  if (!payTeacher.value) return;
-  if (payForm.amount <= 0) {
-    payError.value = 'Укажите положительную сумму к выплате';
+// Pay
+const branches = ref<Option[]>([]);
+const payModal = reactive({
+  show: false,
+  row: null as PayrollRow | null,
+  amount: 0,
+  method: 'cash' as 'cash' | 'card' | 'transfer',
+  comment: '',
+  branch_id: '' as number | '',
+  force: false,
+  overpay: false,
+  error: '',
+  saving: false,
+});
+
+const payNeedsBranch = computed(() => payModal.row?.kind === 'staff' && !payModal.row.branch_id);
+
+function openPay(row: PayrollRow) {
+  payModal.row = row;
+  payModal.amount = row.balance > 0 ? row.balance : 0;
+  payModal.method = 'cash';
+  payModal.comment = `Зарплата за ${selectedMonth.value}: ${row.teacher_name}`;
+  payModal.branch_id = '';
+  payModal.force = false;
+  payModal.overpay = false;
+  payModal.error = '';
+  payModal.show = true;
+}
+
+async function submitPay() {
+  if (!payModal.row) return;
+  if (!Number.isInteger(payModal.amount) || payModal.amount <= 0) {
+    payModal.error = 'Сумма — целое положительное число.';
     return;
   }
-  paySaving.value = true;
-  payError.value = '';
+  if (payNeedsBranch.value && payModal.branch_id === '') {
+    payModal.error = 'Выберите филиал, на который записать зарплату.';
+    return;
+  }
+  payModal.saving = true;
+  payModal.error = '';
   try {
     await client.post('/finance/payroll/pay', {
-      teacher_id: payTeacher.value.teacher_id,
-      amount: payForm.amount,
-      method: payForm.method,
+      teacher_id: payModal.row.person_id,
+      amount: payModal.amount,
+      method: payModal.method,
       month: selectedMonth.value,
-      comment: payForm.comment,
+      comment: payModal.comment,
+      ...(payModal.branch_id !== '' ? { branch_id: payModal.branch_id } : {}),
+      ...(payModal.force ? { force: true } : {}),
     });
-    showPayModal.value = false;
+    payModal.show = false;
     await loadPayroll();
   } catch (err: any) {
-    payError.value = err.response?.data?.message || err.response?.data?.error || 'Не удалось провести выплату';
+    const data = err?.response?.data;
+    payModal.overpay = data?.code === 'overpayment';
+    payModal.error = payModal.overpay
+      ? `Это больше начисленного: к выплате осталось ${money(data?.balance)} сум.`
+      : data?.message || 'Не удалось провести выплату';
   } finally {
-    paySaving.value = false;
+    payModal.saving = false;
   }
 }
 
-// --- Settings methods ---
-function resetForm() {
-  form.teacher_name = '';
-  form.salary_type = 'fixed';
-  form.amount = 0;
-  form.course_name = '';
-  form.group_name = '';
-  formError.value = '';
-  editingRow.value = null;
-  detailRow.value = null;
-}
-
-function fillForm(row: SalaryRow) {
-  form.teacher_name = row.teacher_name;
-  form.salary_type = row.salary_type as (typeof SALARY_TYPES)[number]['value'];
-  form.amount = row.amount;
-  form.course_name = row.course_name;
-  form.group_name = row.group_name;
-}
-
-async function loadRows() {
-  loading.value = true;
+async function cancelPayout(row: PayrollRow, payout: Payout) {
+  if (!payout.id) return;
+  if (!window.confirm(`Отменить выплату ${money(payout.amount)} сум (${row.teacher_name})? Запись в расходах тоже будет удалена.`)) return;
   try {
-    const params: Record<string, string> = {};
-    if (filters.q.trim()) params.q = filters.q.trim();
-    const { data } = await client.get<ApiEnvelope<SalaryRow[]>>('/salary-settings', { params });
-    rows.value = data.data;
-  } finally {
-    loading.value = false;
+    await client.delete(`/finance/payroll/payouts/${payout.id}`);
+    await loadPayroll();
+  } catch (err: any) {
+    window.alert(err?.response?.data?.message || 'Не удалось отменить выплату');
   }
 }
 
-function openCreate() {
-  resetForm();
-  showPanel.value = true;
+// Close / reopen the month (CEO only)
+const monthModal = reactive({
+  show: false,
+  mode: 'close' as 'close' | 'reopen',
+  reason: '',
+  error: '',
+  saving: false,
+});
+
+function openMonthModal(mode: 'close' | 'reopen') {
+  monthModal.mode = mode;
+  monthModal.reason = '';
+  monthModal.error = '';
+  monthModal.show = true;
 }
 
-async function openDetail(id: number) {
-  resetForm();
-  showPanel.value = true;
-  panelLoading.value = true;
-  try {
-    const { data } = await client.get<ApiEnvelope<SalaryRow>>(`/salary-settings/${id}`);
-    detailRow.value = data.data;
-    fillForm(data.data);
-  } finally {
-    panelLoading.value = false;
-  }
-}
-
-function startEdit() {
-  if (detailRow.value) editingRow.value = detailRow.value;
-}
-
-function closePanel() {
-  showPanel.value = false;
-  resetForm();
-}
-
-async function loadTeachers() {
-  try {
-    const { data } = await client.get<ApiEnvelope<{ id: number; name: string }[]>>('/user', {
-      params: { user_type: 'teacher' },
-    });
-    teachers.value = data.data.map((t) => ({ id: t.id, name: t.name }));
-  } catch {
-    // fallback
-  }
-}
-
-async function submitForm() {
-  formError.value = '';
-  if (!form.teacher_name.trim()) {
-    formError.value = 'Teacher name is required';
+async function submitMonth() {
+  if (monthModal.mode === 'reopen' && monthModal.reason.trim().length < 3) {
+    monthModal.error = 'Укажите причину, зачем открываете месяц.';
     return;
   }
-  saving.value = true;
+  monthModal.saving = true;
+  monthModal.error = '';
   try {
-    const payload = {
-      teacher_name: form.teacher_name.trim(),
-      salary_type: form.salary_type,
-      amount: form.amount,
-      course_name: form.course_name.trim(),
-      group_name: form.group_name.trim(),
-    };
-    if (editingRow.value) {
-      await client.patch(`/salary-settings/${editingRow.value.id}`, payload);
+    await client.post(`/finance/months/${monthModal.mode}`, {
+      month: selectedMonth.value,
+      ...(monthModal.mode === 'reopen' ? { reason: monthModal.reason.trim() } : {}),
+    });
+    monthModal.show = false;
+    await loadPayroll();
+  } catch (err: any) {
+    monthModal.error = err?.response?.data?.message || 'Не получилось';
+  } finally {
+    monthModal.saving = false;
+  }
+}
+
+// Salary correction (CEO only): + or − with a reason, shown in the row
+const adjModal = reactive({
+  show: false,
+  row: null as PayrollRow | null,
+  sign: 1 as 1 | -1,
+  amount: '' as number | '',
+  reason: '',
+  error: '',
+  saving: false,
+});
+
+function openAdjustment(row: PayrollRow) {
+  adjModal.row = row;
+  adjModal.sign = 1;
+  adjModal.amount = '';
+  adjModal.reason = '';
+  adjModal.error = '';
+  adjModal.show = true;
+}
+
+async function submitAdjustment() {
+  if (!adjModal.row) return;
+  if (!Number.isInteger(adjModal.amount) || Number(adjModal.amount) <= 0) {
+    adjModal.error = 'Сумма — целое положительное число.';
+    return;
+  }
+  if (adjModal.reason.trim().length < 3) {
+    adjModal.error = 'Укажите причину поправки.';
+    return;
+  }
+  adjModal.saving = true;
+  adjModal.error = '';
+  try {
+    await client.post('/finance/payroll/adjustments', {
+      person_id: adjModal.row.person_id,
+      month: selectedMonth.value,
+      amount: adjModal.sign * Number(adjModal.amount),
+      reason: adjModal.reason.trim(),
+    });
+    adjModal.show = false;
+    await loadPayroll();
+  } catch (err: any) {
+    adjModal.error = err?.response?.data?.message || 'Не удалось сохранить поправку';
+  } finally {
+    adjModal.saving = false;
+  }
+}
+
+async function deleteAdjustment(row: PayrollRow, adj: Adjustment) {
+  if (!window.confirm(`Удалить поправку ${adj.amount > 0 ? '+' : '−'}${money(Math.abs(adj.amount))} сум (${row.teacher_name})?`)) return;
+  try {
+    await client.delete(`/finance/payroll/adjustments/${adj.id}`);
+    await loadPayroll();
+  } catch (err: any) {
+    window.alert(err?.response?.data?.message || 'Не удалось удалить поправку');
+  }
+}
+
+// ================= Rates =================
+const rates = ref<SalaryRow[]>([]);
+const ratesLoading = ref(true);
+const teachers = ref<Option[]>([]);
+const staff = ref<Option[]>([]);
+const groups = ref<Option[]>([]);
+const courses = ref<Option[]>([]);
+
+const panel = reactive({
+  show: false,
+  editing: null as SalaryRow | null,
+  person_id: '' as number | '',
+  amount: '' as number | '',
+  course_id: '' as number | '',
+  group_id: '' as number | '',
+  effective_from: '',
+  effective_to: '',
+  error: '',
+  saving: false,
+});
+
+const panelIsTeacher = computed(() => teachers.value.some((t) => t.id === panel.person_id));
+
+async function loadRates() {
+  ratesLoading.value = true;
+  try {
+    const { data } = await client.get<ApiEnvelope<SalaryRow[]>>('/salary-settings');
+    rates.value = data.data;
+  } finally {
+    ratesLoading.value = false;
+  }
+}
+
+async function loadOptions() {
+  const safe = async <T,>(url: string, params?: Record<string, string>) => {
+    try {
+      const { data } = await client.get<ApiEnvelope<T[]>>(url, { params });
+      return data.data;
+    } catch {
+      return [] as T[];
+    }
+  };
+  const [t, s, g, c, b] = await Promise.all([
+    safe<{ id: number; name: string }>('/user', { user_type: 'teacher' }),
+    safe<{ id: number; name: string }>('/user', { user_type: 'staff' }),
+    safe<{ id: number; name: string }>('/groups'),
+    safe<{ id: number; name: string }>('/courses'),
+    safe<{ id: number; name: string }>('/branch'),
+  ]);
+  teachers.value = t.map((x) => ({ id: x.id, name: x.name }));
+  staff.value = s.map((x) => ({ id: x.id, name: x.name }));
+  groups.value = g.map((x) => ({ id: x.id, name: x.name }));
+  courses.value = c.map((x) => ({ id: x.id, name: x.name }));
+  branches.value = b.map((x) => ({ id: x.id, name: x.name }));
+}
+
+function rateText(r: SalaryRow) {
+  return r.salary_type === 'percent' ? `${r.amount}%` : `${money(r.amount)} сум / мес`;
+}
+
+function rateScope(r: SalaryRow) {
+  if (r.person_kind === 'staff') return 'Фикс в месяц';
+  if (r.group_id) return `Группа: ${r.group}`;
+  if (r.course_id) return `Курс: ${r.course}`;
+  return 'Общий процент учителя';
+}
+
+function openRate(r?: SalaryRow) {
+  panel.editing = r ?? null;
+  panel.person_id = r?.teacher_id ?? '';
+  panel.amount = r ? r.amount : '';
+  panel.course_id = r?.course_id ?? '';
+  panel.group_id = r?.group_id ?? '';
+  panel.effective_from = r?.effective_from ?? '';
+  panel.effective_to = r?.effective_to ?? '';
+  panel.error = '';
+  panel.show = true;
+}
+
+async function saveRate() {
+  panel.error = '';
+  if (panel.person_id === '') {
+    panel.error = 'Выберите учителя или сотрудника.';
+    return;
+  }
+  if (!Number.isInteger(panel.amount) || Number(panel.amount) < 0) {
+    panel.error = panelIsTeacher.value ? 'Процент — целое число от 0 до 100.' : 'Сумма — целое число, не меньше 0.';
+    return;
+  }
+  if (panelIsTeacher.value && Number(panel.amount) > 100) {
+    panel.error = 'Процент — целое число от 0 до 100.';
+    return;
+  }
+  const payload = {
+    teacher_id: panel.person_id,
+    salary_type: panelIsTeacher.value ? 'percent' : 'fixed',
+    amount: panel.amount,
+    course_id: panelIsTeacher.value && panel.course_id !== '' ? panel.course_id : null,
+    group_id: panelIsTeacher.value && panel.group_id !== '' ? panel.group_id : null,
+    effective_from: panel.effective_from || null,
+    effective_to: panel.effective_to || null,
+  };
+  panel.saving = true;
+  try {
+    if (panel.editing) {
+      await client.patch(`/salary-settings/${panel.editing.id}`, payload);
     } else {
       await client.post('/salary-settings', payload);
     }
-    closePanel();
-    await loadRows();
-    await loadPayroll();
+    panel.show = false;
+    await Promise.all([loadRates(), loadPayroll()]);
   } catch (err: any) {
-    formError.value = err.response?.data?.message || err.response?.data?.error || 'Could not save';
+    panel.error = err?.response?.data?.message || 'Не удалось сохранить';
   } finally {
-    saving.value = false;
+    panel.saving = false;
   }
 }
 
-async function deleteRow() {
-  if (!detailRow.value || !window.confirm('Delete this salary setting?')) return;
-  deleting.value = true;
+async function deleteRate() {
+  if (!panel.editing || !window.confirm('Удалить эту ставку?')) return;
   try {
-    await client.delete(`/salary-settings/${detailRow.value.id}`);
-    closePanel();
-    await loadRows();
-    await loadPayroll();
-  } finally {
-    deleting.value = false;
+    await client.delete(`/salary-settings/${panel.editing.id}`);
+    panel.show = false;
+    await Promise.all([loadRates(), loadPayroll()]);
+  } catch (err: any) {
+    panel.error = err?.response?.data?.message || 'Не удалось удалить';
   }
 }
 
 onMounted(async () => {
-  await Promise.all([loadPayroll(), loadRows(), loadTeachers()]);
+  await Promise.all([loadPayroll(), loadRates(), loadOptions()]);
 });
 </script>
 
 <template>
   <div class="space-y-6">
-    <!-- Header & Tab Navigation -->
     <div class="flex flex-wrap items-center justify-between gap-4">
       <div>
-        <h1 class="text-2xl font-bold text-fb-text">Зарплаты преподавателей</h1>
+        <h1 class="text-2xl font-bold text-fb-text">Зарплаты</h1>
         <p class="mt-0.5 text-sm text-fb-secondary">
-          Зарплатная ведомость, расчет начислений и управление ставками оплаты
+          Учителя — процент по проведённым урокам, сотрудники — фиксированная сумма в месяц
         </p>
       </div>
-
-      <div class="flex items-center gap-2">
-        <button
-          v-if="activeTab === 'settings' && canWriteFinance"
-          type="button"
-          class="rounded-lg bg-fb-blue px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-fb-hoverBtn transition-colors"
-          @click="openCreate"
-        >
-          + Добавить ставку
-        </button>
-      </div>
+      <button
+        v-if="activeTab === 'settings' && canWriteFinance"
+        type="button"
+        class="rounded-lg bg-fb-blue px-4 py-2 text-sm font-semibold text-white shadow-sm"
+        @click="openRate()"
+      >
+        + Добавить ставку
+      </button>
     </div>
 
-    <!-- Tabs Switcher -->
     <div class="flex border-b border-fb-line">
       <button
         type="button"
-        class="border-b-2 px-6 py-3 text-sm font-semibold transition-all"
-        :class="
-          activeTab === 'payroll'
-            ? 'border-fb-blue text-fb-blue'
-            : 'border-transparent text-fb-secondary hover:text-fb-text'
-        "
+        class="border-b-2 px-6 py-3 text-sm font-semibold"
+        :class="activeTab === 'payroll' ? 'border-fb-blue text-fb-blue' : 'border-transparent text-fb-secondary'"
         @click="activeTab = 'payroll'"
       >
-        📑 Зарплатная ведомость
+        📑 Ведомость
       </button>
       <button
         type="button"
-        class="border-b-2 px-6 py-3 text-sm font-semibold transition-all"
-        :class="
-          activeTab === 'settings'
-            ? 'border-fb-blue text-fb-blue'
-            : 'border-transparent text-fb-secondary hover:text-fb-text'
-        "
+        class="border-b-2 px-6 py-3 text-sm font-semibold"
+        :class="activeTab === 'settings' ? 'border-fb-blue text-fb-blue' : 'border-transparent text-fb-secondary'"
         @click="activeTab = 'settings'"
       >
-        ⚙️ Настройки ставок ({{ rows.length }})
+        ⚙️ Ставки ({{ rates.length }})
       </button>
     </div>
 
-    <!-- ================= TAB 1: PAYROLL ================= -->
+    <!-- ================= Payroll ================= -->
     <div v-if="activeTab === 'payroll'" class="space-y-6">
-      <!-- Month Controls -->
-      <div class="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-fb-line bg-fb-card p-4">
-        <div class="flex items-center gap-3">
-          <span class="text-sm font-semibold text-fb-text">Период:</span>
-          <div class="flex items-center gap-1 rounded-xl border border-fb-line bg-white p-1">
-            <button
-              type="button"
-              class="rounded-lg px-2.5 py-1 text-xs text-fb-secondary hover:bg-fb-canvas hover:text-fb-text"
-              @click="shiftMonth(-1)"
-            >
-              ◀
-            </button>
-            <input
-              v-model="selectedMonth"
-              type="month"
-              class="border-none bg-transparent px-2 py-0.5 text-sm font-bold text-fb-text focus:outline-none"
-              @change="loadPayroll"
-            />
-            <button
-              type="button"
-              class="rounded-lg px-2.5 py-1 text-xs text-fb-secondary hover:bg-fb-canvas hover:text-fb-text"
-              @click="shiftMonth(1)"
-            >
-              ▶
-            </button>
-          </div>
-          <button
-            type="button"
-            class="rounded-lg border border-fb-line px-3 py-1 text-xs font-medium text-fb-secondary hover:bg-fb-canvas"
-            @click="setThisMonth"
-          >
-            Текущий месяц
-          </button>
+      <div class="flex flex-wrap items-center gap-3 rounded-2xl border border-fb-line bg-fb-card p-4">
+        <span class="text-sm font-semibold text-fb-text">Месяц:</span>
+        <div class="flex items-center gap-1 rounded-xl border border-fb-line bg-white p-1">
+          <button type="button" class="rounded-lg px-2.5 py-1 text-xs text-fb-secondary hover:bg-fb-canvas" @click="shiftMonth(-1)">◀</button>
+          <input v-model="selectedMonth" type="month" class="border-none bg-transparent px-2 py-0.5 text-sm font-bold focus:outline-none" @change="loadPayroll" />
+          <button type="button" class="rounded-lg px-2.5 py-1 text-xs text-fb-secondary hover:bg-fb-canvas" @click="shiftMonth(1)">▶</button>
         </div>
-
-        <button
-          type="button"
-          class="rounded-lg border border-fb-line px-3.5 py-1.5 text-xs font-semibold text-fb-secondary hover:text-fb-text"
-          @click="loadPayroll"
+        <span
+          v-if="monthClosed"
+          class="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700"
         >
-          🔄 Обновить расчет
+          🔒 Месяц закрыт
+        </span>
+        <button
+          v-if="auth.isCeo && canClose"
+          type="button"
+          class="ml-auto rounded-lg border border-slate-400 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-fb-canvas"
+          @click="openMonthModal('close')"
+        >
+          🔒 Закрыть {{ monthTitle }}
+        </button>
+        <button
+          v-if="auth.isCeo && monthClosed"
+          type="button"
+          class="ml-auto rounded-lg border border-rose-300 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-50"
+          @click="openMonthModal('reopen')"
+        >
+          Открыть месяц
         </button>
       </div>
 
-      <!-- Summary KPI Cards -->
-      <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <div class="rounded-2xl border border-fb-line bg-fb-card p-5 shadow-sm">
-          <div class="text-xs font-semibold uppercase tracking-wider text-fb-secondary">Всего начислено</div>
-          <div class="mt-2 text-2xl font-black text-fb-text">
-            {{ payrollSummary.total_accrued.toLocaleString() }} <span class="text-xs font-semibold text-fb-secondary">UZS</span>
-          </div>
-          <div class="mt-1 text-xs text-fb-secondary">По формулам ставок преподавателей</div>
-        </div>
+      <div v-if="monthClosed" class="rounded-2xl border border-slate-300 bg-slate-50 px-5 py-3 text-sm text-slate-700">
+        <strong class="capitalize">{{ monthTitle }}</strong> закрыт {{ monthClosed.closed_at }}{{ monthClosed.closed_by ? ` (${monthClosed.closed_by})` : '' }}.
+        Зарплаты зафиксированы и не пересчитываются. Оплаты, расходы, изъятия и отметки учителей с датой этого месяца
+        менять нельзя. Исправление — только «Поправкой» (CEO) или открыв месяц.
+      </div>
 
+      <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <div class="rounded-2xl border border-fb-line bg-fb-card p-5 shadow-sm">
-          <div class="text-xs font-semibold uppercase tracking-wider text-emerald-700">Выплачено за месяц</div>
-          <div class="mt-2 text-2xl font-black text-emerald-700">
-            {{ payrollSummary.total_paid.toLocaleString() }} <span class="text-xs font-semibold text-fb-secondary">UZS</span>
-          </div>
-          <div class="mt-1 text-xs text-fb-secondary">Зафиксировано в кассе / расходах</div>
+          <div class="text-xs font-semibold uppercase tracking-wider text-fb-secondary">Начислено</div>
+          <div class="mt-2 text-2xl font-black text-fb-text">{{ money(payrollSummary.total_accrued) }} <span class="text-xs text-fb-secondary">UZS</span></div>
         </div>
-
         <div class="rounded-2xl border border-fb-line bg-fb-card p-5 shadow-sm">
-          <div class="text-xs font-semibold uppercase tracking-wider text-rose-700">Остаток к выплате</div>
-          <div class="mt-2 text-2xl font-black text-rose-700">
-            {{ payrollSummary.total_balance.toLocaleString() }} <span class="text-xs font-semibold text-fb-secondary">UZS</span>
-          </div>
-          <div class="mt-1 text-xs text-fb-secondary">Текущая задолженность центра</div>
+          <div class="text-xs font-semibold uppercase tracking-wider text-emerald-700">Выплачено</div>
+          <div class="mt-2 text-2xl font-black text-emerald-700">{{ money(payrollSummary.total_paid) }} <span class="text-xs text-fb-secondary">UZS</span></div>
         </div>
-
         <div class="rounded-2xl border border-fb-line bg-fb-card p-5 shadow-sm">
-          <div class="text-xs font-semibold uppercase tracking-wider text-fb-secondary">Преподавателей в штате</div>
-          <div class="mt-2 text-2xl font-black text-fb-text">
-            {{ payrollSummary.teachers_count }}
-          </div>
-          <div class="mt-1 text-xs text-fb-secondary">Активных преподавателей компании</div>
+          <div class="text-xs font-semibold uppercase tracking-wider text-rose-700">Осталось выплатить</div>
+          <div class="mt-2 text-2xl font-black text-rose-700">{{ money(payrollSummary.total_balance) }} <span class="text-xs text-fb-secondary">UZS</span></div>
+          <div class="mt-1 text-xs text-fb-secondary">Сумма долгов каждому человеку</div>
         </div>
       </div>
 
-      <!-- Payroll Table -->
       <div class="overflow-hidden rounded-2xl border border-fb-line bg-fb-card shadow-sm">
-        <div v-if="payrollLoading" class="p-12 text-center text-fb-secondary">
-          Вычисление зарплатной ведомости…
-        </div>
-        <div v-else-if="!payrollRows.length" class="p-12 text-center text-fb-secondary">
-          Преподавателей не найдено
-        </div>
-        <div v-else class="overflow-x-auto">
-          <table class="w-full text-left text-sm">
-            <thead class="border-b border-fb-line bg-fb-canvas text-xs uppercase tracking-wider font-semibold text-fb-secondary">
-              <tr>
-                <th class="px-5 py-4">Преподаватель</th>
-                <th class="px-5 py-4">Группы</th>
-                <th class="px-5 py-4 text-center">Уроков</th>
-                <th class="px-5 py-4 text-center">Учеников</th>
-                <th class="px-5 py-4">Ставка</th>
-                <th class="px-5 py-4 text-right">Начислено</th>
-                <th class="px-5 py-4 text-right">Выплачено</th>
-                <th class="px-5 py-4 text-right">Остаток</th>
-                <th class="px-5 py-4 text-center">Статус</th>
-                <th class="px-5 py-4 text-right">Действие</th>
-              </tr>
-            </thead>
-            <tbody class="divide-y divide-fb-line">
-              <tr
-                v-for="row in payrollRows"
-                :key="row.teacher_id"
-                class="hover:bg-fb-canvas/50 transition-colors"
-              >
-                <!-- Teacher -->
-                <td class="px-5 py-4 font-semibold text-fb-text">
-                  <div>{{ row.teacher_name }}</div>
-                  <div class="text-xs font-normal text-fb-secondary">{{ row.phone }}</div>
+        <div v-if="payrollLoading" class="p-12 text-center text-fb-secondary">Считаю…</div>
+        <div v-else-if="payrollError" class="p-12 text-center text-fb-danger">{{ payrollError }}</div>
+        <div v-else-if="!payrollRows.length" class="p-12 text-center text-fb-secondary">Нет данных за этот месяц</div>
+        <table v-else class="w-full text-left text-sm">
+          <thead class="border-b border-fb-line bg-fb-canvas text-xs font-semibold uppercase tracking-wider text-fb-secondary">
+            <tr>
+              <th class="px-5 py-3">Кто</th>
+              <th class="px-5 py-3 text-right">Начислено</th>
+              <th class="px-5 py-3 text-right">Выплачено</th>
+              <th class="px-5 py-3 text-right">Осталось</th>
+              <th class="px-5 py-3">Статус</th>
+              <th class="px-5 py-3 text-right" />
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-fb-line">
+            <template v-for="row in payrollRows" :key="row.person_id">
+              <tr class="hover:bg-fb-hover/40">
+                <td class="px-5 py-3">
+                  <div class="font-semibold text-fb-text">
+                    {{ row.teacher_name }}
+                    <span v-if="!row.is_active" class="ml-1 rounded bg-gray-100 px-1.5 py-0.5 text-[11px] font-medium text-gray-600">в архиве</span>
+                  </div>
+                  <div class="text-xs text-fb-secondary">{{ row.kind_label }}</div>
                 </td>
-
-                <!-- Groups -->
-                <td class="px-5 py-4 text-xs text-fb-secondary max-w-[180px] truncate" :title="row.groups_names">
-                  {{ row.groups_names }}
-                </td>
-
-                <!-- Lessons count -->
-                <td class="px-5 py-4 text-center text-xs font-medium">
-                  {{ row.lessons_count }}
-                </td>
-
-                <!-- Students count -->
-                <td class="px-5 py-4 text-center text-xs font-medium">
-                  {{ row.students_count }}
-                </td>
-
-                <!-- Salary Type / Rate -->
-                <td class="px-5 py-4 text-xs">
-                  <div class="font-medium text-fb-text">{{ row.salary_type_label }}</div>
-                  <div v-if="row.rate_amount" class="text-fb-secondary">
-                    {{ row.rate_amount.toLocaleString() }} {{ row.salary_type === 'percent' ? '%' : 'UZS' }}
+                <td class="px-5 py-3 text-right font-semibold">
+                  {{ money(row.accrued) }}
+                  <div v-if="row.adjustments.length" class="text-[11px] font-normal text-fb-secondary">
+                    в т.ч. поправки {{ row.accrued - row.accrued_base >= 0 ? '+' : '−' }}{{ money(Math.abs(row.accrued - row.accrued_base)) }}
                   </div>
                 </td>
-
-                <!-- Accrued -->
-                <td class="px-5 py-4 text-right font-bold text-fb-text">
-                  {{ row.accrued.toLocaleString() }}
+                <td class="px-5 py-3 text-right text-emerald-700">{{ money(row.paid) }}</td>
+                <td class="px-5 py-3 text-right font-semibold text-rose-700">{{ money(row.balance) }}</td>
+                <td class="px-5 py-3">
+                  <span class="rounded-full px-2.5 py-0.5 text-xs font-semibold" :class="statusClass(row)">{{ statusLabel(row) }}</span>
                 </td>
-
-                <!-- Paid -->
-                <td class="px-5 py-4 text-right font-medium text-emerald-700">
-                  {{ row.paid.toLocaleString() }}
-                </td>
-
-                <!-- Balance -->
-                <td
-                  class="px-5 py-4 text-right font-black"
-                  :class="row.balance > 0 ? 'text-rose-700' : 'text-fb-secondary'"
-                >
-                  {{ row.balance.toLocaleString() }}
-                </td>
-
-                <!-- Status Badge -->
-                <td class="px-5 py-4 text-center">
-                  <span
-                    v-if="row.status === 'paid'"
-                    class="rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-semibold text-emerald-800"
+                <td class="whitespace-nowrap px-5 py-3 text-right">
+                  <button
+                    type="button"
+                    class="mr-2 text-xs font-medium text-fb-blue hover:underline"
+                    @click="expanded = expanded === row.person_id ? null : row.person_id"
                   >
-                    Выплачено
-                  </span>
-                  <span
-                    v-else-if="row.status === 'partial'"
-                    class="rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-semibold text-amber-800"
-                  >
-                    Частично
-                  </span>
-                  <span
-                    v-else-if="row.status === 'unpaid'"
-                    class="rounded-full bg-rose-100 px-2.5 py-0.5 text-xs font-semibold text-rose-800"
-                  >
-                    К выплате
-                  </span>
-                  <span
-                    v-else
-                    class="rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-500"
-                  >
-                    —
-                  </span>
-                </td>
-
-                <!-- Action Button -->
-                <td class="px-5 py-4 text-right">
+                    {{ expanded === row.person_id ? 'Скрыть' : 'Как посчитано' }}
+                  </button>
                   <button
                     v-if="canWriteFinance"
                     type="button"
-                    class="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-40 transition-colors"
-                    :disabled="row.accrued === 0 && row.balance === 0"
-                    @click="openPayModal(row)"
+                    class="rounded-lg bg-fb-blue px-3 py-1.5 text-xs font-semibold text-white"
+                    @click="openPay(row)"
                   >
-                    <span>💸</span>
-                    <span>Выплатить</span>
+                    Выплатить
                   </button>
                 </td>
               </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-
-    <!-- ================= TAB 2: SALARY SETTINGS ================= -->
-    <div v-else-if="activeTab === 'settings'" class="space-y-4">
-      <div class="flex flex-wrap items-end gap-3 rounded-xl border border-fb-line bg-fb-card p-4">
-        <div class="min-w-[240px] flex-1">
-          <label class="mb-1 block text-xs text-fb-secondary">Search</label>
-          <div class="relative">
-            <input
-              v-model="filters.q"
-              type="search"
-              placeholder="Search by teacher, course, group, or salary type…"
-              class="w-full h-10 pl-9 pr-4 rounded-lg border border-fb-line text-sm focus:outline-none focus:border-fb-blue"
-              @keydown.enter="loadRows"
-            />
-            <svg class="absolute left-3 top-2.5 text-fb-secondary" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="11" cy="11" r="8" />
-              <path d="M21 21l-4.35-4.35" />
-            </svg>
-          </div>
-        </div>
-        <button type="button" class="rounded-lg border border-fb-line px-4 py-2 text-sm" @click="loadRows">Apply</button>
-      </div>
-
-      <div class="overflow-hidden rounded-xl border border-fb-line bg-fb-card">
-        <div v-if="loading" class="p-8 text-center text-fb-secondary">Loading…</div>
-        <div v-else-if="!tableRows.length" class="p-8 text-center text-fb-icon">
-          {{ rows.length ? 'No salary settings match your search.' : 'No salary settings' }}
-        </div>
-        <table v-else class="w-full text-base">
-          <thead class="border-b bg-fb-canvas">
-            <tr>
-              <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Calc setting</th>
-              <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Salary type</th>
-              <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Amount</th>
-              <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Course</th>
-              <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Group</th>
-              <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Teacher</th>
-              <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Creator</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="row in tableRows" :key="row.id" class="cursor-pointer border-b hover:bg-fb-hover/40" @click="openDetail(row.id)">
-              <td class="px-5 py-4">{{ row.calc_setting }}</td>
-              <td class="px-5 py-4">{{ row.salary_type }}</td>
-              <td class="px-5 py-4 font-semibold text-fb-blue">{{ row.amount }}</td>
-              <td class="px-5 py-4">{{ row.course }}</td>
-              <td class="px-5 py-4">{{ row.group }}</td>
-              <td class="px-5 py-4 font-medium">{{ row.teacher }}</td>
-              <td class="px-5 py-4 text-fb-secondary">{{ row.created_by }}</td>
-            </tr>
+              <tr v-if="expanded === row.person_id" class="bg-fb-canvas/50">
+                <td colspan="6" class="px-5 py-4">
+                  <div v-if="row.kind === 'teacher'">
+                    <p class="mb-2 text-xs text-fb-secondary">
+                      Урок = цена курса ученика (минус скидка) ÷ сколько уроков могло быть в месяце. Учитель получает свой
+                      процент с проведённых уроков, за каждый урок — только ученики, которые были в группе и не в заморозке.
+                    </p>
+                    <table class="w-full text-xs">
+                      <thead class="text-fb-secondary">
+                        <tr>
+                          <th class="py-1 text-left">Группа</th>
+                          <th class="py-1 text-left">Филиал</th>
+                          <th class="py-1 text-right">Цена курса</th>
+                          <th class="py-1 text-right">Уроков могло быть</th>
+                          <th class="py-1 text-right">Проведено</th>
+                          <th class="py-1 text-right">Ученико-уроков</th>
+                          <th class="py-1 text-right">Процент</th>
+                          <th class="py-1 text-right">Начислено</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr v-for="g in row.groups" :key="g.group_id">
+                          <td class="py-1">{{ g.group }}</td>
+                          <td class="py-1">{{ g.branch }}</td>
+                          <td class="py-1 text-right">{{ money(g.course_price) }}</td>
+                          <td class="py-1 text-right">{{ g.possible_lessons }}</td>
+                          <td class="py-1 text-right">{{ g.held_lessons }}</td>
+                          <td class="py-1 text-right">{{ g.student_lessons }}</td>
+                          <td class="py-1 text-right" :class="g.percent_scope === 'не задан' ? 'text-rose-700' : ''">
+                            {{ g.percent }}% <span class="text-fb-secondary">({{ g.percent_scope }})</span>
+                          </td>
+                          <td class="py-1 text-right font-semibold">{{ money(g.accrued) }}</td>
+                        </tr>
+                        <tr v-if="!row.groups.length"><td colspan="8" class="py-1 text-fb-secondary">Нет групп и отметок «Я пришёл» за месяц</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  <p v-else class="text-xs text-fb-secondary">
+                    Фиксированная сумма в месяц: <strong>{{ row.fixed_amount === null ? 'не задана' : money(row.fixed_amount) + ' сум' }}</strong>
+                  </p>
+                  <p v-if="row.month_closed" class="mt-2 text-[11px] text-slate-600">
+                    🔒 Посчитано при закрытии месяца — поздние изменения цен, процентов и расписания сюда не попадают.
+                  </p>
+                  <div v-if="row.adjustments.length || auth.isCeo" class="mt-3">
+                    <p class="mb-1 flex items-center gap-3 text-xs font-semibold text-fb-text">
+                      Поправки
+                      <button
+                        v-if="auth.isCeo"
+                        type="button"
+                        class="font-medium text-fb-blue hover:underline"
+                        @click="openAdjustment(row)"
+                      >
+                        + Добавить поправку
+                      </button>
+                    </p>
+                    <p v-if="!row.adjustments.length" class="text-xs text-fb-secondary">Поправок нет</p>
+                    <ul v-else class="space-y-1 text-xs">
+                      <li v-for="a in row.adjustments" :key="a.id" class="flex items-center gap-3">
+                        <span class="font-semibold" :class="a.amount >= 0 ? 'text-emerald-700' : 'text-rose-700'">
+                          {{ a.amount >= 0 ? '+' : '−' }}{{ money(Math.abs(a.amount)) }} сум
+                        </span>
+                        <span class="text-fb-secondary">{{ a.date }} · {{ a.reason }}{{ a.by ? ` · ${a.by}` : '' }}</span>
+                        <button v-if="auth.isCeo" type="button" class="text-rose-700 hover:underline" @click="deleteAdjustment(row, a)">
+                          Удалить
+                        </button>
+                      </li>
+                    </ul>
+                  </div>
+                  <div class="mt-3">
+                    <p class="mb-1 text-xs font-semibold text-fb-text">Выплаты за месяц</p>
+                    <p v-if="!row.payouts.length" class="text-xs text-fb-secondary">Выплат нет</p>
+                    <ul v-else class="space-y-1 text-xs">
+                      <li v-for="(p, idx) in row.payouts" :key="p.id ?? `legacy-${idx}`" class="flex items-center gap-3">
+                        <span class="font-semibold">{{ money(p.amount) }} сум</span>
+                        <span class="text-fb-secondary">{{ p.date }} {{ p.comment }}</span>
+                        <button
+                          v-if="canWriteFinance && p.id"
+                          type="button"
+                          class="text-rose-700 hover:underline"
+                          @click="cancelPayout(row, p)"
+                        >
+                          Отменить
+                        </button>
+                      </li>
+                    </ul>
+                  </div>
+                </td>
+              </tr>
+            </template>
           </tbody>
         </table>
       </div>
     </div>
 
-    <!-- Modal: Выплата зарплаты -->
-    <div v-if="showPayModal && payTeacher" class="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div class="fixed inset-0 bg-black/40" @click="showPayModal = false" />
-      <div class="relative w-full max-w-md rounded-2xl border border-fb-line bg-fb-card p-6 shadow-2xl">
-        <div class="flex items-center justify-between border-b border-fb-line pb-3">
-          <div>
-            <h3 class="text-base font-bold text-fb-text">Выплата зарплаты</h3>
-            <p class="text-xs text-fb-secondary mt-0.5">
-              {{ payTeacher.teacher_name }} • Период: {{ selectedMonth }}
-            </p>
-          </div>
-          <button type="button" class="text-fb-secondary hover:text-fb-text" @click="showPayModal = false">✕</button>
+    <!-- ================= Rates ================= -->
+    <div v-else class="overflow-hidden rounded-2xl border border-fb-line bg-fb-card shadow-sm">
+      <div v-if="ratesLoading" class="p-12 text-center text-fb-secondary">Загрузка…</div>
+      <div v-else-if="!rates.length" class="p-12 text-center text-fb-secondary">
+        Ставок нет. Добавьте учителю процент, сотруднику — сумму в месяц.
+      </div>
+      <table v-else class="w-full text-left text-sm">
+        <thead class="border-b border-fb-line bg-fb-canvas text-xs font-semibold uppercase tracking-wider text-fb-secondary">
+          <tr>
+            <th class="px-5 py-3">Кто</th>
+            <th class="px-5 py-3">Ставка</th>
+            <th class="px-5 py-3">На что</th>
+            <th class="px-5 py-3">Период</th>
+            <th class="px-5 py-3">Изменил</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-fb-line">
+          <tr
+            v-for="r in rates"
+            :key="r.id"
+            class="hover:bg-fb-hover/40"
+            :class="canWriteFinance ? 'cursor-pointer' : ''"
+            @click="canWriteFinance && openRate(r)"
+          >
+            <td class="px-5 py-3 font-semibold">{{ r.teacher }}</td>
+            <td class="px-5 py-3 font-semibold text-fb-blue">{{ rateText(r) }}</td>
+            <td class="px-5 py-3">{{ rateScope(r) }}</td>
+            <td class="px-5 py-3 text-xs text-fb-secondary">{{ r.effective_from || '…' }} — {{ r.effective_to || '…' }}</td>
+            <td class="px-5 py-3 text-xs text-fb-secondary">{{ r.updated_by }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Rate panel -->
+    <div v-if="panel.show" class="fixed inset-0 z-50 flex justify-end">
+      <div class="absolute inset-0 bg-black/35" @click="panel.show = false" />
+      <div class="drawer-panel-fb max-w-lg">
+        <div class="flex items-center justify-between border-b px-6 py-4">
+          <h2 class="text-lg font-semibold">{{ panel.editing ? 'Ставка' : 'Новая ставка' }}</h2>
+          <button type="button" @click="panel.show = false">✕</button>
         </div>
-
-        <form class="mt-4 space-y-4" @submit.prevent="submitSalaryPayment">
-          <div class="rounded-xl border border-fb-line bg-fb-canvas/50 p-3 text-xs space-y-1">
-            <div class="flex justify-between">
-              <span class="text-fb-secondary">Начислено за месяц:</span>
-              <span class="font-bold text-fb-text">{{ payTeacher.accrued.toLocaleString() }} UZS</span>
-            </div>
-            <div class="flex justify-between">
-              <span class="text-fb-secondary">Уже выплачено:</span>
-              <span class="font-medium text-emerald-700">{{ payTeacher.paid.toLocaleString() }} UZS</span>
-            </div>
-            <div class="flex justify-between border-t border-fb-line pt-1">
-              <span class="font-semibold text-fb-secondary">Остаток к выплате:</span>
-              <span class="font-black text-rose-700">{{ payTeacher.balance.toLocaleString() }} UZS</span>
-            </div>
-          </div>
-
+        <div class="flex-1 space-y-4 overflow-y-auto p-6">
           <div>
-            <label class="mb-1 block text-xs font-medium text-fb-secondary">Сумма выплаты (UZS)</label>
-            <input
-              v-model.number="payForm.amount"
-              type="number"
-              min="1"
-              required
-              class="w-full rounded-lg border border-fb-line px-3 py-2 text-base font-bold text-gray-950 focus:border-fb-blue focus:outline-none"
-            />
-          </div>
-
-          <div>
-            <label class="mb-1 block text-xs font-medium text-fb-secondary">Способ выплаты (Касса)</label>
-            <select
-              v-model="payForm.method"
-              class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none"
-            >
-              <option value="cash">Наличные (Касса)</option>
-              <option value="card">Банковская карта (Перевод)</option>
-              <option value="transfer">Расчетный счет (Банк)</option>
+            <label class="mb-1 block text-sm font-medium text-fb-secondary">Учитель или сотрудник</label>
+            <select v-model="panel.person_id" class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm">
+              <option value="">— Выберите —</option>
+              <optgroup label="Учителя (процент)">
+                <option v-for="t in teachers" :key="t.id" :value="t.id">{{ t.name }}</option>
+              </optgroup>
+              <optgroup label="Сотрудники (сумма в месяц)">
+                <option v-for="s in staff" :key="s.id" :value="s.id">{{ s.name }}</option>
+              </optgroup>
             </select>
           </div>
-
           <div>
-            <label class="mb-1 block text-xs font-medium text-fb-secondary">Комментарий / Назначение</label>
+            <label class="mb-1 block text-sm font-medium text-fb-secondary">
+              {{ panelIsTeacher ? 'Процент от учеников (0–100)' : 'Сумма в месяц (сум)' }}
+            </label>
             <input
-              v-model="payForm.comment"
-              type="text"
-              class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none"
+              v-model.number="panel.amount"
+              type="number"
+              min="0"
+              :max="panelIsTeacher ? 100 : undefined"
+              step="1"
+              class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm"
             />
           </div>
-
-          <p v-if="payError" class="text-xs text-fb-danger">{{ payError }}</p>
-
-          <div class="flex justify-end gap-2 border-t border-fb-line pt-4">
-            <button
-              type="button"
-              class="rounded-lg border border-fb-line px-4 py-2 text-sm font-medium text-fb-secondary hover:bg-fb-canvas"
-              @click="showPayModal = false"
-            >
-              Отмена
-            </button>
-            <button
-              type="submit"
-              class="rounded-lg bg-emerald-600 px-5 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
-              :disabled="paySaving"
-            >
-              {{ paySaving ? 'Проведение…' : 'Подтвердить выплату' }}
-            </button>
+          <template v-if="panelIsTeacher">
+            <div>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">Только для группы (необязательно)</label>
+              <select v-model="panel.group_id" class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm">
+                <option value="">— Для всех групп учителя —</option>
+                <option v-for="g in groups" :key="g.id" :value="g.id">{{ g.name }}</option>
+              </select>
+            </div>
+            <div>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">Только для курса (необязательно)</label>
+              <select v-model="panel.course_id" class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm">
+                <option value="">— Для всех курсов —</option>
+                <option v-for="c in courses" :key="c.id" :value="c.id">{{ c.name }}</option>
+              </select>
+              <p class="mt-1 text-[11px] text-fb-secondary">
+                Какой процент берётся: процент группы → процент курса → общий процент учителя.
+              </p>
+            </div>
+          </template>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">Действует с</label>
+              <input v-model="panel.effective_from" type="date" class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm" />
+            </div>
+            <div>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">по</label>
+              <input v-model="panel.effective_to" type="date" class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm" />
+            </div>
           </div>
-        </form>
+          <p v-if="panel.error" class="text-sm text-fb-danger">{{ panel.error }}</p>
+        </div>
+        <div class="flex gap-2 border-t px-6 py-4">
+          <button type="button" class="rounded-lg bg-fb-blue px-5 py-2 text-sm text-white" :disabled="panel.saving" @click="saveRate">
+            {{ panel.saving ? 'Сохраняю…' : 'Сохранить' }}
+          </button>
+          <button v-if="panel.editing" type="button" class="rounded-lg border border-red-300 px-5 py-2 text-sm text-fb-danger" @click="deleteRate">
+            Удалить
+          </button>
+          <button type="button" class="rounded-lg border px-5 py-2 text-sm" @click="panel.show = false">Отмена</button>
+        </div>
       </div>
     </div>
 
-    <!-- Drawer Panel: Salary Setting Detail / Edit / Create -->
-    <div v-if="showPanel" class="fixed inset-0 z-50 flex justify-end">
-      <div class="absolute inset-0 bg-black/35" @click="closePanel" />
-      <div class="drawer-panel-fb max-w-lg">
-        <div class="flex items-center justify-between border-b px-6 py-4">
-          <h2 class="text-lg font-semibold">{{ panelTitle }}</h2>
-          <button type="button" @click="closePanel">✕</button>
+    <!-- Pay modal -->
+    <div v-if="payModal.show" class="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
+      <div class="w-full max-w-md overflow-hidden rounded-2xl bg-fb-card shadow-2xl">
+        <div class="border-b border-fb-line px-6 py-4">
+          <h2 class="text-lg font-semibold text-fb-text">Выплата зарплаты</h2>
+          <p class="text-sm text-fb-secondary">
+            {{ payModal.row?.teacher_name }} · {{ selectedMonth }} · начислено {{ money(payModal.row?.accrued) }}, осталось
+            {{ money(payModal.row?.balance) }}
+          </p>
         </div>
-        <div v-if="panelLoading" class="p-6 text-fb-secondary">Loading…</div>
-        <form v-else class="flex flex-1 flex-col overflow-hidden" @submit.prevent="submitForm">
-          <div class="flex-1 space-y-4 overflow-y-auto p-6">
-            <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Teacher</label>
-              <select
-                v-if="!isReadOnly && teachers.length"
-                v-model="form.teacher_name"
-                class="w-full rounded-lg border px-3 py-2 text-sm"
-              >
-                <option value="">Select teacher</option>
-                <option v-for="t in teachers" :key="t.id" :value="t.name">{{ t.name }}</option>
-              </select>
-              <input
-                v-else
-                v-model="form.teacher_name"
-                :readonly="isReadOnly"
-                required
-                class="w-full rounded-lg border px-3 py-2 text-sm read-only:bg-fb-canvas"
-              />
-            </div>
-            <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Salary type</label>
-              <select v-model="form.salary_type" :disabled="isReadOnly" class="w-full rounded-lg border px-3 py-2 text-sm">
-                <option v-for="st in SALARY_TYPES" :key="st.value" :value="st.value">{{ st.label }}</option>
-              </select>
-            </div>
-            <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Amount (Fixed or % or per student)</label>
-              <input v-model.number="form.amount" type="number" :readonly="isReadOnly" required class="w-full rounded-lg border px-3 py-2 text-sm read-only:bg-fb-canvas" />
-            </div>
-            <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Course (optional)</label>
-              <input v-model="form.course_name" :readonly="isReadOnly" class="w-full rounded-lg border px-3 py-2 text-sm read-only:bg-fb-canvas" />
-            </div>
-            <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Group (optional)</label>
-              <input v-model="form.group_name" :readonly="isReadOnly" class="w-full rounded-lg border px-3 py-2 text-sm read-only:bg-fb-canvas" />
-            </div>
-            <p v-if="formError" class="text-sm text-fb-danger">{{ formError }}</p>
+        <div class="space-y-3 px-6 py-5">
+          <div>
+            <label class="mb-1 block text-sm font-medium text-fb-secondary">Сумма</label>
+            <input v-model.number="payModal.amount" type="number" min="1" step="1" class="w-full rounded-lg border border-fb-line px-3 py-2" />
           </div>
-          <div class="flex gap-2 border-t px-6 py-4">
-            <template v-if="isReadOnly && detailRow">
-              <button v-if="canWriteFinance" type="button" class="rounded-lg bg-fb-blue px-5 py-2 text-sm text-white" @click="startEdit">Edit</button>
-              <button v-if="canWriteFinance" type="button" class="rounded-lg border border-red-300 px-5 py-2 text-sm text-fb-danger" :disabled="deleting" @click="deleteRow">Delete</button>
-            </template>
-            <button v-else type="submit" class="rounded-lg bg-fb-blue px-5 py-2 text-sm text-white" :disabled="saving">
-              {{ saving ? 'Saving…' : editingRow ? 'Save' : 'Create' }}
+          <div>
+            <label class="mb-1 block text-sm font-medium text-fb-secondary">Способ</label>
+            <select v-model="payModal.method" class="w-full rounded-lg border border-fb-line px-3 py-2">
+              <option value="cash">Наличные</option>
+              <option value="card">Карта</option>
+              <option value="transfer">Перевод</option>
+            </select>
+          </div>
+          <div v-if="payNeedsBranch">
+            <label class="mb-1 block text-sm font-medium text-fb-secondary">На какой филиал записать</label>
+            <select v-model="payModal.branch_id" class="w-full rounded-lg border border-fb-line px-3 py-2">
+              <option value="">— Выберите филиал —</option>
+              <option v-for="b in branches" :key="b.id" :value="b.id">{{ b.name }}</option>
+            </select>
+          </div>
+          <p v-else-if="payModal.row?.kind === 'teacher'" class="text-[11px] text-fb-secondary">
+            В расходах выплата разложится по филиалам групп, за которые начислена зарплата.
+          </p>
+          <div>
+            <label class="mb-1 block text-sm font-medium text-fb-secondary">Комментарий</label>
+            <input v-model="payModal.comment" class="w-full rounded-lg border border-fb-line px-3 py-2" />
+          </div>
+          <label v-if="payModal.overpay && auth.isCeo" class="flex items-center gap-2 text-sm text-rose-700">
+            <input v-model="payModal.force" type="checkbox" />
+            Выплатить сверх начисленного (запишется в журнал)
+          </label>
+          <p v-if="payModal.error" class="text-sm text-fb-danger">{{ payModal.error }}</p>
+        </div>
+        <div class="flex justify-end gap-3 border-t border-fb-line px-6 py-4">
+          <button type="button" class="rounded-lg border border-fb-line px-5 py-2 text-sm" @click="payModal.show = false">Отмена</button>
+          <button
+            type="button"
+            class="rounded-lg bg-fb-blue px-5 py-2 text-sm font-medium text-white disabled:opacity-50"
+            :disabled="payModal.saving"
+            @click="submitPay"
+          >
+            {{ payModal.saving ? 'Провожу…' : 'Выплатить' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Close / reopen month modal -->
+    <div v-if="monthModal.show" class="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
+      <div class="w-full max-w-md overflow-hidden rounded-2xl bg-fb-card shadow-2xl">
+        <div class="border-b border-fb-line px-6 py-4">
+          <h2 class="text-lg font-semibold text-fb-text">
+            {{ monthModal.mode === 'close' ? 'Закрыть' : 'Открыть' }} <span>{{ monthTitle }}</span>?
+          </h2>
+        </div>
+        <div class="space-y-3 px-6 py-5 text-sm text-fb-text">
+          <template v-if="monthModal.mode === 'close'">
+            <p>После закрытия:</p>
+            <ul class="list-disc space-y-1 pl-5 text-fb-secondary">
+              <li>зарплата каждого за этот месяц сохранится как сейчас и больше не будет пересчитываться;</li>
+              <li>оплаты, возвраты, расходы, изъятия и отметки учителей с датой этого месяца нельзя будет добавить, изменить или удалить;</li>
+              <li>выплатить зарплату за этот месяц можно, как и раньше.</li>
+            </ul>
+            <p class="text-fb-secondary">Проверьте цифры перед закрытием. Открыть месяц обратно сможет только CEO.</p>
+          </template>
+          <template v-else>
+            <p class="text-fb-secondary">
+              Месяц снова станет изменяемым, а зарплаты пересчитаются по текущим данным (цены, проценты, отметки).
+              Это попадёт в журнал.
+            </p>
+            <div>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">Причина</label>
+              <input v-model="monthModal.reason" class="w-full rounded-lg border border-fb-line px-3 py-2" placeholder="Например: забыли внести аренду" />
+            </div>
+          </template>
+          <p v-if="monthModal.error" class="text-sm text-fb-danger">{{ monthModal.error }}</p>
+        </div>
+        <div class="flex justify-end gap-3 border-t border-fb-line px-6 py-4">
+          <button type="button" class="rounded-lg border border-fb-line px-5 py-2 text-sm" @click="monthModal.show = false">Отмена</button>
+          <button
+            type="button"
+            class="rounded-lg px-5 py-2 text-sm font-medium text-white disabled:opacity-50"
+            :class="monthModal.mode === 'close' ? 'bg-slate-700' : 'bg-rose-600'"
+            :disabled="monthModal.saving"
+            @click="submitMonth"
+          >
+            {{ monthModal.saving ? 'Секунду…' : monthModal.mode === 'close' ? 'Закрыть месяц' : 'Открыть месяц' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Salary correction modal -->
+    <div v-if="adjModal.show" class="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
+      <div class="w-full max-w-md overflow-hidden rounded-2xl bg-fb-card shadow-2xl">
+        <div class="border-b border-fb-line px-6 py-4">
+          <h2 class="text-lg font-semibold text-fb-text">Поправка к зарплате</h2>
+          <p class="text-sm text-fb-secondary">{{ adjModal.row?.teacher_name }} · {{ monthTitle }} · начислено {{ money(adjModal.row?.accrued) }}</p>
+        </div>
+        <div class="space-y-3 px-6 py-5">
+          <div class="flex gap-2">
+            <button
+              type="button"
+              class="flex-1 rounded-lg border px-3 py-2 text-sm font-semibold"
+              :class="adjModal.sign === 1 ? 'border-emerald-500 bg-emerald-50 text-emerald-700' : 'border-fb-line text-fb-secondary'"
+              @click="adjModal.sign = 1"
+            >
+              + Добавить
             </button>
-            <button type="button" class="rounded-lg border px-5 py-2 text-sm" @click="closePanel">Cancel</button>
+            <button
+              type="button"
+              class="flex-1 rounded-lg border px-3 py-2 text-sm font-semibold"
+              :class="adjModal.sign === -1 ? 'border-rose-500 bg-rose-50 text-rose-700' : 'border-fb-line text-fb-secondary'"
+              @click="adjModal.sign = -1"
+            >
+              − Убрать
+            </button>
           </div>
-        </form>
+          <div>
+            <label class="mb-1 block text-sm font-medium text-fb-secondary">Сумма</label>
+            <input v-model.number="adjModal.amount" type="number" min="1" step="1" class="w-full rounded-lg border border-fb-line px-3 py-2" />
+          </div>
+          <div>
+            <label class="mb-1 block text-sm font-medium text-fb-secondary">Причина</label>
+            <input v-model="adjModal.reason" class="w-full rounded-lg border border-fb-line px-3 py-2" placeholder="Например: забыли отметить урок 12.08" />
+          </div>
+          <p class="text-[11px] text-fb-secondary">Поправка видна в строке учителя и пишется в журнал.</p>
+          <p v-if="adjModal.error" class="text-sm text-fb-danger">{{ adjModal.error }}</p>
+        </div>
+        <div class="flex justify-end gap-3 border-t border-fb-line px-6 py-4">
+          <button type="button" class="rounded-lg border border-fb-line px-5 py-2 text-sm" @click="adjModal.show = false">Отмена</button>
+          <button
+            type="button"
+            class="rounded-lg bg-fb-blue px-5 py-2 text-sm font-medium text-white disabled:opacity-50"
+            :disabled="adjModal.saving"
+            @click="submitAdjustment"
+          >
+            {{ adjModal.saving ? 'Сохраняю…' : 'Сохранить' }}
+          </button>
+        </div>
       </div>
     </div>
   </div>

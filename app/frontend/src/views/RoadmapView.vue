@@ -2,7 +2,7 @@
 const milestones = [
   { status: 'done', title: 'CRM core', detail: 'Leads, students, groups, teachers' },
   { status: 'done', title: 'Finance module', detail: 'Payments, expenses, salaries, debtors' },
-  { status: 'done', title: 'Reports', detail: 'Conversion, attendance, workly, left students' },
+  { status: 'done', title: 'Reports', detail: 'Leads & conversion, attendance, left students' },
   { status: 'progress', title: 'Settings & office', detail: 'Courses, rooms, holidays, archive, staff' },
   { status: 'planned', title: 'Mobile app sync', detail: 'Teacher and parent mobile apps' },
   { status: 'planned', title: 'AI assistant', detail: 'Smart reminders and lead scoring' },

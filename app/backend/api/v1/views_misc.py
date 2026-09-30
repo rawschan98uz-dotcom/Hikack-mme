@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 
 from django.db.models import Avg, Q
 from django.utils import timezone
@@ -6,7 +6,15 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 
 from accounts.models import User
-from accounts.rbac import user_is_teacher
+from accounts.rbac import (
+    PERM_FINANCE_COMPANY,
+    PERM_PAYMENTS_VIEW,
+    PERM_REMINDERS_WRITE,
+    get_effective_role,
+    get_role_label,
+    user_has_permission,
+    user_is_teacher,
+)
 from api.responses import fail, ok
 from api.archive import archive_teacher
 from crm.debts import LOCKED_MESSAGE, close_unpaid_leave, unpaid_leave_state
@@ -14,13 +22,15 @@ from api.scope import (
     branch_allowed,
     branches_for,
     can_access_group,
+    can_access_student,
     filter_attendance_queryset,
     filter_groups_queryset,
     filter_reminders_queryset,
+    reminder_assignees_queryset,
     scope_branch,
 )
 from api.utils import name_taken
-from crm.models import Group, Student
+from crm.models import AttendanceRecord, Group, Student
 from operations.models import (
     ArchiveReason,
     AuditLogRecord,
@@ -32,6 +42,7 @@ from operations.models import (
     Reminder,
     SmsLog,
     StudentScore,
+    StudentScoreHistory,
     Tag,
 )
 from org.models import Branch, Room
@@ -42,6 +53,8 @@ def _company(request):
 
 
 VALID_REMINDER_STATUSES = {choice[0] for choice in Reminder.Status.choices}
+REMINDER_CLOSED_MESSAGE = 'Напоминание уже закрыто — изменить его нельзя.'
+REMINDER_TITLE_TOO_LONG = f'Название напоминания слишком длинное (не больше {Reminder.TITLE_MAX_LENGTH} символов).'
 
 
 def _reminder_status_for_date(due_date: date) -> str:
@@ -63,6 +76,7 @@ def _serialize_reminder(reminder: Reminder) -> dict:
         'status_label': Reminder.Status(reminder.current_status).label,
         'assigned_to_id': reminder.assigned_to_id,
         'assigned_to': reminder.assigned_to.display_name() if reminder.assigned_to else '—',
+        'created_by_id': reminder.created_by_id,
         'student_id': reminder.student_id,
         'kind': reminder.kind,
         'resolution': reminder.resolution,
@@ -80,12 +94,38 @@ def _reminder_buckets(items: list[dict]) -> dict[str, list[dict]]:
     }
 
 
-def _apply_reminder_fields(reminder: Reminder, company, data: dict) -> str | None:
-    title = data.get('title')
-    if title is not None:
-        title = str(title).strip()
-        if not title:
-            return 'Reminder title is required'
+def _int_or_none(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _reminder_assignee(user, raw):
+    """(assignee, error): only active staff / teachers the user may give reminders to (never students)."""
+    if raw in (None, ''):
+        return None, None
+    try:
+        return reminder_assignees_queryset(user).get(pk=int(raw)), None
+    except (User.DoesNotExist, TypeError, ValueError):
+        return None, 'Invalid assignee'
+
+
+def _clean_title(raw) -> tuple[str, str | None]:
+    title = str(raw or '').strip()
+    if not title:
+        return '', 'Reminder title is required'
+    if len(title) > Reminder.TITLE_MAX_LENGTH:
+        return '', REMINDER_TITLE_TOO_LONG
+    return title, None
+
+
+def _apply_reminder_fields(reminder: Reminder, request) -> str | None:
+    data = request.data
+    if data.get('title') is not None:
+        title, error = _clean_title(data.get('title'))
+        if error:
+            return error
         reminder.title = title
 
     if 'details' in data:
@@ -100,35 +140,62 @@ def _apply_reminder_fields(reminder: Reminder, company, data: dict) -> str | Non
         except ValueError:
             return 'Invalid due date'
         reminder.due_date = due_date
-        if reminder.status != Reminder.Status.DONE:
-            reminder.status = _reminder_status_for_date(due_date)
+        reminder.status = _reminder_status_for_date(due_date)
 
-    assigned_to_id = data.get('assigned_to_id')
-    if assigned_to_id is not None:
-        if assigned_to_id in ('', None):
+    if 'assigned_to_id' in data:
+        raw = data.get('assigned_to_id')
+        if raw in (None, ''):
             reminder.assigned_to = None
-        else:
-            try:
-                reminder.assigned_to = User.objects.get(
-                    pk=int(assigned_to_id),
-                    company=company,
-                )
-            except (User.DoesNotExist, TypeError, ValueError):
-                return 'Invalid assignee'
+        elif _int_or_none(raw) != reminder.assigned_to_id:
+            # Keeping the current assignee is always fine (even if they were archived since)
+            assignee, error = _reminder_assignee(request.user, raw)
+            if error:
+                return error
+            reminder.assigned_to = assignee
 
     return None
+
+
+@api_view(['GET'])
+def reminder_assignees(request):
+    """People a reminder can be given to (the "Assigned to" list): active staff and teachers."""
+    if _company(request) is None:
+        return ok([])
+    return ok([
+        {
+            'id': u.id,
+            'name': u.display_name(),
+            'role': 'Учитель' if u.user_type == User.UserType.TEACHER else get_role_label(get_effective_role(u)),
+        }
+        for u in reminder_assignees_queryset(request.user).order_by('user_type', 'first_name', 'last_name', 'id')
+    ])
+
+
+@api_view(['GET'])
+def reminder_summary(request):
+    """Counter for the clock icon in the header: my open reminders for today and overdue ones."""
+    company = _company(request)
+    if company is None:
+        return ok({'overdue': 0, 'today': 0, 'total': 0})
+    today = timezone.localdate()
+    qs = filter_reminders_queryset(Reminder.objects.filter(company=company), request.user).exclude(
+        status=Reminder.Status.DONE,
+    )
+    overdue = qs.filter(due_date__lt=today).count()
+    due_today = qs.filter(due_date=today).count()
+    return ok({'overdue': overdue, 'today': due_today, 'total': overdue + due_today})
 
 
 @api_view(['GET', 'POST'])
 def reminder_index(request):
     company = _company(request)
     if company is None:
-        return ok({'items': [], 'buckets': {'overdue': [], 'today': [], 'future': []}})
+        return ok({'items': [], 'pinned': [], 'buckets': {'overdue': [], 'today': [], 'future': []}})
 
     if request.method == 'POST':
-        title = str(request.data.get('title', '')).strip()
-        if not title:
-            return fail('Reminder title is required')
+        title, error = _clean_title(request.data.get('title'))
+        if error:
+            return fail(error)
 
         details = str(request.data.get('details', '')).strip()
         due_date_raw = request.data.get('due_date')
@@ -140,12 +207,11 @@ def reminder_index(request):
                 return fail('Invalid due date')
 
         assigned_to = request.user
-        assigned_to_id = request.data.get('assigned_to_id')
-        if assigned_to_id not in (None, ''):
-            try:
-                assigned_to = User.objects.get(pk=int(assigned_to_id), company=company)
-            except (User.DoesNotExist, TypeError, ValueError):
-                return fail('Invalid assignee')
+        if 'assigned_to_id' in request.data:
+            # null / '' = common reminder for the whole office
+            assigned_to, error = _reminder_assignee(request.user, request.data.get('assigned_to_id'))
+            if error:
+                return fail(error)
 
         reminder = Reminder.objects.create(
             company=company,
@@ -154,6 +220,7 @@ def reminder_index(request):
             due_date=due_date,
             status=_reminder_status_for_date(due_date),
             assigned_to=assigned_to,
+            created_by=request.user,
         )
         return ok(_serialize_reminder(reminder), status_code=201)
 
@@ -185,6 +252,10 @@ def reminder_detail(request, reminder_id: int):
     if request.method == 'GET':
         return ok(_serialize_reminder(reminder))
 
+    if reminder.status == Reminder.Status.DONE:
+        # Closed reminders (and debt write-offs) stay as history: nobody can change or delete them
+        return fail(REMINDER_CLOSED_MESSAGE)
+
     if unpaid_leave_state(reminder)['locked']:
         # "Left without paying" cannot be edited or removed until the debt is paid (or written off by CEO)
         return fail(LOCKED_MESSAGE)
@@ -193,7 +264,7 @@ def reminder_detail(request, reminder_id: int):
         reminder.delete()
         return ok({'deleted': True})
 
-    error = _apply_reminder_fields(reminder, company, request.data)
+    error = _apply_reminder_fields(reminder, request)
     if error:
         return fail(error)
     reminder.save()
@@ -212,6 +283,13 @@ def reminder_complete(request, reminder_id: int):
     except Reminder.DoesNotExist:
         return fail('Reminder not found', status_code=404)
 
+    # A teacher (view-only) may close only the reminders given to them
+    if not user_has_permission(request.user, PERM_REMINDERS_WRITE) and reminder.assigned_to_id != request.user.id:
+        return fail('Forbidden', status_code=403)
+
+    if reminder.status == Reminder.Status.DONE:
+        return fail(REMINDER_CLOSED_MESSAGE)
+
     if reminder.kind == Reminder.KIND_UNPAID_LEAVE:
         error = close_unpaid_leave(reminder, request.user, request.data.get('write_off_reason') or '')
         if error:
@@ -223,10 +301,161 @@ def reminder_complete(request, reminder_id: int):
     return ok({'id': reminder.id, 'status': reminder.status})
 
 
-def _serialize_score(score: StudentScore, rank: int, company=None) -> dict:
+GRADE_WHOLE_MESSAGE = 'Оценка — целое число от 0 до {max}.'
+ABSENT_MESSAGE = '{name} сегодня отсутствует на уроке — оценку поставить нельзя.'
+FROZEN_MESSAGE = '{name} в заморозке — оценку поставить нельзя.'
+NOT_IN_GROUP_MESSAGE = '{name} не учится в этой группе.'
+
+
+def _parse_grade(raw, max_scale: int) -> tuple[int | None, str | None]:
+    """Whole points only (owner, 2026-09-28): 85 is fine, 85.5 / 'abc' / NaN are not."""
+    error = GRADE_WHOLE_MESSAGE.format(max=max_scale)
+    if isinstance(raw, bool) or raw is None:
+        return None, error
+    if isinstance(raw, int):
+        value = raw
+    elif isinstance(raw, float):
+        if not raw.is_integer():
+            return None, error
+        value = int(raw)
+    else:
+        text = str(raw).strip()
+        if not text.isdigit():
+            return None, error
+        value = int(text)
+    if value < 0 or value > max_scale:
+        return None, error
+    return value, None
+
+
+def _current_scores(qs):
+    """
+    Only students who study now are in the rating (owner, 2026-09-28): those who left the centre
+    and those in a freeze are not. Their grades are kept and come back with the student.
+    """
+    return qs.filter(student__status=Student.Status.STUDYING)
+
+
+def _dense_places(grades) -> dict:
+    """Equal points share a place and the next place follows: 90, 80, 80, 70 -> 1, 2, 2, 3."""
+    return {grade: place for place, grade in enumerate(sorted(set(grades), reverse=True), start=1)}
+
+
+def _company_places(company) -> dict:
+    """Overall place of every grade among all students of the company who study now."""
+    return _dense_places(
+        _current_scores(StudentScore.objects.filter(company=company)).values_list('grade', flat=True),
+    )
+
+
+# Owner (2026-09-28): a grade belongs to a lesson — today or one of the group's lessons of the last 7 days
+LESSON_DATE_DAYS_BACK = 7
+LESSON_DATE_MESSAGE = 'Выберите день урока этой группы за последние 7 дней.'
+WEEKDAY_SHORT = ('Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс')
+
+
+def _lesson_dates(group) -> list:
+    """
+    Days (newest first, today included) of the last week when the group had a lesson:
+    its weekday schedule, its start / end dates, and no holiday in its branch.
+    """
+    from api.v1.views_extended import _no_lesson_reason
+
+    today = timezone.localdate()
+    first = today - timedelta(days=LESSON_DATE_DAYS_BACK)
+    holidays = set(Holiday.objects.filter(
+        company_id=group.company_id, branch_id=group.branch_id, holiday_date__gte=first, holiday_date__lte=today,
+    ).values_list('holiday_date', flat=True))
+    days = [today - timedelta(days=n) for n in range(LESSON_DATE_DAYS_BACK + 1)]
+    return [day for day in days if day not in holidays and _no_lesson_reason(group, day) is None]
+
+
+def _lesson_date_label(day) -> str:
+    label = f'{WEEKDAY_SHORT[day.weekday()]} {day.strftime("%d.%m")}'
+    return f'{label} (сегодня)' if day == timezone.localdate() else label
+
+
+def _parse_lesson_date(raw, group) -> tuple:
+    """(lesson day, error): the day the grade is for; nothing sent = today. Must be one of the group's lessons."""
+    if raw in (None, ''):
+        day = timezone.localdate()
+    else:
+        try:
+            day = date.fromisoformat(str(raw)[:10])
+        except ValueError:
+            return None, LESSON_DATE_MESSAGE
+    if day not in _lesson_dates(group):
+        return None, LESSON_DATE_MESSAGE
+    return day, None
+
+
+def _absent_on(group, student_ids, day) -> set:
+    """Students marked "absent" in the attendance of this group on that day: no grade for that lesson."""
+    return set(AttendanceRecord.objects.filter(
+        group=group,
+        student_id__in=list(student_ids),
+        attend_date=day,
+        status=AttendanceRecord.Status.ABSENT,
+    ).values_list('student_id', flat=True))
+
+
+def _absent_message(name: str, day) -> str:
+    if day == timezone.localdate():
+        return ABSENT_MESSAGE.format(name=name)
+    return f'{name} не был на уроке {day.strftime("%d.%m.%Y")} — оценку за этот урок поставить нельзя.'
+
+
+def _grading_blocker(student, group, day) -> str | None:
+    """Why the student cannot get a grade for this lesson of the group (None = can)."""
+    name = student.full_name
+    if student.group_id != group.id or student.status not in Student.CURRENT_STATUSES:
+        return NOT_IN_GROUP_MESSAGE.format(name=name)
+    if student.status == Student.Status.FROZEN:
+        return FROZEN_MESSAGE.format(name=name)
+    if student.id in _absent_on(group, [student.id], day):
+        return _absent_message(name, day)
+    return None
+
+
+def _latest_record(score):
+    """The history record the rating shows: the grade of the latest lesson."""
+    return score.history.order_by('-graded_on', '-id').first()
+
+
+def _save_grade(company, student, group, grade: int, user, day) -> StudentScore:
+    """
+    Every grade goes to the student's history with the lesson day. The rating shows the grade of the
+    latest lesson: a grade entered later for an earlier lesson stays only in the history.
+    """
+    score, _created = StudentScore.objects.get_or_create(
+        company=company,
+        student=student,
+        group=group,
+        defaults={'grade': grade},
+    )
+    StudentScoreHistory.objects.create(
+        company=company,
+        student=student,
+        score=score,
+        group=group,
+        group_name=group.name,
+        course_name=group.course.name if group.course_id else '',
+        grade=grade,
+        graded_on=day,
+        graded_by=user,
+    )
+    latest = _latest_record(score)
+    if latest is not None and score.grade != latest.grade:
+        score.grade = latest.grade
+        score.save()
+    return score
+
+
+def _serialize_score(score: StudentScore, place: int, company=None) -> dict:
+    """`place` = overall place in the company rating; `rank_in_group` = place inside the group."""
     pass_score = company.grade_pass_score if company else 70
     max_scale = company.grade_scale_max if company else 100
-    grade_val = float(score.grade)
+    grade_val = int(score.grade)
 
     teacher_name = ''
     if score.group and score.group.teacher:
@@ -242,7 +471,7 @@ def _serialize_score(score: StudentScore, rank: int, company=None) -> dict:
 
     return {
         'id': score.id,
-        'no': rank,
+        'no': place,
         'rank_in_group': score.rank,
         'student_id': score.student_id,
         'name': score.student.full_name,
@@ -264,22 +493,20 @@ def _serialize_score(score: StudentScore, rank: int, company=None) -> dict:
 
 
 def _recalculate_ranks(company, group_id: int | None = None) -> None:
+    """Place inside the group among students who study now; equal points share a place."""
     groups = Group.objects.filter(company=company)
     if group_id is not None:
         groups = groups.filter(pk=group_id)
     for group in groups:
-        scores = StudentScore.objects.filter(company=company, group=group).order_by(
-            '-grade',
-            'student__first_name',
-            'student__last_name',
-        )
-        for rank, score in enumerate(scores, start=1):
-            if score.rank != rank:
-                StudentScore.objects.filter(pk=score.pk).update(rank=rank)
+        scores = list(_current_scores(StudentScore.objects.filter(company=company, group=group)))
+        places = _dense_places(score.grade for score in scores)
+        for score in scores:
+            if score.rank != places[score.grade]:
+                StudentScore.objects.filter(pk=score.pk).update(rank=places[score.grade])
 
 
 def _score_queryset(company, params):
-    qs = StudentScore.objects.filter(company=company).select_related(
+    qs = _current_scores(StudentScore.objects.filter(company=company)).select_related(
         'student',
         'group',
         'group__branch',
@@ -319,6 +546,17 @@ def _score_queryset(company, params):
     return qs
 
 
+def _group_for_grading(request, company, raw_group_id):
+    """(group, error response) for grading endpoints: the group must exist and be the user's."""
+    try:
+        group = Group.objects.select_related('branch', 'course', 'teacher').get(pk=int(raw_group_id), company=company)
+    except (Group.DoesNotExist, TypeError, ValueError):
+        return None, fail('Group not found', status_code=404)
+    if not can_access_group(request.user, group):
+        return None, fail('You can grade only your own groups', status_code=403)
+    return group, None
+
+
 @api_view(['GET', 'POST'])
 def scores_branch(request):
     company = _company(request)
@@ -331,44 +569,33 @@ def scores_branch(request):
     if request.method == 'POST':
         try:
             student_id = int(request.data.get('student_id'))
-            group_id = int(request.data.get('group_id'))
-            grade = float(request.data.get('grade'))
         except (TypeError, ValueError):
             return fail('Student, group and grade are required')
-
-        if grade < 0 or grade > max_scale:
-            return fail(f'Grade must be between 0 and {max_scale}')
+        grade, error = _parse_grade(request.data.get('grade'), max_scale)
+        if error:
+            return fail(error)
 
         try:
             student = Student.objects.get(pk=student_id, company=company)
         except Student.DoesNotExist:
             return fail('Student not found')
 
-        try:
-            group = Group.objects.select_related('branch', 'course', 'teacher').get(pk=group_id, company=company)
-        except Group.DoesNotExist:
-            return fail('Group not found')
+        group, error_response = _group_for_grading(request, company, request.data.get('group_id'))
+        if error_response:
+            return error_response
+        day, error = _parse_lesson_date(request.data.get('lesson_date'), group)
+        if error:
+            return fail(error)
+        blocker = _grading_blocker(student, group, day)
+        if blocker:
+            return fail(blocker)
 
-        if not can_access_group(request.user, group):
-            return fail('You can grade only your own groups', status_code=403)
-        if student.group_id != group.id or student.status not in Student.CURRENT_STATUSES:
-            return fail('Student does not belong to this group')
-
-        score, _created = StudentScore.objects.update_or_create(
-            company=company,
-            student=student,
-            group=group,
-            defaults={'grade': grade},
-        )
+        score = _save_grade(company, student, group, grade, request.user, day)
         _recalculate_ranks(company, group.id)
-        score.refresh_from_db()
-        score = StudentScore.objects.select_related('student', 'group', 'group__branch', 'group__course', 'group__teacher').get(pk=score.pk)
-        rank = StudentScore.objects.filter(
-            company=company,
-            group=group,
-            grade__gt=score.grade,
-        ).count() + 1
-        return ok(_serialize_score(score, rank, company), status_code=201)
+        score = StudentScore.objects.select_related(
+            'student', 'group', 'group__branch', 'group__course', 'group__teacher',
+        ).get(pk=score.pk)
+        return ok(_serialize_score(score, _company_places(company).get(score.grade, 1), company), status_code=201)
 
     # a teacher sees grades of own groups only (same group-based rule as attendance)
     qs = filter_attendance_queryset(
@@ -391,8 +618,8 @@ def scores_branch(request):
             limit = 500
         qs = qs[:max(1, min(limit, 500))]
 
-    scores = list(qs)
-    rows = [_serialize_score(score, idx, company) for idx, score in enumerate(scores, start=1)]
+    places = _company_places(company)
+    rows = [_serialize_score(score, places.get(score.grade, 0), company) for score in qs]
 
     summary = {
         'total': total,
@@ -407,64 +634,157 @@ def scores_branch(request):
     return ok({'summary': summary, 'rows': rows})
 
 
+@api_view(['GET'])
+def scores_sheet(request):
+    """
+    Grading sheet of one group for one lesson: the group's lesson days of the last 7 days to choose from
+    (?date=, newest by default), every student who studies in the group, the last grade, and whether a grade
+    can be given for that lesson (absent that day in the attendance / in a freeze -> no).
+    """
+    company = _company(request)
+    if company is None:
+        return fail('Company not found', status_code=404)
+    group, error_response = _group_for_grading(request, company, request.query_params.get('group_id'))
+    if error_response:
+        return error_response
+
+    lesson_dates = _lesson_dates(group)
+    day = None
+    raw_day = request.query_params.get('date')
+    if raw_day:
+        day, error = _parse_lesson_date(raw_day, group)
+        if error:
+            return fail(error)
+    elif lesson_dates:
+        day = lesson_dates[0]
+
+    students = list(Student.objects.filter(
+        company=company, group=group, status__in=Student.CURRENT_STATUSES,
+    ).order_by('first_name', 'last_name'))
+    absent = _absent_on(group, [s.id for s in students], day) if day else set()
+    last_grades = dict(StudentScore.objects.filter(group=group, student__in=students).values_list('student_id', 'grade'))
+
+    rows = []
+    for student in students:
+        reason, reason_label = '', ''
+        if day is None:
+            reason, reason_label = 'no_lesson', 'Нет урока'
+        elif student.status == Student.Status.FROZEN:
+            reason, reason_label = 'frozen', 'Заморозка'
+        elif student.id in absent:
+            reason, reason_label = 'absent', 'Отсутствует на уроке'
+        rows.append({
+            'student_id': student.id,
+            'name': student.full_name,
+            'last_grade': last_grades.get(student.id),
+            'can_grade': not reason,
+            'reason': reason,
+            'reason_label': reason_label,
+        })
+    return ok({
+        'group_id': group.id,
+        'group': group.name,
+        # The lesson the grades are for; None = the group had no lesson in the last 7 days
+        'date': day.isoformat() if day else None,
+        'lesson_dates': [{'date': d.isoformat(), 'label': _lesson_date_label(d)} for d in lesson_dates],
+        'max_scale': company.grade_scale_max or 100,
+        'pass_score': company.grade_pass_score or 70,
+        'students': rows,
+    })
+
+
 @api_view(['POST'])
 def scores_bulk(request):
-    """Bulk grading for a whole group at once."""
+    """Grades for a whole group at once. An empty box = not graded (nothing is saved for that student)."""
     company = _company(request)
     if company is None:
         return fail('Company not found', status_code=404)
 
-    group_id = request.data.get('group_id')
     items = request.data.get('items')
-    if not group_id or not isinstance(items, list):
+    if not request.data.get('group_id') or not isinstance(items, list):
         return fail('group_id and items list are required')
-
-    try:
-        group = Group.objects.select_related('branch', 'course', 'teacher').get(pk=int(group_id), company=company)
-    except (Group.DoesNotExist, TypeError, ValueError):
-        return fail('Group not found', status_code=404)
-
-    if not can_access_group(request.user, group):
-        return fail('You can grade only your own groups', status_code=403)
+    group, error_response = _group_for_grading(request, company, request.data.get('group_id'))
+    if error_response:
+        return error_response
 
     max_scale = company.grade_scale_max or 100
-
-    student_ids = [item.get('student_id') for item in items if item.get('student_id')]
+    student_ids = [item.get('student_id') for item in items if isinstance(item, dict) and item.get('student_id')]
     students_map = {
-        s.id: s for s in Student.objects.filter(
-            pk__in=student_ids, company=company, group=group, status__in=Student.CURRENT_STATUSES,
-        )
+        s.id: s for s in Student.objects.filter(pk__in=student_ids, company=company, group=group)
     }
+    day, error = _parse_lesson_date(request.data.get('lesson_date'), group)
+    if error:
+        return fail(error)
+    absent = _absent_on(group, students_map.keys(), day)
 
     saved_count = 0
+    skipped = []
     for item in items:
-        s_id = item.get('student_id')
-        if not s_id or s_id not in students_map:
+        if not isinstance(item, dict):
             continue
-        try:
-            grade_val = float(item.get('grade', 0))
-        except (TypeError, ValueError):
+        raw = item.get('grade')
+        if raw is None or (isinstance(raw, str) and not raw.strip()):
+            continue  # not graded
+        student = students_map.get(item.get('student_id'))
+        if student is None or student.status not in Student.CURRENT_STATUSES:
+            skipped.append({'student_id': item.get('student_id'), 'reason': 'Не учится в этой группе'})
             continue
-        if grade_val < 0 or grade_val > max_scale:
+        if student.status == Student.Status.FROZEN:
+            skipped.append({'student_id': student.id, 'reason': FROZEN_MESSAGE.format(name=student.full_name)})
             continue
-
-        StudentScore.objects.update_or_create(
-            company=company,
-            student=students_map[s_id],
-            group=group,
-            defaults={'grade': grade_val},
-        )
+        if student.id in absent:
+            skipped.append({'student_id': student.id, 'reason': _absent_message(student.full_name, day)})
+            continue
+        grade, error = _parse_grade(raw, max_scale)
+        if error:
+            skipped.append({'student_id': student.id, 'reason': f'{student.full_name}: {error}'})
+            continue
+        _save_grade(company, student, group, grade, request.user, day)
         saved_count += 1
 
     _recalculate_ranks(company, group.id)
 
+    places = _company_places(company)
     updated_scores = list(
-        StudentScore.objects.filter(company=company, group=group)
+        _current_scores(StudentScore.objects.filter(company=company, group=group))
         .select_related('student', 'group', 'group__branch', 'group__course', 'group__teacher')
         .order_by('-grade', 'student__first_name', 'student__last_name')
     )
-    rows = [_serialize_score(sc, idx, company) for idx, sc in enumerate(updated_scores, start=1)]
-    return ok({'saved_count': saved_count, 'rows': rows})
+    rows = [_serialize_score(sc, places.get(sc.grade, 0), company) for sc in updated_scores]
+    return ok({'saved_count': saved_count, 'skipped': skipped, 'rows': rows})
+
+
+@api_view(['GET'])
+def scores_history(request):
+    """Every grade of one student (the rating shows only the latest one)."""
+    company = _company(request)
+    if company is None:
+        return ok([])
+    try:
+        student = Student.objects.select_related('group').get(pk=int(request.query_params.get('student_id')), company=company)
+    except (Student.DoesNotExist, TypeError, ValueError):
+        return fail('Student not found', status_code=404)
+    if not can_access_student(request.user, student):
+        return fail('Student not found', status_code=404)
+
+    records = StudentScoreHistory.objects.filter(company=company, student=student).select_related(
+        'graded_by', 'corrected_by',
+    )
+    return ok([
+        {
+            'id': record.id,
+            'date': record.graded_on.isoformat(),
+            'student': student.full_name,
+            'group': record.group_name,
+            'course': record.course_name,
+            'grade': record.grade,
+            'graded_by': record.graded_by.display_name() if record.graded_by else '',
+            'corrected': record.corrected,
+            'corrected_at': timezone.localtime(record.corrected_at).date().isoformat() if record.corrected_at else None,
+            'corrected_by': record.corrected_by.display_name() if record.corrected_by else '',
+        }
+        for record in records
+    ])
 
 
 @api_view(['GET'])
@@ -494,8 +814,9 @@ def scores_groups(request):
 
     group_stats = []
     for g in groups_qs:
-        scores = StudentScore.objects.filter(company=company, group=g)
+        scores = _current_scores(StudentScore.objects.filter(company=company, group=g))
         graded_count = scores.count()
+        # Only students who study now (a frozen student does not study at the moment)
         enrolled_count = g.students.filter(status=Student.Status.STUDYING).count()
         if graded_count == 0:
             avg_grade = 0.0
@@ -523,7 +844,7 @@ def scores_groups(request):
             'course_name': g.course.name if g.course else '—',
             'teacher_id': g.teacher_id,
             'teacher_name': teacher_name or '—',
-            'enrolled_count': max(enrolled_count, graded_count),
+            'enrolled_count': enrolled_count,
             'graded_count': graded_count,
             'passed_count': passed_count,
             'avg_grade': round(avg_grade, 1),
@@ -560,12 +881,7 @@ def score_detail(request, score_id: int):
         return fail('Score not found', status_code=404)
 
     if request.method == 'GET':
-        rank = StudentScore.objects.filter(
-            company=company,
-            group=score.group,
-            grade__gt=score.grade,
-        ).count() + 1
-        return ok(_serialize_score(score, rank, company))
+        return ok(_serialize_score(score, _company_places(company).get(score.grade, 0), company))
 
     if score.group is None or not can_access_group(request.user, score.group):
         return fail('You can grade only your own groups', status_code=403)
@@ -574,43 +890,46 @@ def score_detail(request, score_id: int):
     max_scale = company.grade_scale_max or 100
 
     if request.method == 'DELETE':
+        # The grade was a mistake: it leaves the rating together with its (latest) history record;
+        # earlier grades of the student stay in the history
+        latest = _latest_record(score)
+        if latest is not None:
+            latest.delete()
         score.delete()
         _recalculate_ranks(company, group_id)
         return ok({'deleted': True})
 
+    # Only the points can be changed; the student and the group of a grade never change here
+    # (a grade follows the student to a new group by itself — crm/signals.py)
+    for field, current in (('student_id', score.student_id), ('group_id', score.group_id)):
+        raw = request.data.get(field)
+        if raw not in (None, '') and str(raw) != str(current):
+            return fail('Можно изменить только балл. Ученика и группу у оценки менять нельзя.')
+
     if 'grade' in request.data:
-        try:
-            grade = float(request.data.get('grade'))
-        except (TypeError, ValueError):
-            return fail('Invalid grade')
-        if grade < 0 or grade > max_scale:
-            return fail(f'Grade must be between 0 and {max_scale}')
-        score.grade = grade
-
-    student_id = request.data.get('student_id')
-    if student_id is not None:
-        try:
-            score.student = Student.objects.get(pk=int(student_id), company=company)
-        except (Student.DoesNotExist, TypeError, ValueError):
-            return fail('Student not found')
-
-    group_id_raw = request.data.get('group_id')
-    if group_id_raw is not None:
-        try:
-            score.group = Group.objects.get(pk=int(group_id_raw), company=company)
-        except (Group.DoesNotExist, TypeError, ValueError):
-            return fail('Group not found')
-        group_id = score.group_id
+        grade, error = _parse_grade(request.data.get('grade'), max_scale)
+        if error:
+            return fail(error)
+        if grade != score.grade:
+            score.grade = grade
+            # A correction of a typo, not a new grade: the latest history record is fixed and marked
+            latest = _latest_record(score)
+            if latest is None:
+                latest = StudentScoreHistory(
+                    company=company, student=score.student, score=score, group=score.group,
+                    group_name=score.group.name, course_name=score.group.course.name if score.group.course_id else '',
+                    graded_on=timezone.localdate(), graded_by=request.user,
+                )
+            latest.grade = grade
+            latest.corrected = True
+            latest.corrected_at = timezone.now()
+            latest.corrected_by = request.user
+            latest.save()
 
     score.save()
     _recalculate_ranks(company, group_id)
     score.refresh_from_db()
-    rank = StudentScore.objects.filter(
-        company=company,
-        group=score.group,
-        grade__gt=score.grade,
-    ).count() + 1
-    return ok(_serialize_score(score, rank, company))
+    return ok(_serialize_score(score, _company_places(company).get(score.grade, 0), company))
 
 
 @api_view(['GET', 'POST'])
@@ -1100,13 +1419,20 @@ def activity_logs(request):
         return ok([])
 
     # Single audit journal (C5): human-readable view over AuditLogRecord.
+    # Money records are shown only to those who may see that money (owner, 2026-09-28): expenses,
+    # withdrawals and salaries — company finance (CEO); student payments — whoever sees payments.
+    logs = AuditLogRecord.objects.filter(company=company)
+    if not user_has_permission(request.user, PERM_FINANCE_COMPANY):
+        logs = logs.exclude(entity_type__in=('expense', 'withdrawal', 'payroll', 'finance_month'))
+    if not user_has_permission(request.user, PERM_PAYMENTS_VIEW):
+        logs = logs.exclude(entity_type='payment')
     return ok([
         {
             'action': log.reason or f'{log.action} {log.entity_type} #{log.entity_id}',
             'actor': log.actor_name or 'System',
             'created_at': timezone.localtime(log.created_at).strftime('%Y-%m-%d %H:%M'),
         }
-        for log in AuditLogRecord.objects.filter(company=company).order_by('-created_at')[:200]
+        for log in logs.order_by('-created_at')[:200]
     ])
 
 

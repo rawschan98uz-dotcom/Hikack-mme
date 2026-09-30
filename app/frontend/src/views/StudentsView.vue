@@ -74,6 +74,9 @@ interface StudentPayment {
   id: number;
   date: string;
   amount: number;
+  /** 'refund' = money given back: shown red with a minus */
+  transaction_type?: string;
+  discount_amount?: number;
   months_covered: number;
   method: string;
   method_pay: string;
@@ -121,6 +124,9 @@ const showPayModal = ref(false);
 const payForm = reactive({
   amount: 0,
   months_covered: 1,
+  /** Discount as a sum, by hand, empty when there is none (owner, 2026-09-28) */
+  discount: '' as number | '',
+  payment_date: todayIso(),
   method: 'cash' as 'cash' | 'card' | 'transfer',
   comment: '',
 });
@@ -182,6 +188,8 @@ async function loadStudentPayments(studentId: number) {
 function openAcceptPaymentModal() {
   if (!detailStudent.value) return;
   payForm.months_covered = 1;
+  payForm.discount = '';
+  payForm.payment_date = todayIso();
   const coursePrice = detailStudent.value.course_price || 0;
   payForm.amount = coursePrice || 0;
   payForm.method = 'cash';
@@ -192,21 +200,29 @@ function openAcceptPaymentModal() {
 
 // Копилка: what the entered sum will actually do (months are counted from money when the price is known)
 const payPreview = computed(() =>
-  walletPreview(detailStudent.value?.course_price, detailStudent.value?.wallet, payForm.amount),
+  walletPreview(detailStudent.value?.course_price, detailStudent.value?.wallet, payForm.amount, Number(payForm.discount) || 0),
 );
 
 function onPayMonthsChange() {
   if (payForm.months_covered < 1) payForm.months_covered = 1;
   const coursePrice = detailStudent.value?.course_price || 0;
   if (coursePrice) {
-    payForm.amount = coursePrice * payForm.months_covered;
+    payForm.amount = Math.max(0, coursePrice * payForm.months_covered - (Number(payForm.discount) || 0));
   }
 }
 
 async function submitPayment() {
   if (!detailStudent.value) return;
-  if (!payForm.amount) {
-    payError.value = 'Введите сумму оплаты';
+  if (!Number.isInteger(payForm.amount) || payForm.amount <= 0) {
+    payError.value = 'Сумма — целое положительное число.';
+    return;
+  }
+  if (payForm.discount !== '' && (!Number.isInteger(payForm.discount) || payForm.discount < 0)) {
+    payError.value = 'Скидка — целое число (сумма), или оставьте поле пустым.';
+    return;
+  }
+  if (!payForm.payment_date || payForm.payment_date > todayIso()) {
+    payError.value = 'Дата оплаты не может быть позже сегодняшнего дня.';
     return;
   }
   paySaving.value = true;
@@ -214,8 +230,9 @@ async function submitPayment() {
   try {
     await client.post('/replenishments', {
       student_id: detailStudent.value.id,
-      student_name: detailStudent.value.full_name,
       amount: payForm.amount,
+      discount_amount: payForm.discount === '' ? 0 : payForm.discount,
+      payment_date: payForm.payment_date,
       months_covered: payForm.months_covered || 1,
       method: payForm.method,
       comment: payForm.comment.trim(),
@@ -328,7 +345,7 @@ const canImportStudents = computed(() => auth.can(PERM.STUDENTS_WRITE));
 const canWriteStudents = computed(() => auth.can(PERM.STUDENTS_WRITE));
 // Teachers never see money fields — backend returns them as null (strip_for_teacher).
 const canSeeMoney = computed(() => auth.role !== 'teacher');
-const canAcceptPayment = computed(() => auth.can(PERM.FINANCE_WRITE));
+const canAcceptPayment = computed(() => auth.can(PERM.PAYMENTS_WRITE));
 
 function exportCsv() {
   downloadCsv(
@@ -738,6 +755,8 @@ async function maybeOpenFromRoute() {
   const id = parseOpenId(route.query);
   if (id == null || showPanel.value) return;
   await openDetailPanel(id);
+  // ?edit=1: straight into the edit form (e.g. from a reminder "put the student into a group")
+  if (route.query.edit === '1' && canWriteStudents.value) startEdit();
 }
 
 function maybeCreateFromRoute() {
@@ -1122,6 +1141,9 @@ onMounted(async () => {
                   <span v-if="detailStudent.wallet_missing" class="ml-1 text-xs text-fb-secondary">
                     · до следующего месяца не хватает {{ formatSum(detailStudent.wallet_missing) }}
                   </span>
+                  <span v-else-if="!detailStudent.month_price" class="ml-1 text-xs text-fb-secondary">
+                    · засчитается само, когда ученик будет в группе с ценой курса
+                  </span>
                 </dd>
               </div>
               <div class="flex items-center justify-between gap-4 border-b border-fb-line pb-2">
@@ -1211,10 +1233,19 @@ onMounted(async () => {
                 >
                   <div>
                     <div class="flex items-center gap-2">
-                      <span class="font-semibold text-fb-blue">{{ p.amount.toLocaleString() }} UZS</span>
-                      <span class="rounded bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-fb-blue">
-                        {{ p.months_covered ?? 1 }} мес.
-                      </span>
+                      <template v-if="p.transaction_type === 'refund'">
+                        <span class="font-semibold text-rose-700">−{{ p.amount.toLocaleString() }} UZS</span>
+                        <span class="rounded bg-rose-100 px-2 py-0.5 text-[11px] font-semibold text-rose-700">Возврат</span>
+                      </template>
+                      <template v-else>
+                        <span class="font-semibold text-fb-blue">{{ p.amount.toLocaleString() }} UZS</span>
+                        <span class="rounded bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-fb-blue">
+                          {{ p.months_covered ?? 1 }} мес.
+                        </span>
+                        <span v-if="p.discount_amount" class="rounded bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700">
+                          скидка {{ p.discount_amount.toLocaleString() }}
+                        </span>
+                      </template>
                     </div>
                     <div class="mt-1 text-xs text-fb-secondary">
                       {{ p.date }} • {{ p.method_pay || p.method }}
@@ -1225,6 +1256,7 @@ onMounted(async () => {
                     </div>
                   </div>
                   <button
+                    v-if="p.transaction_type !== 'refund'"
                     type="button"
                     title="Печать квитанции"
                     class="ml-2 inline-flex items-center gap-1 rounded-lg border border-fb-line bg-fb-canvas/50 px-2.5 py-1 text-xs font-medium text-fb-secondary hover:border-fb-blue hover:text-fb-blue transition-colors"
@@ -1652,10 +1684,26 @@ onMounted(async () => {
           </div>
 
           <div>
+            <label class="mb-1 block text-xs font-medium text-fb-secondary">Скидка (сумма)</label>
+            <input
+              v-model.number="payForm.discount"
+              type="number"
+              min="0"
+              step="1"
+              placeholder="Нет скидки"
+              class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none"
+              @input="onPayMonthsChange"
+            />
+            <p class="mt-1 text-[11px] text-fb-secondary">Заполняйте только когда скидка нужна. Не больше цены оплачиваемых месяцев.</p>
+          </div>
+
+          <div>
             <label class="mb-1 block text-xs font-medium text-fb-secondary">Сумма к оплате (UZS)</label>
             <input
               v-model.number="payForm.amount"
               type="number"
+              min="1"
+              step="1"
               required
               class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm font-semibold focus:border-fb-blue focus:outline-none"
             />
@@ -1668,8 +1716,19 @@ onMounted(async () => {
               (до следующего месяца не хватит {{ formatSum(payPreview.missing) }})</span>.
             </p>
             <p v-else-if="detailStudent && !detailStudent.course_price" class="mt-1 text-[11px] text-amber-700">
-              У ученика нет цены курса — месяцы будут засчитаны так, как указано выше.
+              У ученика нет цены курса — деньги лягут в копилку и засчитаются, когда ученика добавят в группу с ценой.
             </p>
+          </div>
+
+          <div>
+            <label class="mb-1 block text-xs font-medium text-fb-secondary">Дата оплаты</label>
+            <input
+              v-model="payForm.payment_date"
+              type="date"
+              :max="todayIso()"
+              required
+              class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none"
+            />
           </div>
 
           <div>

@@ -25,11 +25,10 @@ class User(AbstractUser):
 
     class StaffRole(models.TextChoices):
         CEO = 'ceo', 'CEO'
+        # Owner (2026-09-28): "limited admin", "cashier" and "administrator" are one role — Администратор
         ADMINISTRATOR = 'administrator', 'Администратор'
         BRANCH_DIRECTOR = 'branch_director', 'Директор филиала'
-        LIMITED_ADMIN = 'limited_admin', 'Ограниченный админ'
         MARKETER = 'marketer', 'Маркетолог'
-        CASHIER = 'cashier', 'Кассир'
 
     username = None
     email = None

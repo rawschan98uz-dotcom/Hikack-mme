@@ -244,6 +244,9 @@ def staff_import(request):
             password = _generate_password()
         job_title = row.get('job_title', '')
         staff_role = (row.get('staff_role') or row.get('role') or User.StaffRole.ADMINISTRATOR).lower()
+        # Old role names in files made before 2026-09-28: one office role now
+        if staff_role in ('limited_admin', 'cashier'):
+            staff_role = User.StaffRole.ADMINISTRATOR
 
         if not first_name or not phone:
             skipped += 1

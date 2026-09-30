@@ -18,7 +18,6 @@ from operations.models import (
     StudentScore,
     Tag,
     TeacherAttendanceRecord,
-    WorklyRecord,
 )
 from org.models import Branch, Company, Room
 
@@ -105,7 +104,6 @@ class Command(BaseCommand):
         StudentScore.objects.filter(company=company).delete()
         Reminder.objects.filter(company=company).delete()
         ArchivedPerson.objects.filter(company=company).delete()
-        WorklyRecord.objects.filter(company=company).delete()
         SmsLog.objects.filter(company=company).delete()
         CallLog.objects.filter(company=company).delete()
         AuditLogRecord.objects.filter(company=company).delete()

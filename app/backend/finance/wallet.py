@@ -8,9 +8,13 @@ payment. Example with 800 000 a month:
     +400 000  -> копилка reaches 800 000 -> one more month, копилка 0
     500 000   -> no month, 500 000 in the копилка ("не хватает 300 000")
 
-Payments made before the копилка existed, and payments of students without a course price,
+Payments made before the копилка existed, and office payments of students without a course price,
 keep the months an administrator entered by hand (Payment.month_price IS NULL) and do not touch
 the копилка.
+
+Online payments (Click / Payme) of a student without a course price go to the копилка and wait
+(Payment.month_price = PRICE_PENDING): as soon as the student is in a group whose course has a price,
+that price is written into those payments and the months are counted by themselves.
 """
 
 from django.db.models import F, Q
@@ -24,6 +28,11 @@ ACTIVE_PAYMENT_Q = (
     Q(month_price__isnull=False, amount__gt=F('refunded_amount'))
     | Q(month_price__isnull=True, refunded_months__lt=F('months_covered'))
 )
+
+
+# Payment.month_price of an online payment made while the course price was unknown: its money
+# waits in the копилка (0 months) until the price is known (see _apply_known_price).
+PRICE_PENDING = 0
 
 
 def current_month_price(student) -> int:
@@ -41,6 +50,27 @@ def _chain(student):
     ).order_by('payment_date', 'created_at', 'id')
 
 
+def _apply_known_price(student) -> None:
+    """Money waiting in the копилка for a course price: the price is known now -> count it."""
+    pending = Payment.objects.filter(
+        student=student, transaction_type=Payment.TransactionType.PAYMENT, month_price=PRICE_PENDING,
+    )
+    if not pending.exists():
+        return
+    price = current_month_price(student)
+    if price <= 0:
+        return
+    pending.update(month_price=price)
+    from operations.models import Reminder
+
+    Reminder.objects.filter(student=student, kind=Reminder.KIND_ONLINE_PAYMENT_CHECK).exclude(
+        status=Reminder.Status.DONE,
+    ).update(
+        status=Reminder.Status.DONE,
+        resolution=f'Цена курса известна ({price:,} сум) — деньги из копилки засчитаны автоматически'.replace(',', ' '),
+    )
+
+
 def recalc_student_wallet(student) -> int:
     """
     Recount the months closed by every копилка payment of the student (in date order) and the
@@ -48,6 +78,7 @@ def recalc_student_wallet(student) -> int:
     """
     if student is None or student.pk is None:
         return 0
+    _apply_known_price(student)
     carry = 0
     for payment in _chain(student):
         value = max(0, (payment.amount or 0) + (payment.discount_amount or 0) - (payment.refunded_amount or 0))

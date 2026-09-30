@@ -3,6 +3,7 @@ import { dateToIso } from '../utils/dates';
 import { onMounted, reactive, ref } from 'vue';
 
 import client, { type ApiEnvelope } from '../api/client';
+import { downloadCsv } from '../utils/csvExport';
 
 interface PnlSummary {
   total_revenue: number;
@@ -28,27 +29,34 @@ interface ExpenseItem {
   percent: number;
 }
 
+/** One branch: its income (payments of its groups minus refunds), its expenses and the profit. */
+interface BranchRow {
+  branch_id: number | null;
+  name: string;
+  revenue: number;
+  expenses: number;
+  profit: number;
+}
+
 interface PnlData {
   summary: PnlSummary;
+  branches: BranchRow[];
   revenue_by_method: RevenueItem[];
   expense_by_category: ExpenseItem[];
 }
 
-interface Branch {
-  id: number;
-  name: string;
-}
-
 const loading = ref(true);
-const branches = ref<Branch[]>([]);
 const pnl = ref<PnlData | null>(null);
 
 const filters = reactive({
   preset: 'this_month',
   date_from: '',
   date_to: '',
-  branch_id: '',
 });
+
+function money(value: number) {
+  return Math.round(value).toLocaleString('ru-RU');
+}
 
 function setPreset(preset: string) {
   filters.preset = preset;
@@ -84,22 +92,12 @@ function setPreset(preset: string) {
   void loadPnl();
 }
 
-async function loadMeta() {
-  try {
-    const { data } = await client.get<ApiEnvelope<Branch[]>>('/branch');
-    branches.value = data.data;
-  } catch {
-    branches.value = [];
-  }
-}
-
 async function loadPnl() {
   loading.value = true;
   try {
     const params: Record<string, string> = {};
     if (filters.date_from) params.date_from = filters.date_from;
     if (filters.date_to) params.date_to = filters.date_to;
-    if (filters.branch_id) params.branch_id = filters.branch_id;
 
     const { data } = await client.get<ApiEnvelope<PnlData>>('/reports/pnl', { params });
     pnl.value = data.data;
@@ -126,29 +124,31 @@ function exportCsv() {
     ['Чистая прибыль (Net Profit)', String(data.summary.net_profit)],
     ['Рентабельность (Margin %)', `${data.summary.profit_margin}%`],
     [],
-    ['ДОХОДЫ ПО СПОСОБАМ ОПЛАТЫ', 'Сумма (UZS)', 'Доля (%)'],
+    ['ПО ФИЛИАЛАМ', 'Доход', 'Расход', 'Прибыль'],
   ];
+  for (const row of data.branches) {
+    csvRows.push([row.name, String(row.revenue), String(row.expenses), String(row.profit)]);
+  }
+  csvRows.push(['Общие', String(data.summary.total_revenue), String(data.summary.total_expenses), String(data.summary.net_profit)]);
+  csvRows.push(...[
+    [],
+    ['ДОХОДЫ ПО СПОСОБАМ ОПЛАТЫ', 'Сумма (UZS)', 'Доля (%)'],
+  ]);
   for (const item of data.revenue_by_method) {
-    csvRows.push([`"${item.label}"`, String(item.amount), `${item.percent}%`]);
+    csvRows.push([item.label, String(item.amount), `${item.percent}%`]);
   }
   csvRows.push([]);
   csvRows.push(['РАСХОДЫ ПО КАТЕГОРИЯМ', 'Сумма (UZS)', 'Доля (%)']);
   for (const item of data.expense_by_category) {
-    csvRows.push([`"${item.name}"`, String(item.amount), `${item.percent}%`]);
+    csvRows.push([item.name, String(item.amount), `${item.percent}%`]);
   }
-  const csvContent = 'data:text/csv;charset=utf-8,\uFEFF' + csvRows.map((e) => e.join(',')).join('\n');
-  const encodedUri = encodeURI(csvContent);
-  const link = document.createElement('a');
-  link.setAttribute('href', encodedUri);
-  link.setAttribute('download', `pnl_report_${filters.date_from || 'start'}_${filters.date_to || 'end'}.csv`);
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
+  // A real file, not a link: a «#» in a name used to cut the rest of the file off
+  const [header, ...rest] = csvRows;
+  downloadCsv(`pnl_report_${filters.date_from || 'start'}_${filters.date_to || 'end'}.csv`, header, rest);
 }
 
-onMounted(async () => {
+onMounted(() => {
   setPreset('this_month');
-  await loadMeta();
 });
 </script>
 
@@ -229,18 +229,6 @@ onMounted(async () => {
             class="rounded-lg border border-fb-line px-3 py-1.5 text-sm focus:border-fb-blue focus:outline-none"
             @change="filters.preset = 'custom'"
           />
-        </div>
-        <div>
-          <label class="mb-1 block text-xs text-fb-secondary">Филиал</label>
-          <select
-            v-model="filters.branch_id"
-            class="rounded-lg border border-fb-line px-3 py-1.5 text-sm focus:border-fb-blue focus:outline-none"
-          >
-            <option value="">Все филиалы</option>
-            <option v-for="b in branches" :key="b.id" :value="String(b.id)">
-              {{ b.name }}
-            </option>
-          </select>
         </div>
         <button
           type="button"
@@ -324,6 +312,48 @@ onMounted(async () => {
           </div>
           <div class="mt-1 text-xs text-fb-secondary">Отношение прибыли к доходу</div>
         </div>
+      </div>
+
+      <!-- Every branch separately + "Общие" = all branches together (owner, 2026-09-28) -->
+      <div class="overflow-hidden rounded-2xl border border-fb-line bg-fb-card shadow-sm">
+        <div class="border-b border-fb-line px-5 py-3">
+          <h2 class="text-base font-bold text-fb-text">По филиалам</h2>
+          <p class="text-xs text-fb-secondary">
+            Доход — оплаты групп филиала минус возвраты; расход — расходы, записанные на этот филиал.
+          </p>
+        </div>
+        <table class="w-full text-sm">
+          <thead class="border-b border-fb-line bg-fb-canvas text-xs font-semibold uppercase tracking-wider text-fb-secondary">
+            <tr>
+              <th class="px-5 py-3 text-left">Филиал</th>
+              <th class="px-5 py-3 text-right">Доход</th>
+              <th class="px-5 py-3 text-right">Расход</th>
+              <th class="px-5 py-3 text-right">Прибыль</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-fb-line">
+            <tr v-for="row in pnl.branches" :key="row.branch_id ?? 'none'">
+              <td class="px-5 py-3 font-medium text-fb-text">{{ row.name }}</td>
+              <td class="px-5 py-3 text-right text-emerald-700">{{ money(row.revenue) }}</td>
+              <td class="px-5 py-3 text-right text-rose-700">{{ money(row.expenses) }}</td>
+              <td class="px-5 py-3 text-right font-semibold" :class="row.profit >= 0 ? 'text-fb-text' : 'text-red-700'">
+                {{ money(row.profit) }}
+              </td>
+            </tr>
+            <tr class="bg-fb-canvas font-bold">
+              <td class="px-5 py-3 text-fb-text">Общие</td>
+              <td class="px-5 py-3 text-right text-emerald-700">{{ money(pnl.summary.total_revenue) }}</td>
+              <td class="px-5 py-3 text-right text-rose-700">{{ money(pnl.summary.total_expenses) }}</td>
+              <td class="px-5 py-3 text-right" :class="pnl.summary.net_profit >= 0 ? 'text-fb-text' : 'text-red-700'">
+                {{ money(pnl.summary.net_profit) }}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <p class="border-t border-fb-line px-5 py-3 text-xs text-fb-secondary">
+          Изъятия владельца за период: <strong class="text-fb-text">{{ money(pnl.summary.total_withdrawals) }} UZS</strong>
+          (в прибыль не входят, показаны отдельно).
+        </p>
       </div>
 
       <!-- Breakdown Columns -->

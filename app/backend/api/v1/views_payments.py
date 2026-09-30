@@ -10,7 +10,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 
 from accounts.rbac import user_is_teacher
-from finance.wallet import current_month_price, recalc_student_wallet
+from finance.wallet import PRICE_PENDING, current_month_price, recalc_student_wallet
 from api.scope import can_access_student
 from api.responses import fail, ok
 from crm.models import Student
@@ -22,6 +22,12 @@ from org.models import Company
 
 def _company(request):
     return request.user.company
+
+
+# Owner (2026-09-28): Click and Payme are switched off until they are set up properly (merchant data,
+# secret keys, signature checks). While False both webhooks answer "disabled" and record nothing —
+# before, anyone who knew the address could make the program count money that never came.
+ONLINE_PAYMENTS_ENABLED = False
 
 
 @api_view(['GET'])
@@ -85,9 +91,12 @@ def student_send_payment_link(request, student_id: int):
 
 
 def _after_online_payment(student, payment) -> None:
-    """Копилка for online payments; without a course price the office must set the months by hand."""
+    """
+    Копилка for every payment (online and at the desk). Without a course price the money waits in the копилка
+    and is counted by itself once the student is in a group with a price; the office gets a reminder to do that.
+    """
+    recalc_student_wallet(student)
     if payment.month_price:
-        recalc_student_wallet(student)
         return
     from operations.models import Reminder
 
@@ -95,19 +104,24 @@ def _after_online_payment(student, payment) -> None:
     Reminder.objects.create(
         company_id=payment.company_id,
         student=student,
-        kind='online_payment_check',
-        title=f'Онлайн-оплата без цены курса: {student.full_name}',
+        kind=Reminder.KIND_ONLINE_PAYMENT_CHECK,
+        title=f'Оплата без цены курса: {student.full_name}',
         details=(
-            f'Пришло {money} сум ({payment.get_method_display()}), но у ученика нет группы с ценой курса, '
-            'поэтому месяцы не засчитаны. Откройте оплату в разделе оплат и укажите, за сколько месяцев.'
+            f'Пришло {money} сум ({payment.get_method_display()}). У ученика нет группы с ценой курса, '
+            'поэтому деньги лежат в копилке и месяцы пока не засчитаны.\n'
+            'Добавьте ученика в группу (или укажите цену курса) — месяцы засчитаются сами, '
+            'напоминание закроется само.'
         ),
         due_date=timezone.localdate(),
         status=Reminder.Status.TODAY,
     )
 
+
 @csrf_exempt
 def click_webhook(request):
     """Handles Click Prepare (action=0) and Complete (action=1) merchant callbacks."""
+    if not ONLINE_PAYMENTS_ENABLED:
+        return JsonResponse({'error': -9, 'error_note': 'Click payments are disabled'})
     if request.method != 'POST':
         return JsonResponse({'error': -8, 'error_note': 'Only POST method is supported'})
 
@@ -236,8 +250,8 @@ def click_webhook(request):
             })
 
         student = tx.student
-        # Копилка: months are counted from the money (finance/wallet.py); unknown price -> 0 months
-        # and a reminder for the office to set them by hand.
+        # Копилка: months are counted from the money (finance/wallet.py); unknown price -> the money
+        # waits in the копилка until the student is in a group with a price (reminder for the office).
         month_price = current_month_price(student)
         months_covered = 0
 
@@ -253,7 +267,8 @@ def click_webhook(request):
             gross_amount=amount,
             net_amount=amount,
             months_covered=months_covered,
-            month_price=month_price or None,
+            # unknown price -> the money waits in the копилка (PRICE_PENDING)
+            month_price=month_price or PRICE_PENDING,
             payment_date=timezone.localdate(),
             method=Payment.Method.CARD,
             comment=f'Click trans #{click_trans_id}',
@@ -289,6 +304,16 @@ def click_webhook(request):
 @csrf_exempt
 def payme_webhook(request):
     """Handles Payme JSON-RPC 2.0 callbacks."""
+    if not ONLINE_PAYMENTS_ENABLED:
+        req_id = None
+        try:
+            req_id = json.loads(request.body.decode('utf-8')).get('id')
+        except (ValueError, UnicodeDecodeError, AttributeError):
+            pass
+        return JsonResponse({
+            'error': {'code': -32504, 'message': 'Payme payments are disabled'},
+            'id': req_id,
+        })
     if request.method != 'POST':
         return JsonResponse({'error': {'code': -32600, 'message': 'Invalid Request'}}, status=400)
 
@@ -456,8 +481,8 @@ def payme_webhook(request):
             })
 
         student = tx.student
-        # Копилка: months are counted from the money (finance/wallet.py); unknown price -> 0 months
-        # and a reminder for the office to set them by hand.
+        # Копилка: months are counted from the money (finance/wallet.py); unknown price -> the money
+        # waits in the копилка until the student is in a group with a price (reminder for the office).
         month_price = current_month_price(student)
         months_covered = 0
 
@@ -473,7 +498,8 @@ def payme_webhook(request):
             gross_amount=tx.amount,
             net_amount=tx.amount,
             months_covered=months_covered,
-            month_price=month_price or None,
+            # unknown price -> the money waits in the копилка (PRICE_PENDING)
+            month_price=month_price or PRICE_PENDING,
             payment_date=timezone.localdate(),
             method=Payment.Method.CARD,
             comment=f'Payme trans #{trans_id}',

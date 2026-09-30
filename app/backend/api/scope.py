@@ -3,7 +3,7 @@
 from django.db.models import Q
 
 from accounts.models import User
-from accounts.rbac import ROLE_BRANCH_DIRECTOR, get_effective_role, user_is_teacher
+from accounts.rbac import ROLE_BRANCH_DIRECTOR, ROLE_CEO, get_effective_role, user_is_teacher
 from crm.models import Group, Student
 from org.models import Branch
 
@@ -132,14 +132,39 @@ def strip_for_teacher(payload: dict, user: User) -> dict:
 
 
 def filter_reminders_queryset(qs, user: User):
-    """A teacher sees only reminders assigned to them (others may be about debts or other staff)."""
+    """
+    Everybody sees their own reminders; the CEO sees all of them.
+    Own = assigned to me or created by me. Office staff also see common reminders (nobody assigned,
+    e.g. automatic "left without paying"); a branch director only those about students of their branch.
+    A teacher sees only reminders assigned to them.
+    """
+    if get_effective_role(user) == ROLE_CEO:
+        return qs.all()
     if user_is_teacher(user):
         return qs.filter(assigned_to=user)
+    common = Q(assigned_to__isnull=True)
     limit = branch_limit(user)
     if limit is not None:
-        # Branch director: reminders about students of other branches are not theirs
-        return qs.filter(Q(student__isnull=True) | Q(student__branch_id=limit))
-    return qs.all()
+        common &= Q(student__isnull=True) | Q(student__branch_id=limit)
+    return qs.filter(Q(assigned_to=user) | Q(created_by=user) | common)
+
+
+def reminder_assignees_queryset(user: User):
+    """Who a reminder can be given to: active office staff and teachers (never students).
+    A branch director: people of their own branch plus staff without a branch (CEO, admins)."""
+    qs = User.objects.filter(
+        company_id=user.company_id,
+        is_active=True,
+        user_type__in=(User.UserType.STAFF, User.UserType.TEACHER),
+    )
+    limit = branch_limit(user)
+    if limit is not None:
+        qs = qs.filter(
+            Q(user_type=User.UserType.STAFF, branch__isnull=True)
+            | Q(user_type=User.UserType.STAFF, branch_id=limit)
+            | Q(user_type=User.UserType.TEACHER, teacher_branches__branch_id=limit)
+        ).distinct()
+    return qs
 
 
 def filter_teacher_attendance_queryset(qs, user: User):

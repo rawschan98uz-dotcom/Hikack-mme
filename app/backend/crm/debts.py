@@ -102,8 +102,42 @@ def close_unpaid_leave(reminder, user, write_off_reason: str = '') -> str | None
             action='debt_write_off', reason=reason,
             old_values={'debt_months': state['debt_months'], 'debt_amount': state['debt_amount']},
         )
+        reminder.written_off = True
     else:
         reminder.resolution = f'Долг оплачен, закрыто {stamp} ({who})'
     reminder.status = Reminder.Status.DONE
-    reminder.save(update_fields=['status', 'resolution'])
+    reminder.save(update_fields=['status', 'resolution', 'written_off'])
     return None
+
+
+def close_on_return(student: Student) -> None:
+    """
+    A student who left with a debt was put back to studying: the debt is not forgiven, it simply moves to the
+    ordinary "Debtors" list, so the pinned "left without paying" reminder is closed with a note.
+    """
+    from operations.models import Reminder
+
+    stamp = timezone.localdate().strftime('%d.%m.%Y')
+    Reminder.objects.filter(student=student, kind=Reminder.KIND_UNPAID_LEAVE).exclude(
+        status=Reminder.Status.DONE,
+    ).update(
+        status=Reminder.Status.DONE,
+        resolution=f'Ученик вернулся к обучению {stamp} — долг перешёл в список «Должники»',
+    )
+
+
+def written_off_debts(student_ids) -> dict:
+    """student id -> resolution text of the latest "left without paying" reminder, if the CEO wrote that debt off."""
+    from operations.models import Reminder
+
+    result = {}
+    rows = Reminder.objects.filter(
+        student_id__in=list(student_ids), kind=Reminder.KIND_UNPAID_LEAVE,
+    ).order_by('student_id', 'created_at', 'id').values('student_id', 'written_off', 'resolution')
+    for row in rows:
+        # The latest reminder of each student wins (a student may leave, come back and leave again)
+        if row['written_off']:
+            result[row['student_id']] = row['resolution']
+        else:
+            result.pop(row['student_id'], None)
+    return result

@@ -99,13 +99,17 @@ class WalletTests(TestCase):
         self.assertEqual(card['next_payment_date'], '2026-09-01')
         self.assertEqual(card['wallet'], 0)
 
-    def test_no_course_price_keeps_hand_entered_months(self):
+    def test_no_course_price_money_waits_in_wallet(self):
+        # Owner (2026-09-28): no hand-typed months any more — without a course price the money waits
+        # in the копилка and is counted when the student is in a group with a price
         self.group.course = None
         self.group.save()
         data = self.pay(1_000_000, months_covered=2)
-        self.assertEqual(data['months_covered'], 2)
-        self.assertFalse(data['months_auto'])
-        self.assertEqual(self.card()['next_payment_date'], '2026-11-01')
+        self.assertEqual(data['months_covered'], 0)
+        self.assertTrue(data['months_auto'])
+        card = self.card()
+        self.assertEqual(card['wallet'], 1_000_000)
+        self.assertEqual(card['next_payment_date'], '2026-09-01')
 
     def test_old_hand_entered_payments_are_untouched(self):
         Payment.objects.create(

@@ -1,8 +1,14 @@
 <script setup lang="ts">
+/**
+ * «Лиды и конверсия» — one page instead of the two old reports (conversion + leads), reports audit 2026-09-29.
+ * The funnel shows what happened to every lead: 10 booked → 6 came (60%) → 3 enrolled (30%),
+ * refusals split into «before the lesson» and «after it».
+ */
 import { todayIso } from '../utils/dates';
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 
 import client, { type ApiEnvelope } from '../api/client';
+import { downloadCsv } from '../utils/csvExport';
 
 interface ConversionRow {
   id: number;
@@ -12,76 +18,112 @@ interface ConversionRow {
   stage_label: string;
   source?: string;
   school?: string;
-  course_id?: number | null;
   course_name?: string | null;
+  branch_name?: string | null;
   created_at: string;
-  trial_booked?: boolean;
   attended?: boolean;
-  converted?: boolean;
-  rejected?: boolean;
   is_active?: boolean;
-  [key: string]: unknown;
 }
 
-interface CourseOption {
+interface Option {
   id: number;
   name: string;
 }
 
+interface Funnel {
+  booked: number;
+  came: number;
+  converted: number;
+  thinking: number;
+  waiting: number;
+  rejected: number;
+  rejected_before: number;
+  rejected_after: number;
+}
+
+interface SourceRow {
+  source: string;
+  total: number;
+  came: number;
+  converted: number;
+  rate: number;
+}
+
 interface ConversionData {
-  pipeline: Record<string, number>;
+  funnel: Funnel;
+  by_source: SourceRow[];
+  sources: string[];
   rows: ConversionRow[];
-  total?: number;
+  total: number;
+  active: number;
   page?: number;
   total_pages?: number;
 }
 
 const STAGES = [
-  { key: 'trial_booked', label: 'Записан на пробный' },
-  { key: 'attended', label: 'Был на уроке (Думает)' },
-  { key: 'converted', label: 'Зачислен (Студент)' },
-  { key: 'rejected', label: 'Отказ' },
-] as const;
-
-const POPULAR_SOURCES = [
-  'Instagram',
-  'Telegram',
-  'Звонок',
-  'Рекомендация',
-  'Наружка',
-  'Сайт',
-  'Другое',
+  { value: 'trial_booked', label: 'Записан на пробный' },
+  { value: 'attended', label: 'Был на уроке (Думает)' },
+  { value: 'converted', label: 'Зачислен (Студент)' },
+  { value: 'rejected', label: 'Отказ' },
 ] as const;
 
 const data = ref<ConversionData | null>(null);
-const courses = ref<CourseOption[]>([]);
+const courses = ref<Option[]>([]);
+const branches = ref<Option[]>([]);
 const loading = ref(true);
 const exporting = ref(false);
 const currentPage = ref(1);
 const totalPages = ref(1);
-const totalCount = ref(0);
 
-const filters = reactive({ course_id: '', source: '', date_from: '', date_to: '', q: '', is_active: '' });
-
-const pipelineCards = computed(() => {
-  if (!data.value) return [];
-  const p = data.value.pipeline;
-  return STAGES.map((s) => ({ key: s.key, label: s.label, count: p[s.key] ?? 0 }));
+const filters = reactive({
+  course_id: '',
+  branch_id: '',
+  source: '',
+  stage: '',
+  date_from: '',
+  date_to: '',
+  q: '',
+  is_active: '',
 });
 
-const funnelStats = computed(() => {
-  if (!data.value) return { total: 0, booked: 0, attended: 0, converted: 0, rejected: 0, attendedRate: 0, convertedRate: 0, rejectedRate: 0 };
-  const p = data.value.pipeline;
-  const booked = p['trial_booked'] ?? 0;
-  const attended = p['attended'] ?? 0;
-  const converted = p['converted'] ?? 0;
-  const rejected = p['rejected'] ?? 0;
-  const total = booked + attended + converted + rejected;
-  const attendedRate = (booked + attended + converted) > 0 ? Math.round(((attended + converted) / (booked + attended + converted)) * 100) : 0;
-  const convertedRate = total > 0 ? Math.round((converted / total) * 100) : 0;
-  const rejectedRate = total > 0 ? Math.round((rejected / total) * 100) : 0;
-  return { total, booked, attended, converted, rejected, attendedRate, convertedRate, rejectedRate };
+function pct(part: number, whole: number) {
+  return whole > 0 ? Math.round((part / whole) * 100) : 0;
+}
+
+const funnel = computed<Funnel>(() => data.value?.funnel ?? {
+  booked: 0, came: 0, converted: 0, thinking: 0, waiting: 0, rejected: 0, rejected_before: 0, rejected_after: 0,
 });
+
+const funnelSteps = computed(() => {
+  const f = funnel.value;
+  return [
+    { key: 'booked', title: '1. Записались на пробный', count: f.booked, rate: f.booked ? 100 : 0, hint: 'все лиды за период', color: 'blue' },
+    { key: 'came', title: '2. Пришли на пробный', count: f.came, rate: pct(f.came, f.booked), hint: 'от записавшихся', color: 'emerald' },
+    {
+      key: 'converted',
+      title: '3. Стали студентами',
+      count: f.converted,
+      rate: pct(f.converted, f.booked),
+      hint: `от записавшихся · ${pct(f.converted, f.came)}% от пришедших`,
+      color: 'indigo',
+    },
+  ];
+});
+
+const STEP_COLORS: Record<string, { box: string; title: string; num: string; bar: string; track: string }> = {
+  blue: { box: 'border-blue-200 bg-blue-50/60', title: 'text-blue-800', num: 'text-blue-900', bar: 'bg-blue-600', track: 'bg-blue-200' },
+  emerald: { box: 'border-emerald-200 bg-emerald-50/60', title: 'text-emerald-800', num: 'text-emerald-900', bar: 'bg-emerald-600', track: 'bg-emerald-200' },
+  indigo: { box: 'border-indigo-200 bg-indigo-50/60', title: 'text-indigo-800', num: 'text-indigo-900', bar: 'bg-indigo-600', track: 'bg-indigo-200' },
+};
+
+function queryParams(extra: Record<string, string>) {
+  const params: Record<string, string> = { ...extra };
+  for (const key of ['course_id', 'branch_id', 'source', 'stage', 'date_from', 'date_to', 'is_active'] as const) {
+    if (filters[key]) params[key] = filters[key];
+  }
+  if (filters.q.trim()) params.q = filters.q.trim();
+  return params;
+}
 
 function applyFilters() {
   currentPage.value = 1;
@@ -89,14 +131,18 @@ function applyFilters() {
 }
 
 function resetFilters() {
-  filters.course_id = '';
-  filters.source = '';
-  filters.date_from = '';
-  filters.date_to = '';
-  filters.q = '';
-  filters.is_active = '';
-  currentPage.value = 1;
-  loadData();
+  Object.assign(filters, { course_id: '', branch_id: '', source: '', stage: '', date_from: '', date_to: '', q: '', is_active: '' });
+  applyFilters();
+}
+
+function pickSource(source: string) {
+  filters.source = filters.source === source ? '' : source;
+  applyFilters();
+}
+
+function pickStage(stage: string) {
+  filters.stage = filters.stage === stage ? '' : stage;
+  applyFilters();
 }
 
 function changePage(delta: number) {
@@ -104,29 +150,23 @@ function changePage(delta: number) {
   loadData();
 }
 
-async function loadCourses() {
-  try {
-    const res = await client.get<ApiEnvelope<CourseOption[]>>('/courses');
-    courses.value = res.data.data;
-  } catch {
-    // ignore
-  }
+async function loadOptions() {
+  const [courseRes, branchRes] = await Promise.allSettled([
+    client.get<ApiEnvelope<Option[]>>('/courses'),
+    client.get<ApiEnvelope<Option[]>>('/branch'),
+  ]);
+  if (courseRes.status === 'fulfilled') courses.value = courseRes.value.data.data;
+  if (branchRes.status === 'fulfilled') branches.value = branchRes.value.data.data;
 }
 
 async function loadData() {
   loading.value = true;
   try {
-    const params: Record<string, string> = { page: String(currentPage.value) };
-    if (filters.course_id) params.course_id = filters.course_id;
-    if (filters.source) params.source = filters.source;
-    if (filters.date_from) params.date_from = filters.date_from;
-    if (filters.date_to) params.date_to = filters.date_to;
-    if (filters.is_active) params.is_active = filters.is_active;
-    if (filters.q.trim()) params.q = filters.q.trim();
-    const res = await client.get<ApiEnvelope<ConversionData>>('/reports/conversion', { params });
+    const res = await client.get<ApiEnvelope<ConversionData>>('/reports/conversion', {
+      params: queryParams({ page: String(currentPage.value) }),
+    });
     data.value = res.data.data;
     totalPages.value = res.data.data.total_pages || 1;
-    totalCount.value = res.data.data.total || res.data.data.rows?.length || 0;
   } finally {
     loading.value = false;
   }
@@ -135,43 +175,24 @@ async function loadData() {
 async function exportCsv() {
   exporting.value = true;
   try {
-    const params: Record<string, string> = { export: '1' };
-    if (filters.course_id) params.course_id = filters.course_id;
-    if (filters.source) params.source = filters.source;
-    if (filters.date_from) params.date_from = filters.date_from;
-    if (filters.date_to) params.date_to = filters.date_to;
-    if (filters.is_active) params.is_active = filters.is_active;
-    if (filters.q.trim()) params.q = filters.q.trim();
-
-    const res = await client.get<ApiEnvelope<ConversionData>>('/reports/conversion', { params });
-    const csvRows = [
-      ['ID', 'ФИО (Full Name)', 'Телефон (Phone)', 'Курс (Course)', 'Источник (Source)', 'Школа (School)', 'Текущий этап (Stage)', 'Статус', 'Записан на пробный', 'Был на уроке', 'Зачислен (Студент)', 'Отказ', 'Дата создания'],
-    ];
-    for (const row of res.data.data.rows) {
-      csvRows.push([
-        String(row.id),
-        `"${row.full_name || ''}"`,
-        `"${row.phone || ''}"`,
-        `"${row.course_name || '—'}"`,
-        `"${row.source || '—'}"`,
-        `"${row.school || '—'}"`,
-        `"${row.stage_label || ''}"`,
-        row.is_active === false ? 'В архиве' : 'Активный',
-        row.trial_booked ? 'Да' : 'Нет',
+    const res = await client.get<ApiEnvelope<ConversionData>>('/reports/conversion', { params: queryParams({ export: '1' }) });
+    downloadCsv(
+      `leads_conversion_${todayIso()}.csv`,
+      ['ID', 'ФИО', 'Телефон', 'Курс', 'Филиал', 'Источник', 'Школа', 'Этап', 'Пришёл на пробный', 'Статус', 'Дата обращения'],
+      res.data.data.rows.map((row) => [
+        row.id,
+        row.full_name,
+        row.phone,
+        row.course_name || '—',
+        row.branch_name || '—',
+        row.source || '—',
+        row.school || '—',
+        row.stage_label,
         row.attended ? 'Да' : 'Нет',
-        row.converted ? 'Да' : 'Нет',
-        row.rejected ? 'Да' : 'Нет',
-        `"${row.created_at || ''}"`,
-      ]);
-    }
-    const csvContent = 'data:text/csv;charset=utf-8,\uFEFF' + csvRows.map((e) => e.join(',')).join('\n');
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `conversion_report_${todayIso()}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+        row.is_active === false ? 'В архиве' : 'Активный',
+        row.created_at,
+      ]),
+    );
   } catch (err) {
     console.error(err);
     alert('Не удалось экспортировать отчет в CSV');
@@ -181,7 +202,7 @@ async function exportCsv() {
 }
 
 onMounted(async () => {
-  await Promise.all([loadData(), loadCourses()]);
+  await Promise.all([loadData(), loadOptions()]);
 });
 
 let searchDebounce: ReturnType<typeof setTimeout> | null = null;
@@ -190,9 +211,7 @@ watch(
   (newQ, oldQ) => {
     if (newQ === oldQ) return;
     if (searchDebounce) clearTimeout(searchDebounce);
-    searchDebounce = setTimeout(() => {
-      applyFilters();
-    }, 400);
+    searchDebounce = setTimeout(applyFilters, 400);
   },
 );
 </script>
@@ -201,8 +220,8 @@ watch(
   <div class="space-y-4">
     <div class="flex flex-wrap items-center justify-between gap-3">
       <div>
-        <h1 class="text-xl font-semibold text-fb-text">Отчет по конверсии</h1>
-        <p class="text-xs text-fb-secondary mt-0.5">Воронка прохождения пробных занятий и конверсии лидов</p>
+        <h1 class="text-xl font-semibold text-fb-text">Лиды и конверсия</h1>
+        <p class="text-xs text-fb-secondary mt-0.5">Сколько записалось на пробный, сколько пришло и сколько стало студентами</p>
       </div>
       <button
         type="button"
@@ -218,198 +237,200 @@ watch(
     <div class="flex flex-wrap items-end gap-3 rounded-xl border border-fb-line bg-fb-card p-4">
       <div>
         <label class="mb-1 block text-xs font-medium text-fb-secondary">Курс</label>
-        <select v-model="filters.course_id" class="rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none">
+        <select v-model="filters.course_id" class="rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none" @change="applyFilters">
           <option value="">Все курсы</option>
           <option v-for="c in courses" :key="c.id" :value="String(c.id)">{{ c.name }}</option>
         </select>
       </div>
-      <div>
-        <label class="mb-1 block text-xs font-medium text-fb-secondary">Источник</label>
-        <select v-model="filters.source" class="rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none">
-          <option value="">Все источники</option>
-          <option v-for="src in POPULAR_SOURCES" :key="src" :value="src">{{ src }}</option>
+      <div v-if="branches.length > 1">
+        <label class="mb-1 block text-xs font-medium text-fb-secondary">Филиал</label>
+        <select v-model="filters.branch_id" class="rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none" @change="applyFilters">
+          <option value="">Все филиалы</option>
+          <option v-for="b in branches" :key="b.id" :value="String(b.id)">{{ b.name }}</option>
         </select>
       </div>
       <div>
-        <label class="mb-1 block text-xs font-medium text-fb-secondary">С даты</label>
-        <input v-model="filters.date_from" type="date" class="rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none" />
+        <label class="mb-1 block text-xs font-medium text-fb-secondary">Источник</label>
+        <select v-model="filters.source" class="rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none" @change="applyFilters">
+          <option value="">Все источники</option>
+          <option v-for="src in data?.sources ?? []" :key="src" :value="src">{{ src }}</option>
+          <option value="—">Без источника</option>
+        </select>
       </div>
       <div>
-        <label class="mb-1 block text-xs font-medium text-fb-secondary">По дату</label>
-        <input v-model="filters.date_to" type="date" class="rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none" />
+        <label class="mb-1 block text-xs font-medium text-fb-secondary">Этап</label>
+        <select v-model="filters.stage" class="rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none" @change="applyFilters">
+          <option value="">Все этапы</option>
+          <option v-for="s in STAGES" :key="s.value" :value="s.value">{{ s.label }}</option>
+        </select>
       </div>
       <div>
-        <label class="mb-1 block text-xs font-medium text-fb-secondary">Статус</label>
-        <select v-model="filters.is_active" class="rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none">
+        <label class="mb-1 block text-xs font-medium text-fb-secondary">Лиды</label>
+        <select v-model="filters.is_active" class="rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none" @change="applyFilters">
           <option value="">Все (включая архив)</option>
           <option value="true">Только активные</option>
           <option value="false">Только архив</option>
         </select>
+      </div>
+      <div>
+        <label class="mb-1 block text-xs font-medium text-fb-secondary">С даты</label>
+        <input v-model="filters.date_from" type="date" class="rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none" @change="applyFilters" />
+      </div>
+      <div>
+        <label class="mb-1 block text-xs font-medium text-fb-secondary">По дату</label>
+        <input v-model="filters.date_to" type="date" class="rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none" @change="applyFilters" />
       </div>
       <div class="min-w-[180px] flex-1">
         <label class="mb-1 block text-xs font-medium text-fb-secondary">Поиск</label>
         <input
           v-model="filters.q"
           type="search"
-          placeholder="Поиск по имени, телефону, источнику…"
+          placeholder="Имя, телефон, источник, школа…"
           class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none"
           @keydown.enter="applyFilters"
         />
       </div>
-      <button
-        type="button"
-        class="rounded-lg bg-fb-blue px-4 py-2 text-sm font-medium text-white hover:bg-fb-blue-dark transition-colors"
-        @click="applyFilters"
-      >
-        Применить
+      <button type="button" class="rounded-lg border border-fb-line px-4 py-2 text-sm text-fb-secondary hover:text-fb-blue" @click="resetFilters">
+        Сбросить
       </button>
     </div>
 
-    <div v-if="loading" class="p-12 text-center text-fb-secondary">Загрузка данных…</div>
-    <template v-else>
-      <!-- Pipeline stages cards -->
-      <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <div
-          v-for="card in pipelineCards"
-          :key="card.key"
-          class="rounded-xl border border-fb-line bg-fb-card p-5 text-center shadow-sm"
-        >
-          <div class="text-3xl font-bold text-fb-blue">{{ card.count }}</div>
-          <div class="mt-1 text-sm font-medium text-fb-text">{{ card.label }}</div>
-        </div>
-      </div>
-
-      <!-- Visual Funnel Diagram -->
-      <div v-if="funnelStats.total > 0" class="rounded-xl border border-fb-line bg-fb-card p-5 shadow-sm">
-        <div class="flex flex-wrap items-center justify-between gap-2 text-xs font-medium text-fb-secondary mb-3">
-          <span>Воронка движения лидов</span>
-          <div class="flex items-center gap-4">
-            <span>В урок: <strong class="text-emerald-700">{{ funnelStats.attendedRate }}%</strong></span>
-            <span>В студенты: <strong class="text-indigo-600">{{ funnelStats.convertedRate }}%</strong></span>
-          </div>
-        </div>
-        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-4">
-          <!-- Step 1 -->
-          <div class="relative flex flex-col justify-between rounded-lg border border-blue-200 bg-blue-50/60 p-3.5">
-            <div class="flex items-center justify-between">
-              <span class="text-xs font-semibold uppercase tracking-wider text-blue-800">1. Записан</span>
-              <span class="text-xs font-medium text-blue-600">100%</span>
-            </div>
-            <div class="mt-2 text-2xl font-bold text-blue-900">{{ funnelStats.booked }}</div>
-            <div class="mt-2 h-1.5 w-full rounded-full bg-blue-200">
-              <div class="h-1.5 rounded-full bg-blue-600" style="width: 100%" />
-            </div>
-          </div>
-
-          <!-- Step 2 -->
-          <div class="relative flex flex-col justify-between rounded-lg border border-emerald-200 bg-emerald-50/60 p-3.5">
-            <div class="flex items-center justify-between">
-              <span class="text-xs font-semibold uppercase tracking-wider text-emerald-800">2. Был на уроке</span>
-              <span class="text-xs font-bold text-emerald-700">{{ funnelStats.attendedRate }}%</span>
-            </div>
-            <div class="mt-2 text-2xl font-bold text-emerald-900">{{ funnelStats.attended }}</div>
-            <div class="mt-2 h-1.5 w-full rounded-full bg-emerald-200">
-              <div class="h-1.5 rounded-full bg-emerald-600" :style="{ width: `${funnelStats.attendedRate}%` }" />
-            </div>
-          </div>
-
-          <!-- Step 3 -->
-          <div class="relative flex flex-col justify-between rounded-lg border border-indigo-200 bg-indigo-50/60 p-3.5">
-            <div class="flex items-center justify-between">
-              <span class="text-xs font-semibold uppercase tracking-wider text-indigo-800">3. Зачислен (Студент)</span>
-              <span class="text-xs font-bold text-indigo-700">{{ funnelStats.convertedRate }}%</span>
-            </div>
-            <div class="mt-2 text-2xl font-bold text-indigo-900">{{ funnelStats.converted }}</div>
-            <div class="mt-2 h-1.5 w-full rounded-full bg-indigo-200">
-              <div class="h-1.5 rounded-full bg-indigo-600" :style="{ width: `${funnelStats.convertedRate}%` }" />
-            </div>
-          </div>
-
-          <!-- Step 4 -->
-          <div class="relative flex flex-col justify-between rounded-lg border border-gray-200 bg-gray-50/60 p-3.5">
-            <div class="flex items-center justify-between">
-              <span class="text-xs font-semibold uppercase tracking-wider text-gray-700">4. Отказ</span>
-              <span class="text-xs font-medium text-gray-500">{{ funnelStats.rejectedRate }}%</span>
-            </div>
-            <div class="mt-2 text-2xl font-bold text-gray-800">{{ funnelStats.rejected }}</div>
-            <div class="mt-2 h-1.5 w-full rounded-full bg-gray-200">
-              <div class="h-1.5 rounded-full bg-gray-500" :style="{ width: `${funnelStats.rejectedRate}%` }" />
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Table or Empty State -->
-      <div class="overflow-hidden rounded-xl border border-fb-line bg-fb-card shadow-sm">
-        <div v-if="!data?.rows.length" class="flex flex-col items-center justify-center p-12 text-center">
-          <div class="flex h-16 w-16 items-center justify-center rounded-full bg-fb-hover text-2xl mb-3 text-fb-icon">
-            🔄
-          </div>
-          <h3 class="text-base font-semibold text-fb-text">Лиды в воронке не найдены</h3>
-          <p class="mt-1 text-sm text-fb-secondary max-w-sm">
-            За указанный период нет активных лидов на этапах воронки. Попробуйте изменить фильтры дат.
-          </p>
-          <button
-            type="button"
-            class="mt-4 rounded-lg border border-fb-line bg-white px-4 py-2 text-xs font-medium text-fb-blue hover:bg-fb-canvas transition-colors"
-            @click="resetFilters"
+    <div v-if="loading && !data" class="p-12 text-center text-fb-secondary">Загрузка данных…</div>
+    <template v-else-if="data">
+      <!-- Funnel: what happened to every lead of the period -->
+      <div class="rounded-xl border border-fb-line bg-fb-card p-5 shadow-sm">
+        <div class="mb-3 text-xs font-medium text-fb-secondary">Воронка за выбранный период</div>
+        <div class="grid grid-cols-1 gap-3 md:grid-cols-3">
+          <div
+            v-for="step in funnelSteps"
+            :key="step.key"
+            class="flex flex-col justify-between rounded-lg border p-3.5"
+            :class="STEP_COLORS[step.color].box"
           >
-            Сбросить фильтры
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-semibold uppercase tracking-wider" :class="STEP_COLORS[step.color].title">{{ step.title }}</span>
+              <span class="text-sm font-bold" :class="STEP_COLORS[step.color].title">{{ step.rate }}%</span>
+            </div>
+            <div class="mt-2 text-2xl font-bold" :class="STEP_COLORS[step.color].num">{{ step.count }}</div>
+            <div class="mt-1 text-[11px] text-fb-secondary">{{ step.hint }}</div>
+            <div class="mt-2 h-1.5 w-full rounded-full" :class="STEP_COLORS[step.color].track">
+              <div class="h-1.5 rounded-full" :class="STEP_COLORS[step.color].bar" :style="{ width: `${step.rate}%` }" />
+            </div>
+          </div>
+        </div>
+        <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3 text-sm">
+          <button type="button" class="rounded-lg border border-fb-line px-3 py-2 text-left hover:border-fb-blue" :class="filters.stage === 'trial_booked' ? 'border-fb-blue bg-fb-hover' : ''" @click="pickStage('trial_booked')">
+            <span class="text-fb-secondary">Ещё не были на пробном:</span>
+            <strong class="ml-1 text-fb-text">{{ funnel.waiting }}</strong>
           </button>
+          <button type="button" class="rounded-lg border border-fb-line px-3 py-2 text-left hover:border-fb-blue" :class="filters.stage === 'attended' ? 'border-fb-blue bg-fb-hover' : ''" @click="pickStage('attended')">
+            <span class="text-fb-secondary">Были, думают:</span>
+            <strong class="ml-1 text-fb-text">{{ funnel.thinking }}</strong>
+          </button>
+          <button type="button" class="rounded-lg border border-fb-line px-3 py-2 text-left hover:border-fb-blue" :class="filters.stage === 'rejected' ? 'border-fb-blue bg-fb-hover' : ''" @click="pickStage('rejected')">
+            <span class="text-fb-secondary">Отказ:</span>
+            <strong class="ml-1 text-fb-text">{{ funnel.rejected }}</strong>
+            <span class="ml-1 text-xs text-fb-secondary">(до урока {{ funnel.rejected_before }}, после урока {{ funnel.rejected_after }})</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Which advertising works -->
+      <div v-if="data.by_source.length" class="overflow-hidden rounded-xl border border-fb-line bg-fb-card shadow-sm">
+        <div class="border-b border-fb-line px-5 py-3 text-sm font-semibold text-fb-text">По источникам — какая реклама приводит студентов</div>
+        <table class="w-full text-sm">
+          <thead class="border-b border-fb-line bg-fb-canvas text-xs uppercase tracking-wider font-semibold text-fb-secondary">
+            <tr>
+              <th class="px-5 py-2.5 text-left">Источник</th>
+              <th class="px-4 py-2.5 text-right">Лидов</th>
+              <th class="px-4 py-2.5 text-right">Пришли на пробный</th>
+              <th class="px-4 py-2.5 text-right">Стали студентами</th>
+              <th class="px-5 py-2.5 text-right">Конверсия</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-fb-line">
+            <tr
+              v-for="src in data.by_source"
+              :key="src.source"
+              class="cursor-pointer hover:bg-fb-hover/40"
+              :class="filters.source === src.source ? 'bg-fb-hover' : ''"
+              title="Нажмите, чтобы показать лидов этого источника"
+              @click="pickSource(src.source)"
+            >
+              <td class="px-5 py-2.5 font-medium text-fb-text">{{ src.source === '—' ? 'Без источника' : src.source }}</td>
+              <td class="px-4 py-2.5 text-right">{{ src.total }}</td>
+              <td class="px-4 py-2.5 text-right">{{ src.came }}</td>
+              <td class="px-4 py-2.5 text-right">{{ src.converted }}</td>
+              <td class="px-5 py-2.5 text-right font-semibold text-indigo-700">{{ src.rate }}%</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Leads -->
+      <div class="overflow-hidden rounded-xl border border-fb-line bg-fb-card shadow-sm">
+        <div class="flex flex-wrap items-center justify-between gap-2 border-b border-fb-line px-5 py-3 text-sm">
+          <span class="font-semibold text-fb-text">Лиды</span>
+          <span class="text-fb-secondary">Всего: <strong class="text-fb-text">{{ data.total }}</strong> · активных: <strong class="text-fb-text">{{ data.active }}</strong> · в архиве: <strong class="text-fb-text">{{ data.total - data.active }}</strong></span>
+        </div>
+        <div v-if="!data.rows.length" class="flex flex-col items-center justify-center p-12 text-center">
+          <h3 class="text-base font-semibold text-fb-text">Лиды не найдены</h3>
+          <p class="mt-1 text-sm text-fb-secondary max-w-sm">По выбранным фильтрам лидов нет. Попробуйте изменить период или сбросить фильтры.</p>
         </div>
 
         <template v-else>
-          <table class="w-full text-sm">
-            <thead class="border-b border-fb-line bg-fb-canvas text-xs uppercase tracking-wider font-semibold text-fb-secondary">
-              <tr>
-                <th class="px-5 py-3.5 text-left">ФИО</th>
-                <th class="px-5 py-3.5 text-left">Телефон</th>
-                <th class="px-4 py-3.5 text-left">Курс</th>
-                <th class="px-4 py-3.5 text-left">Источник</th>
-                <th class="px-5 py-3.5 text-left">Текущий статус</th>
-                <th v-for="stage in STAGES" :key="stage.key" class="px-3 py-3.5 text-center">
-                  {{ stage.label }}
-                </th>
-                <th class="px-5 py-3.5 text-left">Дата</th>
-              </tr>
-            </thead>
-            <tbody class="divide-y divide-fb-line">
-              <tr v-for="row in data.rows" :key="row.id" class="hover:bg-fb-hover/40 transition-colors">
-                <td class="px-5 py-3.5 font-medium text-fb-text">
-                  <div class="flex items-center gap-2">
-                    <span>{{ row.full_name }}</span>
-                    <span
-                      v-if="row.is_active === false"
-                      class="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 border border-amber-200"
-                      title="Лид находится в архиве"
-                    >
-                      Архив
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead class="border-b border-fb-line bg-fb-canvas text-xs uppercase tracking-wider font-semibold text-fb-secondary">
+                <tr>
+                  <th class="px-5 py-3.5 text-left">ФИО</th>
+                  <th class="px-5 py-3.5 text-left">Телефон</th>
+                  <th class="px-4 py-3.5 text-left">Курс</th>
+                  <th v-if="branches.length > 1" class="px-4 py-3.5 text-left">Филиал</th>
+                  <th class="px-4 py-3.5 text-left">Источник</th>
+                  <th class="px-5 py-3.5 text-left">Этап</th>
+                  <th class="px-3 py-3.5 text-center">Был на пробном</th>
+                  <th class="px-5 py-3.5 text-left">Дата</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-fb-line">
+                <tr v-for="row in data.rows" :key="row.id" class="hover:bg-fb-hover/40 transition-colors">
+                  <td class="px-5 py-3.5 font-medium text-fb-text">
+                    <div class="flex items-center gap-2">
+                      <span>{{ row.full_name }}</span>
+                      <span
+                        v-if="row.is_active === false"
+                        class="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 border border-amber-200"
+                        title="Лид находится в архиве"
+                      >
+                        Архив
+                      </span>
+                    </div>
+                  </td>
+                  <td class="px-5 py-3.5 text-fb-secondary">{{ row.phone }}</td>
+                  <td class="px-4 py-3.5 text-fb-secondary text-xs">{{ row.course_name || '—' }}</td>
+                  <td v-if="branches.length > 1" class="px-4 py-3.5 text-fb-secondary text-xs">{{ row.branch_name || '—' }}</td>
+                  <td class="px-4 py-3.5">
+                    <span v-if="row.source" class="rounded bg-sky-50 px-2 py-0.5 text-xs text-sky-700 font-medium border border-sky-200">
+                      {{ row.source }}
                     </span>
-                  </div>
-                </td>
-                <td class="px-5 py-3.5 text-fb-secondary">{{ row.phone }}</td>
-                <td class="px-4 py-3.5 text-fb-secondary text-xs">{{ row.course_name || '—' }}</td>
-                <td class="px-4 py-3.5">
-                  <span v-if="row.source" class="rounded bg-sky-50 px-2 py-0.5 text-xs text-sky-700 font-medium border border-sky-200">
-                    {{ row.source }}
-                  </span>
-                  <span v-else class="text-fb-secondary text-xs">—</span>
-                </td>
-                <td class="px-5 py-3.5">
-                  <span class="rounded-full bg-fb-canvas border border-fb-line px-2.5 py-0.5 text-xs font-medium text-fb-text">
-                    {{ row.stage_label }}
-                  </span>
-                </td>
-                <td v-for="stage in STAGES" :key="stage.key" class="px-3 py-3.5 text-center">
-                  <span v-if="row[stage.key]" class="font-bold text-emerald-600">✓</span>
-                  <span v-else class="text-fb-icon">—</span>
-                </td>
-                <td class="px-5 py-3.5 text-fb-secondary">{{ row.created_at }}</td>
-              </tr>
-            </tbody>
-          </table>
+                    <span v-else class="text-fb-secondary text-xs">—</span>
+                  </td>
+                  <td class="px-5 py-3.5">
+                    <span class="rounded-full bg-fb-canvas border border-fb-line px-2.5 py-0.5 text-xs font-medium text-fb-text">
+                      {{ row.stage_label }}
+                    </span>
+                  </td>
+                  <td class="px-3 py-3.5 text-center">
+                    <span v-if="row.attended" class="font-bold text-emerald-600">✓</span>
+                    <span v-else class="text-fb-icon">—</span>
+                  </td>
+                  <td class="px-5 py-3.5 text-fb-secondary">{{ row.created_at.split('-').reverse().join('.') }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
 
-          <!-- Pagination Bar -->
           <div class="flex items-center justify-between border-t border-fb-line px-5 py-3.5">
             <button
               type="button"
@@ -420,7 +441,7 @@ watch(
               ← Назад
             </button>
             <span class="text-xs text-fb-secondary font-medium">
-              Страница {{ currentPage }} из {{ totalPages }} (всего {{ totalCount }} лидов)
+              Страница {{ currentPage }} из {{ totalPages }} (всего {{ data.total }} лидов)
             </span>
             <button
               type="button"

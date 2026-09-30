@@ -31,10 +31,38 @@ interface CourseOption {
   name: string;
 }
 
-interface StudentOption {
+/** One student of a group as the grading sheet sees them today (GET /scores/sheet). */
+interface SheetStudent {
+  student_id: number;
+  name: string;
+  last_grade: number | null;
+  /** false = absent today in the attendance, or in a freeze: no grade today */
+  can_grade: boolean;
+  reason_label: string;
+}
+
+interface LessonDate {
+  date: string;
+  label: string;
+}
+
+interface SheetPayload {
+  date: string | null;
+  lesson_dates: LessonDate[];
+  students: SheetStudent[];
+}
+
+/** Every grade of a student; the rating shows only the latest one. */
+interface HistoryRow {
   id: number;
-  full_name: string;
-  group_id: number | null;
+  date: string;
+  group: string;
+  course: string;
+  grade: number;
+  graded_by: string;
+  corrected: boolean;
+  corrected_at: string | null;
+  corrected_by: string;
 }
 
 interface RatingSummary {
@@ -91,8 +119,11 @@ interface GroupScoreRow {
 interface BulkStudentItem {
   student_id: number;
   student_name: string;
-  grade: number;
-  existing: boolean;
+  /** '' = not graded (nothing is saved for this student) */
+  grade: number | '';
+  last_grade: number | null;
+  can_grade: boolean;
+  reason_label: string;
 }
 
 const router = useRouter();
@@ -113,7 +144,13 @@ const branches = ref<Branch[]>([]);
 const groups = ref<GroupOption[]>([]);
 const teachers = ref<TeacherOption[]>([]);
 const courses = ref<CourseOption[]>([]);
-const students = ref<StudentOption[]>([]);
+/** Students of the group chosen in "Add grade" (only that group, loaded after picking it). */
+const panelStudents = ref<SheetStudent[]>([]);
+const panelStudentsLoading = ref(false);
+/** The lesson the grade is for: one of the group's lessons of the last 7 days (newest by default). */
+const panelDate = ref('');
+const panelLessonDates = ref<LessonDate[]>([]);
+const history = ref<HistoryRow[]>([]);
 
 const loading = ref(true);
 const groupsLoading = ref(false);
@@ -133,6 +170,8 @@ const bulkStudents = ref<BulkStudentItem[]>([]);
 const bulkLoading = ref(false);
 const bulkSaving = ref(false);
 const bulkError = ref('');
+const bulkDate = ref('');
+const bulkLessonDates = ref<LessonDate[]>([]);
 
 const filters = reactive({
   branch_id: '',
@@ -146,7 +185,8 @@ const filters = reactive({
 const form = reactive({
   student_id: '' as number | '',
   group_id: '' as number | '',
-  grade: 0,
+  /** '' until the teacher types it (0 is a real grade, not "not graded") */
+  grade: '' as number | '',
 });
 
 const panelTitle = computed(() => {
@@ -164,12 +204,29 @@ const maxGrade = computed(() => {
 
 const topThree = computed(() => rows.value.slice(0, 3));
 
-const filteredStudents = computed(() => {
-  if (!form.group_id) return students.value;
-  return students.value.filter(
-    (student) => student.group_id === form.group_id || student.group_id === null,
-  );
-});
+/** "Add grade": the students of the chosen group, loaded for that group only. */
+async function loadPanelStudents(keepDate = false) {
+  panelStudents.value = [];
+  form.student_id = '';
+  if (!keepDate) {
+    panelDate.value = '';
+    panelLessonDates.value = [];
+  }
+  if (!form.group_id) return;
+  panelStudentsLoading.value = true;
+  try {
+    const params: Record<string, string | number> = { group_id: form.group_id };
+    if (panelDate.value) params.date = panelDate.value;
+    const { data } = await client.get<ApiEnvelope<SheetPayload>>('/scores/sheet', { params });
+    panelLessonDates.value = data.data.lesson_dates;
+    panelDate.value = data.data.date ?? '';
+    panelStudents.value = data.data.students;
+  } catch {
+    formError.value = 'Не удалось загрузить учеников группы';
+  } finally {
+    panelStudentsLoading.value = false;
+  }
+}
 
 // Analytics brackets
 const brackets = computed(() => {
@@ -201,11 +258,16 @@ const brackets = computed(() => {
 
 function resetForm() {
   form.student_id = '';
-  form.group_id = groups.value[0]?.id ?? '';
-  form.grade = 0;
+  // The teacher picks the group first; then only its students are listed
+  form.group_id = '';
+  form.grade = '';
   formError.value = '';
   editingScore.value = null;
   detailScore.value = null;
+  panelStudents.value = [];
+  panelDate.value = '';
+  panelLessonDates.value = [];
+  history.value = [];
 }
 
 function fillForm(score: RatingRow) {
@@ -264,10 +326,9 @@ async function loadOptions() {
   // Teachers may not read the teacher and course lists; asking for them made the whole
   // Promise.all fail, so "Add grade" and the grading sheet had empty group/student lists.
   const empty = { data: { data: [] as never[] } };
-  const [branchRes, groupRes, studentRes, teacherRes, courseRes] = await Promise.all([
+  const [branchRes, groupRes, teacherRes, courseRes] = await Promise.all([
     isTeacher.value ? Promise.resolve(empty) : client.get<ApiEnvelope<Branch[]>>('/branch'),
     client.get<ApiEnvelope<GroupOption[]>>('/groups'),
-    client.get<ApiEnvelope<{ id: number; full_name: string; group_id?: number | null }[]>>('/students'),
     isTeacher.value ? Promise.resolve(empty) : client.get<ApiEnvelope<TeacherOption[]>>('/user', { params: { user_type: 'teacher' } }),
     isTeacher.value ? Promise.resolve(empty) : client.get<ApiEnvelope<CourseOption[]>>('/courses'),
   ]);
@@ -279,11 +340,6 @@ async function loadOptions() {
     branch_id: group.branch_id,
     course_id: group.course_id,
     teacher_id: group.teacher_id,
-  }));
-  students.value = studentRes.data.data.map((student) => ({
-    id: student.id,
-    full_name: student.full_name,
-    group_id: student.group_id ?? null,
   }));
   teachers.value = teacherRes.data.data.map((t) => ({ id: t.id, name: t.name }));
   courses.value = courseRes.data.data.map((c) => ({ id: c.id, name: c.name }));
@@ -322,9 +378,26 @@ async function openDetailPanel(scoreId: number) {
     const { data } = await client.get<ApiEnvelope<RatingRow>>(`/scores/${scoreId}`);
     detailScore.value = data.data;
     fillForm(data.data);
+    await loadHistory(data.data.student_id);
   } finally {
     panelLoading.value = false;
   }
+}
+
+/** All grades of the student; the rating itself shows only the latest one. */
+async function loadHistory(studentId: number) {
+  try {
+    const { data } = await client.get<ApiEnvelope<HistoryRow[]>>('/scores/history', { params: { student_id: studentId } });
+    history.value = data.data;
+  } catch {
+    history.value = [];
+  }
+}
+
+function formatDay(iso: string | null) {
+  if (!iso) return '';
+  const [y, m, d] = iso.split('-');
+  return `${d}.${m}.${y}`;
 }
 
 function startEdit() {
@@ -344,27 +417,29 @@ async function submitScore() {
     return;
   }
   const maxScale = summary.value.max_scale || 100;
-  if (form.grade < 0 || form.grade > maxScale) {
-    formError.value = `Grade must be between 0 and ${maxScale}`;
+  if (form.grade === '' || !Number.isInteger(form.grade) || form.grade < 0 || form.grade > maxScale) {
+    formError.value = `Оценка — целое число от 0 до ${maxScale}`;
     return;
   }
 
   saving.value = true;
   try {
-    const payload = {
-      student_id: form.student_id,
-      group_id: form.group_id,
-      grade: form.grade,
-    };
     if (editingScore.value) {
-      await client.patch(`/scores/${editingScore.value.id}`, payload);
+      // Only the points can be changed (student and group of a grade are fixed)
+      await client.patch(`/scores/${editingScore.value.id}`, { grade: form.grade });
     } else {
-      await client.post('/scores/branch', payload);
+      await client.post('/scores/branch', {
+        student_id: form.student_id,
+        group_id: form.group_id,
+        grade: form.grade,
+        lesson_date: panelDate.value,
+      });
     }
     closePanel();
     await Promise.all([loadRating(), loadGroupScores()]);
-  } catch {
-    formError.value = editingScore.value ? 'Could not update grade' : 'Could not add grade';
+  } catch (err: any) {
+    formError.value =
+      err.response?.data?.message || (editingScore.value ? 'Could not update grade' : 'Could not add grade');
   } finally {
     saving.value = false;
   }
@@ -390,8 +465,15 @@ async function deleteScore() {
 async function openBulkModal(preselectedGroupId?: number) {
   showBulkModal.value = true;
   bulkGroupId.value = preselectedGroupId || (groups.value[0]?.id ?? '');
+  bulkDate.value = '';
   bulkError.value = '';
   await loadBulkStudents();
+}
+
+/** The group changed: back to its newest lesson. */
+function onBulkGroupChange() {
+  bulkDate.value = '';
+  loadBulkStudents();
 }
 
 async function loadBulkStudents() {
@@ -402,28 +484,19 @@ async function loadBulkStudents() {
   bulkLoading.value = true;
   bulkError.value = '';
   try {
-    const { data: stData } = await client.get<ApiEnvelope<{ id: number; full_name: string }[]>>('/students', {
-      params: { group_id: bulkGroupId.value },
-    });
-
-    const existingScoresMap = new Map<number, number>();
-    rows.value
-      .filter((r) => r.group_id === Number(bulkGroupId.value))
-      .forEach((r) => existingScoresMap.set(r.student_id, r.grade));
-
-    const { data: groupScoresData } = await client.get<ApiEnvelope<any>>('/scores/branch', {
-      params: { group_id: String(bulkGroupId.value), limit: 500 },
-    });
-    const fetchedRows = Array.isArray(groupScoresData.data)
-      ? groupScoresData.data
-      : (groupScoresData.data?.rows || []);
-    fetchedRows.forEach((r: RatingRow) => existingScoresMap.set(r.student_id, r.grade));
-
-    bulkStudents.value = stData.data.map((st) => ({
-      student_id: st.id,
-      student_name: st.full_name,
-      grade: existingScoresMap.has(st.id) ? existingScoresMap.get(st.id)! : 0,
-      existing: existingScoresMap.has(st.id),
+    // Only students who study in the group; absent that day / frozen come with can_grade = false
+    const params: Record<string, string | number> = { group_id: bulkGroupId.value };
+    if (bulkDate.value) params.date = bulkDate.value;
+    const { data } = await client.get<ApiEnvelope<SheetPayload>>('/scores/sheet', { params });
+    bulkLessonDates.value = data.data.lesson_dates;
+    bulkDate.value = data.data.date ?? '';
+    bulkStudents.value = data.data.students.map((st) => ({
+      student_id: st.student_id,
+      student_name: st.name,
+      grade: '',
+      last_grade: st.last_grade,
+      can_grade: st.can_grade,
+      reason_label: st.reason_label,
     }));
   } catch {
     bulkError.value = 'Failed to load group students';
@@ -434,21 +507,41 @@ async function loadBulkStudents() {
 
 async function submitBulkScores() {
   if (!bulkGroupId.value) return;
+  const maxScale = summary.value.max_scale || 100;
+  // Empty box = not graded: only the typed grades are sent
+  const graded = bulkStudents.value.filter((s) => s.can_grade && s.grade !== '');
+  if (!graded.length) {
+    bulkError.value = 'Не введено ни одной оценки.';
+    return;
+  }
+  const wrong = graded.find((s) => !Number.isInteger(s.grade) || Number(s.grade) < 0 || Number(s.grade) > maxScale);
+  if (wrong) {
+    bulkError.value = `${wrong.student_name}: оценка — целое число от 0 до ${maxScale}`;
+    return;
+  }
   bulkSaving.value = true;
   bulkError.value = '';
   try {
     const payload = {
       group_id: bulkGroupId.value,
-      items: bulkStudents.value.map((s) => ({
-        student_id: s.student_id,
-        grade: Number(s.grade) || 0,
-      })),
+      lesson_date: bulkDate.value,
+      items: graded.map((s) => ({ student_id: s.student_id, grade: s.grade })),
     };
-    await client.post('/scores/bulk', payload);
-    showBulkModal.value = false;
+    const { data } = await client.post<ApiEnvelope<{ saved_count: number; skipped?: { reason: string }[] }>>(
+      '/scores/bulk',
+      payload,
+    );
     await Promise.all([loadRating(), loadGroupScores()]);
-  } catch {
-    bulkError.value = 'Failed to save group grades';
+    const skipped = data.data.skipped ?? [];
+    if (skipped.length) {
+      // Keep the sheet open and say who was not saved and why
+      bulkError.value = `Сохранено: ${data.data.saved_count}. Не сохранено: ${skipped.map((s) => s.reason).join('; ')}`;
+      await loadBulkStudents();
+    } else {
+      showBulkModal.value = false;
+    }
+  } catch (err: any) {
+    bulkError.value = err.response?.data?.message || 'Failed to save group grades';
   } finally {
     bulkSaving.value = false;
   }
@@ -1127,39 +1220,77 @@ watch(
 
         <form v-else class="flex flex-1 flex-col overflow-hidden" @submit.prevent="submitScore">
           <div class="flex-1 space-y-4 overflow-y-auto p-6">
-            <div>
-              <label class="mb-1 block text-sm font-semibold text-fb-text">Group</label>
-              <select
-                v-model="form.group_id"
-                :disabled="isReadOnly"
-                class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm disabled:bg-fb-canvas focus:border-fb-blue focus:outline-none"
-              >
-                <option v-for="group in groups" :key="group.id" :value="group.id">
-                  {{ group.name }}
-                </option>
-              </select>
+            <!-- An existing grade: student and group are fixed, only the points can change -->
+            <div v-if="detailScore" class="rounded-lg border border-fb-line bg-fb-canvas px-4 py-3 text-sm">
+              <p class="font-semibold text-fb-text">{{ detailScore.name }}</p>
+              <p class="text-fb-secondary">{{ detailScore.group }}<span v-if="detailScore.course"> · {{ detailScore.course }}</span></p>
             </div>
 
-            <div>
-              <label class="mb-1 block text-sm font-semibold text-fb-text">Student</label>
-              <select
-                v-model="form.student_id"
-                :disabled="isReadOnly || Boolean(editingScore)"
-                class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm disabled:bg-fb-canvas focus:border-fb-blue focus:outline-none"
-              >
-                <option value="">Select student</option>
-                <option v-for="st in filteredStudents" :key="st.id" :value="st.id">
-                  {{ st.full_name }}
-                </option>
-              </select>
-            </div>
+            <template v-else>
+              <div>
+                <label class="mb-1 block text-sm font-semibold text-fb-text">1. Группа</label>
+                <select
+                  v-model="form.group_id"
+                  class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none"
+                  @change="loadPanelStudents()"
+                >
+                  <option value="">Выберите группу</option>
+                  <option v-for="group in groups" :key="group.id" :value="group.id">
+                    {{ group.name }}
+                  </option>
+                </select>
+              </div>
+
+              <div>
+                <label class="mb-1 block text-sm font-semibold text-fb-text">2. Дата урока</label>
+                <select
+                  v-model="panelDate"
+                  :disabled="!form.group_id || !panelLessonDates.length"
+                  class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm disabled:bg-fb-canvas focus:border-fb-blue focus:outline-none"
+                  @change="loadPanelStudents(true)"
+                >
+                  <option v-if="!form.group_id" value="">Сначала выберите группу</option>
+                  <option v-else-if="!panelLessonDates.length" value="">Нет уроков за последние 7 дней</option>
+                  <option v-for="d in panelLessonDates" :key="d.date" :value="d.date">{{ d.label }}</option>
+                </select>
+                <p class="mt-1 text-[11px] text-fb-secondary">
+                  Только дни занятий этой группы по расписанию, не дальше 7 дней назад.
+                </p>
+              </div>
+
+              <div>
+                <label class="mb-1 block text-sm font-semibold text-fb-text">3. Ученик</label>
+                <select
+                  v-model="form.student_id"
+                  :disabled="!form.group_id || !panelDate || panelStudentsLoading"
+                  class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm disabled:bg-fb-canvas focus:border-fb-blue focus:outline-none"
+                >
+                  <option value="">
+                    {{ !form.group_id ? 'Сначала выберите группу' : panelStudentsLoading ? 'Загрузка…' : 'Выберите ученика' }}
+                  </option>
+                  <!-- Absent today / frozen: shown, but cannot be picked -->
+                  <option
+                    v-for="st in panelStudents"
+                    :key="st.student_id"
+                    :value="st.student_id"
+                    :disabled="!st.can_grade"
+                  >
+                    {{ st.name }}{{ st.can_grade ? '' : ` — ${st.reason_label}` }}
+                  </option>
+                </select>
+              </div>
+            </template>
 
             <div>
               <div class="flex items-center justify-between">
                 <label class="mb-1 block text-sm font-semibold text-fb-text">
                   Grade (0 – {{ summary.max_scale }})
                 </label>
-                <span class="text-xs font-semibold" :class="form.grade >= summary.pass_score ? 'text-emerald-600' : 'text-red-500'">
+                <span
+                  v-if="form.grade !== ''"
+                  class="text-xs font-semibold"
+                  :class="form.grade >= summary.pass_score ? 'text-emerald-600' : 'text-red-500'"
+                >
                   {{ form.grade >= summary.pass_score ? 'Passed' : 'Needs Retake' }}
                 </span>
               </div>
@@ -1168,7 +1299,7 @@ watch(
                 type="number"
                 min="0"
                 :max="summary.max_scale"
-                step="0.1"
+                step="1"
                 required
                 :readonly="isReadOnly"
                 class="w-full rounded-lg border border-fb-line px-3 py-2 text-base font-semibold read-only:bg-fb-canvas focus:border-fb-blue focus:outline-none"
@@ -1180,12 +1311,12 @@ watch(
               class="rounded-xl border border-fb-line bg-fb-canvas p-4 text-sm text-fb-secondary space-y-2"
             >
               <div class="flex items-center justify-between">
-                <span>Overall rank:</span>
-                <span class="font-bold text-fb-text">#{{ detailScore.no }}</span>
+                <span>Общий рейтинг:</span>
+                <span class="font-bold text-fb-text">№{{ detailScore.no }}</span>
               </div>
               <div class="flex items-center justify-between">
-                <span>In-group rank:</span>
-                <span class="font-bold text-fb-text">#{{ detailScore.rank_in_group || detailScore.rank }}</span>
+                <span>Место в группе:</span>
+                <span class="font-bold text-fb-text">№{{ detailScore.rank_in_group || detailScore.rank }}</span>
               </div>
               <div class="flex items-center justify-between">
                 <span>Branch:</span>
@@ -1199,6 +1330,23 @@ watch(
                   Group Page →
                 </button>
               </div>
+            </div>
+
+            <!-- Every grade of the student; the rating shows only the latest one -->
+            <div v-if="detailScore" class="rounded-xl border border-fb-line p-4 text-sm">
+              <p class="mb-2 font-semibold text-fb-text">История оценок</p>
+              <p v-if="!history.length" class="text-fb-secondary">Пока нет записей</p>
+              <ul v-else class="space-y-1.5">
+                <li v-for="h in history" :key="h.id" class="flex items-start justify-between gap-3">
+                  <span class="text-fb-secondary">
+                    {{ formatDay(h.date) }} · {{ h.group }}<span v-if="h.course"> · {{ h.course }}</span>
+                    <span v-if="h.corrected" class="block text-[11px] text-amber-700">
+                      исправлено {{ formatDay(h.corrected_at) }}<span v-if="h.corrected_by"> ({{ h.corrected_by }})</span>
+                    </span>
+                  </span>
+                  <span class="font-bold text-fb-text">{{ h.grade }}</span>
+                </li>
+              </ul>
             </div>
 
             <p v-if="formError" class="text-sm font-medium text-red-500">{{ formError }}</p>
@@ -1263,11 +1411,21 @@ watch(
             <select
               v-model="bulkGroupId"
               class="rounded-lg border border-fb-line bg-fb-card px-3 py-1.5 text-sm font-semibold focus:border-fb-blue focus:outline-none"
-              @change="loadBulkStudents"
+              @change="onBulkGroupChange"
             >
               <option v-for="g in groups" :key="g.id" :value="g.id">
                 {{ g.name }}
               </option>
+            </select>
+            <label class="text-xs font-semibold text-fb-secondary">Дата урока:</label>
+            <select
+              v-model="bulkDate"
+              :disabled="!bulkLessonDates.length"
+              class="rounded-lg border border-fb-line bg-fb-card px-3 py-1.5 text-sm font-semibold disabled:bg-fb-canvas focus:border-fb-blue focus:outline-none"
+              @change="loadBulkStudents"
+            >
+              <option v-if="!bulkLessonDates.length" value="">нет уроков за 7 дней</option>
+              <option v-for="d in bulkLessonDates" :key="d.date" :value="d.date">{{ d.label }}</option>
             </select>
             <span class="text-xs text-fb-secondary">
               (Pass mark: <strong>{{ summary.pass_score }}</strong> / Max scale: <strong>{{ summary.max_scale }}</strong>)
@@ -1295,7 +1453,9 @@ watch(
             <div
               v-for="st in bulkStudents"
               :key="st.student_id"
-              class="flex items-center justify-between gap-4 rounded-xl border border-fb-line bg-fb-canvas/30 p-3"
+              class="flex items-center justify-between gap-4 rounded-xl border border-fb-line p-3"
+              :class="st.can_grade ? 'bg-fb-canvas/30' : 'pointer-events-none select-none bg-fb-canvas opacity-45 grayscale'"
+              :title="st.can_grade ? '' : st.reason_label"
             >
               <div class="flex items-center gap-3">
                 <div class="flex h-8 w-8 items-center justify-center rounded-full bg-fb-canvas font-bold text-fb-blue">
@@ -1303,8 +1463,12 @@ watch(
                 </div>
                 <div>
                   <p class="font-semibold text-fb-text">{{ st.student_name }}</p>
+                  <span v-if="!st.can_grade" class="text-[11px] text-fb-secondary">{{ st.reason_label }}</span>
+                  <span v-else-if="st.grade === ''" class="text-[11px] text-fb-secondary">
+                    Не оценён<span v-if="st.last_grade !== null"> · последняя: {{ st.last_grade }}</span>
+                  </span>
                   <span
-                    v-if="st.grade >= summary.pass_score"
+                    v-else-if="st.grade >= summary.pass_score"
                     class="text-[11px] font-semibold text-emerald-600"
                   >
                     ✓ Pass
@@ -1315,13 +1479,17 @@ watch(
                 </div>
               </div>
 
-              <div class="w-28">
+              <div class="w-32 text-right">
+                <!-- No box for a student who is not here today: nobody can grade an absent student -->
+                <span v-if="!st.can_grade" class="text-xs font-semibold text-fb-secondary">{{ st.reason_label }}</span>
                 <input
+                  v-else
                   v-model.number="st.grade"
                   type="number"
                   min="0"
                   :max="summary.max_scale"
-                  step="0.1"
+                  step="1"
+                  placeholder="—"
                   class="w-full rounded-lg border border-fb-line bg-fb-card px-3 py-1.5 text-right font-bold text-fb-text focus:border-fb-blue focus:outline-none"
                 />
               </div>

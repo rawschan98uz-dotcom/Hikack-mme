@@ -32,8 +32,8 @@ async function save() {
   try {
     await client.post('/company/settings', settings.value);
     message.value = 'Saved';
-  } catch {
-    message.value = 'Save failed';
+  } catch (err: any) {
+    message.value = err.response?.data?.message || 'Save failed';
   } finally {
     saving.value = false;
   }
@@ -49,12 +49,12 @@ onMounted(load);
     <form v-else class="max-w-2xl space-y-4 rounded-xl border border-fb-line bg-fb-card p-6" @submit.prevent="save">
       <div>
         <label class="mb-1 block text-sm font-medium text-fb-secondary">Passing score</label>
-        <input v-model.number="settings.grade_pass_score" type="number" min="0" class="w-full rounded-lg border px-3 py-2" />
+        <input v-model.number="settings.grade_pass_score" type="number" min="0" step="1" class="w-full rounded-lg border px-3 py-2" />
         <p class="mt-1 text-xs text-fb-secondary">Minimum grade to pass (used in Rating reports).</p>
       </div>
       <div>
         <label class="mb-1 block text-sm font-medium text-fb-secondary">Maximum scale</label>
-        <input v-model.number="settings.grade_scale_max" type="number" min="1" class="w-full rounded-lg border px-3 py-2" />
+        <input v-model.number="settings.grade_scale_max" type="number" min="1" step="1" class="w-full rounded-lg border px-3 py-2" />
       </div>
       <div class="flex items-center gap-3">
         <button type="submit" class="rounded-lg bg-fb-blue px-4 py-2 text-sm font-medium text-white" :disabled="saving">

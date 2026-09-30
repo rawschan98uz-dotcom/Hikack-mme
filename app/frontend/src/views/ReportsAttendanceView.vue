@@ -3,6 +3,8 @@ import { computed, onMounted, reactive, ref, watch } from 'vue';
 
 import client, { type ApiEnvelope } from '../api/client';
 import { useAuthStore } from '../stores/auth';
+import { downloadCsv } from '../utils/csvExport';
+import { currentMonthIso } from '../utils/dates';
 
 interface Branch {
   id: number;
@@ -60,6 +62,31 @@ interface AttendanceRecordResponse {
   note?: string;
 }
 
+/** Reports audit (2026-09-29): has the group a lesson on the chosen date, and is attendance marked. */
+interface DayStatus {
+  group_id: number;
+  has_lesson: boolean;
+  marked: number;
+  students: number;
+}
+
+/** «Сводка за месяц»: students × lesson days of one group. */
+interface MonthSummary {
+  month: string;
+  group: { id: number; name: string; branch: string; teacher: string };
+  days: { date: string; future: boolean }[];
+  rows: {
+    student_id: number;
+    student: string;
+    status_label: string;
+    marks: Record<string, number>;
+    present: number;
+    late: number;
+    absent: number;
+    percent: number | null;
+  }[];
+}
+
 interface AttendanceSaveResult {
   saved: number;
   group_id: number;
@@ -94,6 +121,18 @@ const showSuggestions = ref(false);
 const pageSize = 50;
 const currentPage = ref(1);
 
+// Which groups have a lesson on the date and are marked
+const dayStatus = ref<Record<number, DayStatus>>({});
+const onlyWithLesson = ref(true);
+
+// Tabs: mark one day / the month summary of one group
+const activeTab = ref<'day' | 'month'>('day');
+const summaryGroupId = ref('');
+const summaryMonth = ref(currentMonthIso());
+const summaryData = ref<MonthSummary | null>(null);
+const summaryLoading = ref(false);
+const summaryError = ref('');
+
 // Modal / Drawer state for group roster
 const showModal = ref(false);
 const activeGroup = ref<GroupRow | null>(null);
@@ -115,6 +154,9 @@ const filteredGroups = computed(() => {
   if (selectedBranch.value) {
     const branchId = Number(selectedBranch.value);
     list = list.filter((g) => g.branch_id === branchId);
+  }
+  if (onlyWithLesson.value && Object.keys(dayStatus.value).length) {
+    list = list.filter((g) => dayStatus.value[g.id]?.has_lesson);
   }
 
   const q = searchQuery.value.trim().toLowerCase();
@@ -159,9 +201,82 @@ const paginatedGroups = computed(() => {
 });
 
 // Reset page when filter changes
-watch([selectedBranch, searchQuery], () => {
+watch([selectedBranch, searchQuery, onlyWithLesson], () => {
   currentPage.value = 1;
 });
+
+async function loadDayStatus() {
+  if (isTeacher.value) return;
+  try {
+    const { data } = await client.get<ApiEnvelope<DayStatus[]>>('/reports/attendance/day', {
+      params: { date: selectedDate.value },
+    });
+    dayStatus.value = Object.fromEntries(data.data.map((row) => [row.group_id, row]));
+  } catch {
+    dayStatus.value = {};
+  }
+}
+
+watch(selectedDate, loadDayStatus);
+
+async function loadMonthSummary() {
+  summaryData.value = null;
+  summaryError.value = '';
+  if (!summaryGroupId.value) return;
+  summaryLoading.value = true;
+  try {
+    const { data } = await client.get<ApiEnvelope<MonthSummary>>('/reports/attendance/month', {
+      params: { group_id: summaryGroupId.value, month: summaryMonth.value },
+    });
+    summaryData.value = data.data;
+  } catch (err: any) {
+    summaryError.value = err?.response?.data?.message || 'Не удалось загрузить сводку';
+  } finally {
+    summaryLoading.value = false;
+  }
+}
+
+function openMonthSummary(group: GroupRow) {
+  summaryGroupId.value = String(group.id);
+  activeTab.value = 'month';
+  loadMonthSummary();
+}
+
+function shiftSummaryMonth(delta: number) {
+  const [y, m] = summaryMonth.value.split('-').map(Number);
+  const d = new Date(y, m - 1 + delta, 1);
+  summaryMonth.value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  loadMonthSummary();
+}
+
+const MARK_ICON: Record<number, { text: string; cls: string; title: string }> = {
+  1: { text: '✓', cls: 'text-emerald-600', title: 'Был' },
+  2: { text: '⏰', cls: 'text-amber-600', title: 'Опоздал' },
+  0: { text: '✗', cls: 'text-red-600 font-bold', title: 'Не был' },
+};
+
+function dayLabel(iso: string) {
+  const [y, m, d] = iso.split('-').map(Number);
+  const weekday = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'][new Date(y, m - 1, d).getDay()];
+  return { day: String(d).padStart(2, '0'), weekday };
+}
+
+function exportMonthSummary() {
+  if (!summaryData.value) return;
+  const s = summaryData.value;
+  downloadCsv(
+    `attendance_${s.group.name}_${s.month}.csv`,
+    ['Ученик', ...s.days.map((d) => d.date), 'Был', 'Опоздал', 'Не был', 'Посещаемость %'],
+    s.rows.map((r) => [
+      r.student,
+      ...s.days.map((d) => (r.marks[d.date] === undefined ? '' : MARK_ICON[r.marks[d.date]]?.title ?? '')),
+      r.present,
+      r.late,
+      r.absent,
+      r.percent ?? '',
+    ]),
+  );
+}
 
 // Summary counts inside active group roster
 const rosterSummary = computed(() => {
@@ -191,6 +306,7 @@ async function loadInitialData() {
     }
 
     branches.value = Array.isArray(branchRes.data.data) ? branchRes.data.data : [];
+    await loadDayStatus();
 
     const rawGroups = groupsRes.data.data;
     if (Array.isArray(rawGroups)) {
@@ -290,13 +406,14 @@ async function saveGroupAttendance() {
   }));
 
   try {
-    await client.post<ApiEnvelope<AttendanceSaveResult>>('/reports/attendance', {
+    const { data } = await client.post<ApiEnvelope<AttendanceSaveResult>>('/reports/attendance', {
       group_id: activeGroup.value.id,
       date: selectedDate.value,
       records,
     });
 
-    saveSuccessMessage.value = `Посещаемость успешно сохранена! (отмечено учеников: ${records.length})`;
+    saveSuccessMessage.value = `Посещаемость успешно сохранена! (отмечено учеников: ${data.data.saved})`;
+    loadDayStatus();
   } catch (err: any) {
     console.error('Failed to save group attendance:', err);
     saveErrorMessage.value = err?.response?.data?.message || err?.response?.data?.error || err?.message || 'Не удалось сохранить посещаемость';
@@ -375,27 +492,11 @@ async function exportAllAttendanceCsv() {
       return;
     }
 
-    const csvRows = [
+    downloadCsv(
+      `attendance_${selectedDate.value}.csv`,
       ['Ученик', 'Группа', 'Филиал', 'Дата', 'Статус', 'Заметка'],
-    ];
-    for (const r of rows) {
-      csvRows.push([
-        `"${r.student}"`,
-        `"${r.group}"`,
-        `"${r.branch}"`,
-        `"${r.date}"`,
-        `"${r.status_label}"`,
-        `"${r.note || ''}"`,
-      ]);
-    }
-    const csvContent = 'data:text/csv;charset=utf-8,\uFEFF' + csvRows.map((e) => e.join(',')).join('\n');
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `attendance_${selectedDate.value}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+      rows.map((r: any) => [r.student, r.group, r.branch, r.date, r.status_label, r.note || '']),
+    );
   } catch (err) {
     console.error(err);
     alert('Не удалось экспортировать отчет в CSV');
@@ -437,8 +538,105 @@ onMounted(() => {
       </div>
     </div>
 
+    <!-- Tabs: mark a day / month summary -->
+    <div class="inline-flex rounded-lg border border-fb-line bg-fb-card p-1 text-sm">
+      <button
+        type="button"
+        class="rounded-md px-4 py-1.5 font-medium"
+        :class="activeTab === 'day' ? 'bg-fb-blue text-white' : 'text-fb-secondary hover:text-fb-blue'"
+        @click="activeTab = 'day'"
+      >
+        📝 Отметить за день
+      </button>
+      <button
+        type="button"
+        class="rounded-md px-4 py-1.5 font-medium"
+        :class="activeTab === 'month' ? 'bg-fb-blue text-white' : 'text-fb-secondary hover:text-fb-blue'"
+        @click="activeTab = 'month'"
+      >
+        📊 Сводка за месяц
+      </button>
+    </div>
+
+    <!-- Month summary: students × lesson days -->
+    <div v-if="activeTab === 'month'" class="space-y-3">
+      <div class="flex flex-wrap items-end gap-3 rounded-xl border border-fb-line bg-fb-card p-4 shadow-sm">
+        <div class="min-w-[220px]">
+          <label class="mb-1 block text-xs font-semibold text-fb-text">Группа</label>
+          <select v-model="summaryGroupId" class="w-full rounded-lg border border-fb-line bg-white px-3 py-2 text-sm" @change="loadMonthSummary">
+            <option value="">Выберите группу…</option>
+            <option v-for="g in allGroups" :key="g.id" :value="String(g.id)">{{ g.name }}{{ g.teacher ? ` — ${g.teacher}` : '' }}</option>
+          </select>
+        </div>
+        <div>
+          <label class="mb-1 block text-xs font-semibold text-fb-text">Месяц</label>
+          <div class="flex items-center gap-1">
+            <button type="button" class="rounded-lg border border-fb-line px-2 py-2 text-sm hover:border-fb-blue" @click="shiftSummaryMonth(-1)">◀</button>
+            <input v-model="summaryMonth" type="month" class="rounded-lg border border-fb-line bg-white px-3 py-2 text-sm" @change="loadMonthSummary" />
+            <button type="button" class="rounded-lg border border-fb-line px-2 py-2 text-sm hover:border-fb-blue" @click="shiftSummaryMonth(1)">▶</button>
+          </div>
+        </div>
+        <button
+          v-if="summaryData && summaryData.rows.length"
+          type="button"
+          class="rounded-lg border border-fb-line bg-fb-card px-3.5 py-2 text-sm text-fb-secondary hover:border-fb-blue hover:text-fb-blue"
+          @click="exportMonthSummary"
+        >
+          📥 Экспорт CSV
+        </button>
+      </div>
+
+      <div v-if="summaryError" class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{{ summaryError }}</div>
+      <div v-if="!summaryGroupId" class="rounded-xl border border-fb-line bg-fb-card p-10 text-center text-sm text-fb-secondary">
+        Выберите группу — покажу всех учеников по дням месяца: ✓ был, ⏰ опоздал, ✗ не был.
+      </div>
+      <div v-else-if="summaryLoading" class="p-10 text-center text-fb-secondary">Загрузка…</div>
+      <div v-else-if="summaryData" class="overflow-hidden rounded-xl border border-fb-line bg-fb-card shadow-sm">
+        <div class="border-b border-fb-line px-5 py-3 text-sm">
+          <strong class="text-fb-text">{{ summaryData.group.name }}</strong>
+          <span class="text-fb-secondary"> · {{ summaryData.group.branch }}<template v-if="summaryData.group.teacher"> · {{ summaryData.group.teacher }}</template></span>
+          <span class="ml-2 text-xs text-fb-secondary">Пустая клетка — отметки нет.</span>
+        </div>
+        <div v-if="!summaryData.rows.length" class="p-10 text-center text-sm text-fb-secondary">В этом месяце в группе нет учеников и отметок.</div>
+        <div v-else class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead class="border-b border-fb-line bg-fb-canvas text-xs text-fb-secondary">
+              <tr>
+                <th class="sticky left-0 bg-fb-canvas px-4 py-2 text-left font-semibold">Ученик</th>
+                <th v-for="d in summaryData.days" :key="d.date" class="px-1.5 py-2 text-center font-medium" :class="d.future ? 'opacity-40' : ''">
+                  <div>{{ dayLabel(d.date).day }}</div>
+                  <div class="text-[10px]">{{ dayLabel(d.date).weekday }}</div>
+                </th>
+                <th class="px-3 py-2 text-center font-semibold">Пропуски</th>
+                <th class="px-3 py-2 text-center font-semibold">Опоздания</th>
+                <th class="px-4 py-2 text-center font-semibold">Посещаемость</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-fb-line">
+              <tr v-for="r in summaryData.rows" :key="r.student_id" class="hover:bg-fb-hover/40">
+                <td class="sticky left-0 bg-fb-card px-4 py-2 whitespace-nowrap">
+                  <div class="font-medium text-fb-text">{{ r.student }}</div>
+                  <div class="text-[11px] text-fb-secondary">{{ r.status_label }}</div>
+                </td>
+                <td v-for="d in summaryData.days" :key="d.date" class="px-1.5 py-2 text-center">
+                  <span
+                    v-if="r.marks[d.date] !== undefined"
+                    :class="MARK_ICON[r.marks[d.date]]?.cls"
+                    :title="MARK_ICON[r.marks[d.date]]?.title"
+                  >{{ MARK_ICON[r.marks[d.date]]?.text }}</span>
+                </td>
+                <td class="px-3 py-2 text-center font-semibold" :class="r.absent ? 'text-red-600' : 'text-fb-secondary'">{{ r.absent }}</td>
+                <td class="px-3 py-2 text-center" :class="r.late ? 'text-amber-600' : 'text-fb-secondary'">{{ r.late }}</td>
+                <td class="px-4 py-2 text-center font-semibold">{{ r.percent === null ? '—' : `${r.percent}%` }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
     <!-- Filter & Control Panel -->
-    <div v-if="!isTeacher" class="rounded-xl border border-fb-line bg-fb-card p-4 shadow-sm space-y-3">
+    <div v-if="!isTeacher && activeTab === 'day'" class="rounded-xl border border-fb-line bg-fb-card p-4 shadow-sm space-y-3">
       <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-12 items-end">
         <!-- Date Picker -->
         <div class="lg:col-span-4">
@@ -556,8 +754,12 @@ onMounted(() => {
 
       <!-- Filter Subbar: Active groups count & Reset button -->
       <div class="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-fb-line/60 text-xs">
-        <span class="text-fb-secondary">
-          Всего групп: <strong class="text-fb-text">{{ filteredGroups.length }}</strong>
+        <span class="flex flex-wrap items-center gap-4 text-fb-secondary">
+          <span>Всего групп: <strong class="text-fb-text">{{ filteredGroups.length }}</strong></span>
+          <label class="inline-flex cursor-pointer items-center gap-1.5">
+            <input v-model="onlyWithLesson" type="checkbox" class="rounded" />
+            <span>Только группы с уроком в этот день</span>
+          </label>
         </span>
 
         <button
@@ -572,7 +774,7 @@ onMounted(() => {
     </div>
 
     <!-- Groups Table Card -->
-    <div class="overflow-hidden rounded-xl border border-fb-line bg-fb-card shadow-sm">
+    <div v-if="activeTab === 'day'" class="overflow-hidden rounded-xl border border-fb-line bg-fb-card shadow-sm">
       <!-- Loading State -->
       <div v-if="loadingGroups" class="p-16 text-center text-fb-secondary">
         <div class="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-fb-blue border-r-transparent mb-3" />
@@ -610,6 +812,7 @@ onMounted(() => {
                 <th v-if="!isTeacher" class="px-5 py-3.5">Филиал</th>
                 <th class="px-5 py-3.5">Дни / Время</th>
                 <th class="px-5 py-3.5 text-center">Учеников</th>
+                <th v-if="!isTeacher" class="px-5 py-3.5 text-center">На {{ selectedDate.split('-').reverse().join('.') }}</th>
                 <th class="px-5 py-3.5 text-right">Действие</th>
               </tr>
             </thead>
@@ -676,8 +879,27 @@ onMounted(() => {
                   </span>
                 </td>
 
+                <!-- Marked or not on the chosen date -->
+                <td v-if="!isTeacher" class="px-5 py-3.5 text-center">
+                  <span v-if="!dayStatus[group.id]" class="text-xs text-fb-secondary">—</span>
+                  <span v-else-if="!dayStatus[group.id].has_lesson" class="text-xs text-fb-secondary">нет урока</span>
+                  <span
+                    v-else-if="dayStatus[group.id].marked"
+                    class="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700"
+                  >✓ отмечено</span>
+                  <span v-else class="rounded-full border border-red-200 bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700">не отмечено</span>
+                </td>
+
                 <!-- Action Button -->
-                <td class="px-5 py-3.5 text-right" @click.stop>
+                <td class="px-5 py-3.5 text-right whitespace-nowrap" @click.stop>
+                  <button
+                    type="button"
+                    class="mr-1.5 inline-flex items-center rounded-lg border border-fb-line px-2.5 py-1.5 text-xs font-medium text-fb-secondary hover:border-fb-blue hover:text-fb-blue"
+                    title="Все ученики по дням месяца"
+                    @click="openMonthSummary(group)"
+                  >
+                    📊 Сводка
+                  </button>
                   <button
                     type="button"
                     class="inline-flex items-center gap-1.5 rounded-lg bg-fb-blue px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-fb-blue-dark transition-colors"

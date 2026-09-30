@@ -22,6 +22,10 @@ export const PERM = {
   FINANCE_VIEW: 'finance.view',
   FINANCE_WRITE: 'finance.write',
   FINANCE_COMPANY: 'finance.company',
+  /** Student payments: the administrator takes payments and gives refunds; only the CEO deletes. */
+  PAYMENTS_VIEW: 'payments.view',
+  PAYMENTS_WRITE: 'payments.write',
+  PAYMENTS_DELETE: 'payments.delete',
   REPORTS_VIEW: 'reports.view',
   REPORTS_WRITE: 'reports.write',
   SETTINGS_COMPANY: 'settings.company',
@@ -60,12 +64,15 @@ export function canAny(permissions: readonly string[] | undefined, perms: string
 
 /** Longest-prefix match for route → required view permission */
 const ROUTE_PERMISSION_RULES: readonly [string, string | null][] = [
-  ['/students/debtors', PERM.FINANCE_VIEW],
+  ['/students/debtors', PERM.PAYMENTS_VIEW],
   ['/finance/', PERM.FINANCE_VIEW],
+  ['/finance/payments', PERM.PAYMENTS_VIEW],
   ['/finance/pnl', PERM.FINANCE_COMPANY],
   ['/finance/cost', PERM.FINANCE_COMPANY],
   ['/finance/withdraw', PERM.FINANCE_COMPANY],
   ['/reports/attendance', PERM.ATTENDANCE_VIEW],
+  // Debts of the students who left are money: not for the marketer
+  ['/reports/left-students', PERM.PAYMENTS_VIEW],
   ['/reports/', PERM.REPORTS_VIEW],
   ['/attendance-reports', PERM.ATTENDANCE_VIEW],
   ['/teacher-attendance-reports', PERM.TEACHER_ATTENDANCE_VIEW],
@@ -85,7 +92,7 @@ const ROUTE_PERMISSION_RULES: readonly [string, string | null][] = [
   ['/rooms', PERM.ROOMS_VIEW],
   ['/holiday', PERM.HOLIDAYS_VIEW],
   ['/archive/', PERM.ARCHIVE_VIEW],
-  ['/left-students', PERM.REPORTS_VIEW],
+  ['/left-students', PERM.PAYMENTS_VIEW],
   ['/tags', PERM.TAGS_VIEW],
   ['/form', PERM.FORMS_VIEW],
   ['/blog/', PERM.TAGS_VIEW],

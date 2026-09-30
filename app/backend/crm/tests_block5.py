@@ -5,7 +5,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from accounts.models import TeacherBranch, User
-from crm.models import AttendanceRecord, Group, Lead, Student
+from crm.models import Course, AttendanceRecord, Group, Lead, Student
 from finance.models import SalarySetting
 from operations.models import Holiday
 from org.models import Branch, Company, Room
@@ -145,7 +145,7 @@ class StaffRoleAssignmentTests(Block5Base):
 
     def test_other_roles_drop_branch_and_ceo_role_not_assignable(self):
         self.client.force_authenticate(self.ceo)
-        res = self.client.patch(f'/v1/user/staff/{self.director.id}', {'staff_role': 'cashier'}, format='json')
+        res = self.client.patch(f'/v1/user/staff/{self.director.id}', {'staff_role': 'marketer'}, format='json')
         self.assertEqual(res.status_code, 200, res.content)
         self.director.refresh_from_db()
         self.assertIsNone(self.director.branch_id)
@@ -154,28 +154,12 @@ class StaffRoleAssignmentTests(Block5Base):
 
     def test_ceo_cannot_change_own_role(self):
         self.client.force_authenticate(self.ceo)
-        res = self.client.patch(f'/v1/user/staff/{self.ceo.id}', {'staff_role': 'cashier'}, format='json')
+        res = self.client.patch(f'/v1/user/staff/{self.ceo.id}', {'staff_role': 'marketer'}, format='json')
         self.assertEqual(res.status_code, 400)
 
 
-class DiscountSalaryTests(Block5Base):
-    """B5: percent salary is taken from the amount actually paid (after discount)"""
-
-    def test_percent_is_taken_from_discounted_amount(self):
-        SalarySetting.objects.create(
-            company=self.company, teacher=self.north_teacher, teacher_name='North Teacher',
-            salary_type=SalarySetting.SalaryType.PERCENT, amount=10,
-        )
-        self.client.force_authenticate(self.ceo)
-        res = self.client.post('/v1/replenishments', {
-            'student_id': self.north_student.id, 'amount': 800000, 'discount_amount': 200000,
-        })
-        self.assertEqual(res.status_code, 201, res.content)
-        month = timezone.localdate().strftime('%Y-%m')
-        items = self.client.get(f'/v1/finance/payroll?month={month}').json()['data']['rows']
-        row = next(i for i in items if i['teacher_id'] == self.north_teacher.id)
-        # 10% of 800 000 paid (not of the 1 000 000 full price)
-        self.assertEqual(row['accrued'], 80000)
+# DiscountSalaryTests: removed 2026-09-28 — a teacher's percent is no longer taken from payments; the
+# discount rule of the new formula (course price − the student's monthly discount) is in tests_finance_block3.
 
 
 class BranchDirectorFinanceTests(Block5Base):
@@ -195,7 +179,7 @@ class BranchDirectorFinanceTests(Block5Base):
         self.client.force_authenticate(self.director)
 
     def test_sees_only_own_branch_payments(self):
-        ids = {p['id'] for p in self.client.get('/v1/replenishments').json()['data']}
+        ids = {p['id'] for p in self.client.get('/v1/replenishments').json()['data']['results']}
         self.assertEqual(ids, {self.north_pay.id})
         self.assertEqual(self.client.get(f'/v1/replenishments/{self.south_pay.id}').status_code, 404)
         self.assertEqual(self.client.get(f'/v1/replenishments/{self.north_pay.id}').status_code, 200)
@@ -214,14 +198,15 @@ class BranchDirectorFinanceTests(Block5Base):
         res = self.client.post('/v1/replenishments', {'student_id': self.north_student.id, 'amount': 1000})
         self.assertEqual(res.status_code, 403)
 
-    def test_cashier_still_sees_company_wide_money(self):
-        cashier = User.objects.create_user(
+    def test_administrator_sees_payments_but_not_company_wide_money(self):
+        # "Cashier" merged into "Administrator" (owner, 2026-09-28): payments yes, expenses / P&L no
+        admin = User.objects.create_user(
             phone='998909005599', password='password123', first_name='Cash', company=self.company,
-            user_type=User.UserType.STAFF, staff_role=User.StaffRole.CASHIER,
+            user_type=User.UserType.STAFF, staff_role=User.StaffRole.ADMINISTRATOR,
         )
-        self.client.force_authenticate(cashier)
-        self.assertEqual(self.client.get('/v1/expense').status_code, 200)
-        self.assertEqual(len(self.client.get('/v1/replenishments').json()['data']), 2)
+        self.client.force_authenticate(admin)
+        self.assertEqual(self.client.get('/v1/expense').status_code, 403)
+        self.assertEqual(len(self.client.get('/v1/replenishments').json()['data']['results']), 2)
 
 
 class CyrillicCaseTests(Block5Base):
@@ -254,26 +239,6 @@ class CyrillicCaseTests(Block5Base):
         self.assertEqual((student.branch_id, student.group_id), (branch.id, group.id))
 
 
-class PayrollByPaymentDateTests(Block5Base):
-    """Teacher salary counts a payment in the month of its payment date, not the day it was entered"""
+# PayrollByPaymentDateTests: removed 2026-09-28 — salaries are counted by lessons held, not by payment dates
+# (tests_finance_block3).
 
-    def test_backdated_payment_counts_in_its_own_month(self):
-        from datetime import date
-        from finance.models import Payment
-        SalarySetting.objects.create(
-            company=self.company, teacher=self.north_teacher, teacher_name='North Teacher',
-            salary_type=SalarySetting.SalaryType.PERCENT, amount=10,
-        )
-        # entered today, but paid on 28 August
-        Payment.objects.create(
-            company=self.company, student=self.north_student, student_name='Nina', amount=500000,
-            group=self.north_group, teacher=self.north_teacher, payment_date=date(2026, 8, 28),
-        )
-        self.client.force_authenticate(self.ceo)
-
-        def accrued(month):
-            rows = self.client.get(f'/v1/finance/payroll?month={month}').json()['data']['rows']
-            return next(r['accrued'] for r in rows if r['teacher_id'] == self.north_teacher.id)
-
-        self.assertEqual(accrued('2026-08'), 50000)
-        self.assertEqual(accrued(timezone.localdate().strftime('%Y-%m')), 0)

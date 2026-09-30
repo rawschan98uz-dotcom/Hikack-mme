@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, reactive, ref } from 'vue';
 import { useRouter, type RouteLocationRaw } from 'vue-router';
 
 import client, { type ApiEnvelope } from '../api/client';
@@ -22,6 +22,20 @@ interface DashboardStats {
   finance_chart: { label: string; value: number }[];
   schedule: ScheduleRow[];
   unpaid_leavers?: UnpaidLeaver[];
+  /** My overdue and today's reminders (without "left without paying", which has its own block). */
+  reminders?: DashboardReminder[];
+}
+
+interface DashboardReminder {
+  id: number;
+  title: string;
+  details: string;
+  due_date: string;
+  status: string;
+  assigned_to_id: number | null;
+  assigned_to: string;
+  student_id: number | null;
+  kind?: string;
 }
 
 /** Automatic reminder: a student left / finished the course with unpaid months. */
@@ -51,13 +65,16 @@ const cardsRowPrimary = [
 
 const cardsRowSecondary = [
   { key: 'trial_students', label: 'In a trial lesson', icon: 'trial', to: '/students?statuses=1' },
-  { key: 'left_active_group', label: 'Left active group', icon: 'left-group', to: '/left-students?statuses=left_active_group' },
-  { key: 'left_after_trial', label: 'Left after trial period', icon: 'left-trial', to: '/left-students?statuses=left_after_trial' },
+  { key: 'left_active_group', label: 'Left active group', icon: 'left-group', to: '/reports/left-students?status=8' },
+  { key: 'left_after_trial', label: 'Left after trial period', icon: 'left-trial', to: '/reports/left-students?status=7' },
 ] as const;
 
 type DashboardCard = (typeof cardsRowPrimary)[number] | (typeof cardsRowSecondary)[number];
 // Teachers get no money figures (backend sends zeros and an empty chart).
-const showFinanceChart = computed(() => auth.role !== 'teacher');
+// The revenue chart is a money report: CEO and branch director only, not the administrator
+const showFinanceChart = computed(() => auth.isCeo || auth.can(PERM.FINANCE_VIEW));
+// Debtors: everyone who works with payments (teachers never see money)
+const showMoneyCards = computed(() => auth.role !== 'teacher');
 const MONEY_CARDS: readonly string[] = ['debtors'];
 
 // Show only cards that lead to a page the user may open (teacher: no leads, debtors, reports).
@@ -66,7 +83,7 @@ const dashboardCardRows = computed(() =>
     .map((row) =>
       row.filter(
         (card) =>
-          (showFinanceChart.value || !MONEY_CARDS.includes(card.key)) &&
+          (showMoneyCards.value || !MONEY_CARDS.includes(card.key)) &&
           (auth.isCeo || canAccessRoute(card.to, auth.permissions)),
       ),
     )
@@ -109,6 +126,7 @@ async function closeUnpaidLeaver(item: UnpaidLeaver, writeOffReason = '') {
     if (stats.value?.unpaid_leavers) {
       stats.value.unpaid_leavers = stats.value.unpaid_leavers.filter((r) => r.reminder_id !== item.reminder_id);
     }
+    window.dispatchEvent(new Event('reminders-changed'));
   } catch (error) {
     const message = (error as { response?: { data?: { message?: string } } })?.response?.data?.message;
     window.alert(message || 'Не удалось закрыть напоминание');
@@ -124,19 +142,71 @@ function resolveUnpaidLeaver(item: UnpaidLeaver) {
 }
 
 // CEO only: close without payment, the reason is kept in the history
-function writeOffUnpaidLeaver(item: UnpaidLeaver) {
-  const reason = window.prompt(
-    `Списать долг без оплаты?
-${item.title}
+const writeOffModal = reactive({
+  show: false,
+  item: null as UnpaidLeaver | null,
+  reason: '',
+  error: '',
+});
 
-Укажите причину (обязательно):`,
-  );
-  if (reason === null) return;
-  if (reason.trim().length < 3) {
-    window.alert('Причина обязательна.');
+function writeOffUnpaidLeaver(item: UnpaidLeaver) {
+  writeOffModal.item = item;
+  writeOffModal.reason = '';
+  writeOffModal.error = '';
+  writeOffModal.show = true;
+}
+
+async function confirmWriteOff() {
+  if (!writeOffModal.item) return;
+  const reason = writeOffModal.reason.trim();
+  if (reason.length < 3) {
+    writeOffModal.error = 'Укажите причину (минимум 3 символа).';
     return;
   }
-  closeUnpaidLeaver(item, reason.trim());
+  writeOffModal.show = false;
+  await closeUnpaidLeaver(writeOffModal.item, reason);
+}
+
+// Ordinary reminders: overdue + today, so nobody has to open the Reminders page to notice them
+const myReminders = computed(() => stats.value?.reminders ?? []);
+const showReminders = computed(() => auth.isCeo || auth.can(PERM.REMINDERS_VIEW));
+const completingReminderId = ref<number | null>(null);
+
+function canCompleteReminder(reminder: DashboardReminder) {
+  return auth.isCeo || auth.can(PERM.REMINDERS_WRITE) || reminder.assigned_to_id === auth.user?.id;
+}
+
+async function completeDashboardReminder(reminder: DashboardReminder) {
+  completingReminderId.value = reminder.id;
+  try {
+    await client.post(`/reminders/${reminder.id}/complete`);
+    if (stats.value?.reminders) {
+      stats.value.reminders = stats.value.reminders.filter((r) => r.id !== reminder.id);
+    }
+    window.dispatchEvent(new Event('reminders-changed'));
+  } catch (error) {
+    const message = (error as { response?: { data?: { message?: string } } })?.response?.data?.message;
+    window.alert(message || 'Не удалось отметить напоминание');
+  } finally {
+    completingReminderId.value = null;
+  }
+}
+
+// A click opens the window that solves it: money without a course price -> the student's edit form
+// (put them into a group, the копилка counts the months); other reminders about a student -> the card.
+function openDashboardReminder(reminder: DashboardReminder) {
+  if (reminder.kind === 'online_payment_check' && reminder.student_id) {
+    goTo(studentRoute(reminder.student_id, { edit: '1' }));
+  } else if (reminder.student_id) {
+    goTo(studentRoute(reminder.student_id));
+  } else {
+    goTo('/reminders');
+  }
+}
+
+function formatDay(iso: string) {
+  const [y, m, d] = iso.split('-');
+  return `${d}.${m}.${y}`;
 }
 
 function goTo(to: RouteLocationRaw) {
@@ -193,7 +263,7 @@ onMounted(loadDashboard);
           <h2 class="text-[15px] font-semibold text-rose-800">
             ⚠️ Ушли, не заплатив — {{ unpaidLeavers.length }}
           </h2>
-          <button type="button" class="text-xs font-medium text-rose-700 hover:underline" @click="goTo('/left-students?with_debt=1')">
+          <button type="button" class="text-xs font-medium text-rose-700 hover:underline" @click="goTo('/reports/left-students?with_debt=1')">
             Все ушедшие с долгом →
           </button>
         </div>
@@ -203,10 +273,15 @@ onMounted(loadDashboard);
             :key="item.reminder_id"
             class="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-rose-200 bg-white px-4 py-3"
           >
-            <div class="min-w-0">
+            <div
+              class="min-w-0"
+              :class="item.student_id ? 'cursor-pointer' : ''"
+              title="Открыть карточку ученика"
+              @click="item.student_id && goTo(studentRoute(item.student_id))"
+            >
               <p class="text-sm font-semibold text-fb-text">{{ item.title }}</p>
               <p class="mt-0.5 whitespace-pre-line text-xs text-fb-secondary">{{ item.details }}</p>
-              <p class="mt-1 text-[11px] text-fb-icon">Ушёл: {{ item.created_at }}</p>
+              <p class="mt-1 text-[11px] text-fb-icon">Ушёл: {{ formatDay(item.created_at) }}</p>
               <p v-if="item.locked" class="mt-1 text-xs font-semibold text-rose-700">
                 Осталось оплатить: {{ item.debt_months }} мес.<span v-if="item.debt_amount"> (≈ {{ formatSum(item.debt_amount) }} сум)</span>
               </p>
@@ -244,6 +319,91 @@ onMounted(loadDashboard);
             </div>
           </li>
         </ul>
+      </div>
+
+      <div v-if="showReminders && myReminders.length" class="border-b border-amber-200 bg-amber-50 px-5 py-4">
+        <div class="mb-3 flex items-center justify-between gap-3">
+          <h2 class="text-[15px] font-semibold text-amber-900">
+            ⏰ Напоминания на сегодня и просроченные — {{ myReminders.length }}
+          </h2>
+          <button type="button" class="text-xs font-medium text-amber-800 hover:underline" @click="goTo('/reminders')">
+            Все напоминания →
+          </button>
+        </div>
+        <ul class="space-y-2">
+          <li
+            v-for="reminder in myReminders"
+            :key="reminder.id"
+            class="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-amber-200 bg-white px-4 py-3"
+          >
+            <div class="min-w-0 cursor-pointer" @click="openDashboardReminder(reminder)">
+              <p class="text-sm font-semibold text-fb-text">{{ reminder.title }}</p>
+              <p v-if="reminder.details" class="mt-0.5 whitespace-pre-line text-xs text-fb-secondary">{{ reminder.details }}</p>
+              <p class="mt-1 text-[11px]" :class="reminder.status === 'overdue' ? 'font-semibold text-fb-danger' : 'text-fb-icon'">
+                {{ reminder.status === 'overdue' ? 'Просрочено' : 'Сегодня' }} · {{ formatDay(reminder.due_date) }} · {{ reminder.assigned_to }}
+              </p>
+            </div>
+            <div class="flex shrink-0 gap-2">
+              <button
+                v-if="reminder.student_id"
+                type="button"
+                class="rounded-lg border border-fb-line px-3 py-1.5 text-xs font-medium text-fb-blue hover:bg-fb-hover"
+                @click="goTo(studentRoute(reminder.student_id))"
+              >
+                Открыть ученика
+              </button>
+              <button
+                v-if="canCompleteReminder(reminder)"
+                type="button"
+                class="rounded-lg border border-emerald-300 px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+                :disabled="completingReminderId === reminder.id"
+                @click="completeDashboardReminder(reminder)"
+              >
+                ✓ Выполнено
+              </button>
+            </div>
+          </li>
+        </ul>
+      </div>
+
+      <div v-if="writeOffModal.show" class="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
+        <div class="w-full max-w-md overflow-hidden rounded-2xl bg-fb-card shadow-2xl">
+          <div class="border-b border-fb-line px-6 py-4">
+            <h2 class="text-lg font-semibold text-rose-700">Списать долг без оплаты?</h2>
+          </div>
+          <div class="space-y-3 px-6 py-5">
+            <p class="text-[15px] font-medium text-fb-text">{{ writeOffModal.item?.title }}</p>
+            <p v-if="writeOffModal.item?.debt_months" class="text-sm text-fb-secondary">
+              Будет списано: {{ writeOffModal.item.debt_months }} мес.<span v-if="writeOffModal.item.debt_amount">
+                (≈ {{ formatSum(writeOffModal.item.debt_amount) }} сум)</span>.
+              Долг исчезнет из отчётов, в отчёте «Ушедшие» останется пометка «Списано» с причиной.
+            </p>
+            <label class="block text-sm font-medium text-fb-secondary">Причина (обязательно)</label>
+            <textarea
+              v-model="writeOffModal.reason"
+              rows="3"
+              class="w-full rounded-lg border border-fb-line px-3 py-2 focus:border-fb-blue focus:outline-none"
+              placeholder="Например: переехал в другой город, связаться не удалось"
+            />
+            <p v-if="writeOffModal.error" class="text-sm text-fb-danger">{{ writeOffModal.error }}</p>
+          </div>
+          <div class="flex justify-end gap-3 border-t border-fb-line px-6 py-4">
+            <button
+              type="button"
+              class="rounded-lg border border-fb-line px-5 py-2 text-sm font-medium text-fb-secondary hover:bg-fb-hover"
+              @click="writeOffModal.show = false"
+            >
+              Отмена
+            </button>
+            <button
+              type="button"
+              class="rounded-lg bg-rose-600 px-5 py-2 text-sm font-medium text-white hover:bg-rose-700"
+              @click="confirmWriteOff"
+            >
+              Списать
+            </button>
+          </div>
+        </div>
       </div>
 
       <div v-if="showFinanceChart" class="relative min-h-[300px] border-b border-fb-line bg-fb-card lg:min-h-[340px]">

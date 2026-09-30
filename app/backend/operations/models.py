@@ -34,9 +34,22 @@ class Reminder(models.Model):
     kind = models.CharField(max_length=32, blank=True, default='')
     # How an automatic reminder was closed ("оплачено" / "списано CEO: причина")
     resolution = models.TextField(blank=True, default='')
+    # "Left without paying" closed by the CEO without payment: the debt no longer counts anywhere
+    written_off = models.BooleanField(default=False)
+    # Who created it: the author keeps seeing a reminder they gave to somebody else
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='+',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     KIND_UNPAID_LEAVE = 'unpaid_leave'
+    # Online payment came while the student had no course price: the money waits in the копилка
+    KIND_ONLINE_PAYMENT_CHECK = 'online_payment_check'
+    TITLE_MAX_LENGTH = 255
 
     @property
     def current_status(self) -> str:
@@ -71,7 +84,8 @@ class StudentScore(models.Model):
     company = models.ForeignKey('org.Company', on_delete=models.CASCADE, related_name='scores')
     student = models.ForeignKey('crm.Student', on_delete=models.CASCADE, related_name='scores')
     group = models.ForeignKey('crm.Group', on_delete=models.CASCADE, related_name='scores')
-    grade = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    # Whole points only (owner, 2026-09-28): no 99.9 or 1.1
+    grade = models.PositiveIntegerField(default=0)
     rank = models.PositiveIntegerField(default=0)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -79,6 +93,35 @@ class StudentScore(models.Model):
         constraints = [
             models.UniqueConstraint(fields=['student', 'group'], name='uniq_score_per_student_group'),
         ]
+
+
+class StudentScoreHistory(models.Model):
+    """
+    Owner (2026-09-28): the rating shows only the latest grade, but every grade stays in the student's
+    history — date, group, subject, points. Names are copied so the record survives renames and transfers.
+    A correction through "Edit" changes the latest record and marks it as corrected (a typo is not a new grade).
+    """
+    company = models.ForeignKey('org.Company', on_delete=models.CASCADE, related_name='score_history')
+    student = models.ForeignKey('crm.Student', on_delete=models.CASCADE, related_name='score_history')
+    # The current rating row this record belongs to (a later grade replaces the row, the history stays)
+    score = models.ForeignKey(StudentScore, on_delete=models.SET_NULL, null=True, blank=True, related_name='history')
+    group = models.ForeignKey('crm.Group', on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
+    group_name = models.CharField(max_length=255, blank=True)
+    course_name = models.CharField(max_length=255, blank=True)
+    grade = models.PositiveIntegerField()
+    graded_on = models.DateField()
+    graded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='+',
+    )
+    corrected = models.BooleanField(default=False)
+    corrected_at = models.DateTimeField(null=True, blank=True)
+    corrected_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='+',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-graded_on', '-id']
 
 
 class TeacherAttendanceRecord(models.Model):
@@ -112,37 +155,6 @@ class TeacherAttendanceRecord(models.Model):
 
     def __str__(self) -> str:
         return f'{self.teacher} — {self.attend_date}'
-
-
-class WorklyRecord(models.Model):
-    class Status(models.TextChoices):
-        AT_WORK = 'at_work', 'На работе'
-        LATE_IN = 'late_in', 'Опоздал'
-        ABSENT = 'absent', 'Отсутствовал'
-
-    company = models.ForeignKey('org.Company', on_delete=models.CASCADE, related_name='workly_records')
-    staff = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
-        related_name='workly_records',
-    )
-    work_date = models.DateField()
-    clock_in = models.TimeField(null=True, blank=True)
-    clock_out = models.TimeField(null=True, blank=True)
-    status = models.CharField(max_length=16, choices=Status.choices, default=Status.AT_WORK)
-    note = models.TextField(blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        constraints = [
-            models.UniqueConstraint(fields=['company', 'staff', 'work_date'], name='uniq_workly_per_day'),
-        ]
-        indexes = [
-            models.Index(fields=['company', 'work_date']),
-        ]
-
-    def __str__(self) -> str:
-        return f'{self.staff} — {self.work_date}'
 
 
 class Tag(models.Model):

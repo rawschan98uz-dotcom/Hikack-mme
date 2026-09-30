@@ -2,6 +2,14 @@
 import { computed, onMounted, reactive, ref , watch} from 'vue';
 
 import client, { type ApiEnvelope } from '../api/client';
+import { todayIso } from '../utils/dates';
+
+interface Branch {
+  id: number;
+  name: string;
+}
+
+type PageArray<T> = T[] & { has_more?: boolean; next_offset?: number | null };
 
 interface Category {
   id: number;
@@ -11,6 +19,8 @@ interface Category {
 interface ExpenseRow {
   id: number;
   date: string;
+  branch_id: number | null;
+  branch: string;
   category_id: number | null;
   category: string;
   description: string;
@@ -20,6 +30,8 @@ interface ExpenseRow {
   sum: number;
   amount: number;
   creator: string;
+  /** A salary payout: read-only here */
+  is_salary_payout?: boolean;
 }
 
 const METHODS = [
@@ -30,6 +42,10 @@ const METHODS = [
 
 const rows = ref<ExpenseRow[]>([]);
 const categories = ref<Category[]>([]);
+const branches = ref<Branch[]>([]);
+const hasMore = ref(false);
+const nextOffset = ref<number | null>(null);
+const loadingMore = ref(false);
 const loading = ref(true);
 const saving = ref(false);
 const deleting = ref(false);
@@ -46,8 +62,11 @@ const editingCategoryName = ref('');
 const categoryError = ref('');
 const categorySaving = ref(false);
 
-const filters = reactive({ date_from: '', date_to: '', category_id: '', q: '' });
+const filters = reactive({ date_from: '', date_to: '', category_id: '', branch_id: '', q: '' });
 const form = reactive({
+  /** Owner (2026-09-28): every expense has its own date (today by default) and a branch */
+  expense_date: todayIso(),
+  branch_id: '' as number | '',
   category_id: '' as number | '',
   description: '',
   payee: '',
@@ -63,6 +82,7 @@ const tableRows = computed(() =>
   rows.value.map((r) => ({
     id: r.id,
     date: r.date,
+    branch: r.branch,
     category: r.category,
     description: r.description || '—',
     payee: r.payee || '—',
@@ -73,6 +93,8 @@ const tableRows = computed(() =>
 );
 
 function resetForm() {
+  form.expense_date = todayIso();
+  form.branch_id = branches.value.length === 1 ? branches.value[0].id : '';
   form.category_id = categories.value[0]?.id ?? '';
   form.description = '';
   form.payee = '';
@@ -84,11 +106,22 @@ function resetForm() {
 }
 
 function fillForm(row: ExpenseRow) {
+  form.expense_date = row.date;
+  form.branch_id = row.branch_id ?? '';
   form.category_id = row.category_id ?? '';
   form.description = row.description;
   form.payee = row.payee;
   form.method = row.method as (typeof METHODS)[number]['value'];
   form.amount = row.sum;
+}
+
+async function loadBranches() {
+  try {
+    const { data } = await client.get<ApiEnvelope<Branch[]>>('/branch');
+    branches.value = data.data;
+  } catch {
+    branches.value = [];
+  }
 }
 
 async function loadCategories() {
@@ -147,18 +180,41 @@ async function deleteCategory(id: number) {
   }
 }
 
+function listParams(offset = 0) {
+  const params: Record<string, string | number> = { offset };
+  if (filters.date_from) params.date_from = filters.date_from;
+  if (filters.date_to) params.date_to = filters.date_to;
+  if (filters.category_id) params.category_id = filters.category_id;
+  if (filters.branch_id) params.branch_id = filters.branch_id;
+  if (filters.q.trim()) params.q = filters.q.trim();
+  return params;
+}
+
 async function loadRows() {
   loading.value = true;
   try {
-    const params: Record<string, string> = {};
-    if (filters.date_from) params.date_from = filters.date_from;
-    if (filters.date_to) params.date_to = filters.date_to;
-    if (filters.category_id) params.category_id = filters.category_id;
-    if (filters.q.trim()) params.q = filters.q.trim();
-    const { data } = await client.get<ApiEnvelope<ExpenseRow[]>>('/expense', { params });
-    rows.value = data.data;
+    const { data } = await client.get<ApiEnvelope<PageArray<ExpenseRow>>>('/expense', { params: listParams() });
+    rows.value = [...data.data];
+    hasMore.value = Boolean(data.data.has_more);
+    nextOffset.value = data.data.next_offset ?? null;
   } finally {
     loading.value = false;
+  }
+}
+
+/** "Show more": the next 200 (older) expenses. */
+async function loadMore() {
+  if (nextOffset.value === null) return;
+  loadingMore.value = true;
+  try {
+    const { data } = await client.get<ApiEnvelope<PageArray<ExpenseRow>>>('/expense', {
+      params: listParams(nextOffset.value),
+    });
+    rows.value = [...rows.value, ...data.data];
+    hasMore.value = Boolean(data.data.has_more);
+    nextOffset.value = data.data.next_offset ?? null;
+  } finally {
+    loadingMore.value = false;
   }
 }
 
@@ -191,13 +247,23 @@ function closePanel() {
 
 async function submitForm() {
   formError.value = '';
-  if (!form.amount) {
-    formError.value = 'Enter amount';
+  if (!Number.isInteger(form.amount) || form.amount <= 0) {
+    formError.value = 'Сумма — целое положительное число.';
+    return;
+  }
+  if (form.branch_id === '') {
+    formError.value = 'Выберите филиал расхода.';
+    return;
+  }
+  if (!form.expense_date || form.expense_date > todayIso()) {
+    formError.value = 'Дата расхода не может быть позже сегодняшнего дня.';
     return;
   }
   saving.value = true;
   try {
     const payload = {
+      date: form.expense_date,
+      branch_id: form.branch_id,
       category_id: form.category_id === '' ? null : form.category_id,
       description: form.description.trim(),
       payee: form.payee.trim(),
@@ -211,8 +277,8 @@ async function submitForm() {
     }
     closePanel();
     await loadRows();
-  } catch {
-    formError.value = 'Could not save expense';
+  } catch (err: any) {
+    formError.value = err?.response?.data?.message || 'Could not save expense';
   } finally {
     saving.value = false;
   }
@@ -225,13 +291,16 @@ async function deleteRow() {
     await client.delete(`/expense/${detailRow.value.id}`);
     closePanel();
     await loadRows();
+  } catch (err: any) {
+    // e.g. the month is closed, or it is a salary payout
+    window.alert(err?.response?.data?.message || 'Не удалось удалить расход');
   } finally {
     deleting.value = false;
   }
 }
 
 onMounted(async () => {
-  await loadCategories();
+  await Promise.all([loadCategories(), loadBranches()]);
   await loadRows();
 });
 
@@ -269,6 +338,13 @@ watch(
 
     <div class="flex flex-wrap items-end gap-3 rounded-xl border border-fb-line bg-fb-card p-4">
       <div>
+        <label class="mb-1 block text-xs text-fb-secondary">Филиал</label>
+        <select v-model="filters.branch_id" class="rounded-lg border border-fb-line px-3 py-2 text-sm">
+          <option value="">Все</option>
+          <option v-for="b in branches" :key="b.id" :value="String(b.id)">{{ b.name }}</option>
+        </select>
+      </div>
+      <div>
         <label class="mb-1 block text-xs text-fb-secondary">Category</label>
         <select v-model="filters.category_id" class="rounded-lg border border-fb-line px-3 py-2 text-sm">
           <option value="">All</option>
@@ -297,6 +373,7 @@ watch(
         <thead class="border-b bg-fb-canvas">
           <tr>
             <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Date</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Филиал</th>
             <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Category</th>
             <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Description</th>
             <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Payee</th>
@@ -308,6 +385,7 @@ watch(
         <tbody>
           <tr v-for="row in tableRows" :key="row.id" class="cursor-pointer border-b hover:bg-fb-hover/40" @click="openDetail(row.id)">
             <td class="px-5 py-4">{{ row.date }}</td>
+            <td class="px-5 py-4">{{ row.branch }}</td>
             <td class="px-5 py-4">{{ row.category }}</td>
             <td class="px-5 py-4">{{ row.description }}</td>
             <td class="px-5 py-4">{{ row.payee }}</td>
@@ -317,6 +395,16 @@ watch(
           </tr>
         </tbody>
       </table>
+      <div v-if="hasMore" class="border-t border-fb-line p-3 text-center">
+        <button
+          type="button"
+          class="rounded-lg border border-fb-line px-4 py-2 text-sm font-medium text-fb-blue hover:bg-fb-hover disabled:opacity-50"
+          :disabled="loadingMore"
+          @click="loadMore"
+        >
+          {{ loadingMore ? 'Загрузка…' : 'Показать ещё' }}
+        </button>
+      </div>
     </div>
 
     <div v-if="showPanel" class="fixed inset-0 z-50 flex justify-end">
@@ -329,6 +417,27 @@ watch(
         <div v-if="panelLoading" class="p-6 text-fb-secondary">Loading…</div>
         <form v-else class="flex flex-1 flex-col overflow-hidden" @submit.prevent="submitForm">
           <div class="flex-1 space-y-4 overflow-y-auto p-6">
+            <div>
+              <label class="mb-1 block text-sm font-medium">Дата расхода</label>
+              <input
+                v-model="form.expense_date"
+                type="date"
+                :max="todayIso()"
+                :readonly="isReadOnly"
+                required
+                class="w-full rounded-lg border px-3 py-2 read-only:bg-fb-canvas"
+              />
+              <p v-if="!isReadOnly" class="mt-1 text-[11px] text-fb-secondary">
+                Выберите день, к которому относится расход: например, аренда за сентябрь — сентябрьской датой.
+              </p>
+            </div>
+            <div>
+              <label class="mb-1 block text-sm font-medium">Филиал</label>
+              <select v-model="form.branch_id" :disabled="isReadOnly" required class="w-full rounded-lg border px-3 py-2">
+                <option value="">— Выберите филиал —</option>
+                <option v-for="b in branches" :key="b.id" :value="b.id">{{ b.name }}</option>
+              </select>
+            </div>
             <div>
               <label class="mb-1 block text-sm font-medium">Category</label>
               <select v-model="form.category_id" :disabled="isReadOnly" class="w-full rounded-lg border px-3 py-2">
@@ -352,14 +461,20 @@ watch(
             </div>
             <div>
               <label class="mb-1 block text-sm font-medium">Amount</label>
-              <input v-model.number="form.amount" type="number" :readonly="isReadOnly" required class="w-full rounded-lg border px-3 py-2 read-only:bg-fb-canvas" />
+              <input v-model.number="form.amount" type="number" min="1" step="1" :readonly="isReadOnly" required class="w-full rounded-lg border px-3 py-2 read-only:bg-fb-canvas" />
             </div>
             <p v-if="formError" class="text-sm text-fb-danger">{{ formError }}</p>
           </div>
           <div class="flex gap-2 border-t px-6 py-4">
             <template v-if="isReadOnly && detailRow">
-              <button type="button" class="rounded-lg bg-fb-blue px-5 py-2 text-sm text-white" @click="startEdit">Edit</button>
-              <button type="button" class="rounded-lg border border-red-300 px-5 py-2 text-sm text-fb-danger" :disabled="deleting" @click="deleteRow">Delete</button>
+              <!-- A salary payout is changed or cancelled only in "Зарплаты" (payroll and P&L must agree) -->
+              <p v-if="detailRow.is_salary_payout" class="self-center text-xs text-fb-secondary">
+                Это выплата зарплаты — изменить или отменить её можно в разделе «Зарплаты».
+              </p>
+              <template v-else>
+                <button type="button" class="rounded-lg bg-fb-blue px-5 py-2 text-sm text-white" @click="startEdit">Edit</button>
+                <button type="button" class="rounded-lg border border-red-300 px-5 py-2 text-sm text-fb-danger" :disabled="deleting" @click="deleteRow">Delete</button>
+              </template>
             </template>
             <button v-else type="submit" class="rounded-lg bg-fb-blue px-5 py-2 text-sm text-white" :disabled="saving">
               {{ saving ? 'Saving…' : editingRow ? 'Save' : 'Create' }}

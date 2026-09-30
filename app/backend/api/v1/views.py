@@ -11,7 +11,15 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from accounts.models import TeacherBranch, User
-from accounts.rbac import ROLE_CEO, get_effective_role, get_role_label, get_user_permissions, user_is_teacher
+from accounts.rbac import (
+    PERM_FINANCE_VIEW,
+    ROLE_CEO,
+    get_effective_role,
+    get_role_label,
+    get_user_permissions,
+    user_has_permission,
+    user_is_teacher,
+)
 from api.responses import fail, ok
 from api.scope import (
     branch_allowed,
@@ -1032,10 +1040,13 @@ def dashboard(request):
         stage__in=[Lead.Stage.TRIAL_BOOKED, Lead.Stage.ATTENDED],
     ), request.user).count()
 
-    six_months_ago = timezone.now() - timedelta(days=180)
+    # By the day the money was brought (payment_date), like the P&L — not by the day it was typed in
+    six_months_ago = timezone.localdate() - timedelta(days=180)
     monthly_payments = (
-        scope_payments(Payment.objects.filter(company=company, created_at__gte=six_months_ago), request.user)
-        .annotate(month=TruncMonth('created_at'))
+        scope_payments(Payment.objects.filter(company=company), request.user)
+        .annotate(paid_day=PAID_DAY)
+        .filter(paid_day__gte=six_months_ago)
+        .annotate(month=TruncMonth('paid_day'))
         .values('month')
         .annotate(
             paid=Sum('amount', filter=Q(transaction_type=Payment.TransactionType.PAYMENT)),
@@ -1060,23 +1071,31 @@ def dashboard(request):
             'details': reminder.details,
             'due_date': reminder.due_date.isoformat(),
             'status': reminder.current_status,
+            'assigned_to_id': reminder.assigned_to_id,
             'assigned_to': reminder.assigned_to.display_name() if reminder.assigned_to else '—',
             'student_id': reminder.student_id,
+            'kind': reminder.kind,
         }
+        # Overdue and today's reminders; "left without paying" has its own block below
         for reminder in filter_reminders_queryset(Reminder.objects.filter(
             company=company,
             due_date__lte=timezone.localdate(),
-        ), request.user).exclude(status=Reminder.Status.DONE).select_related('assigned_to').order_by('due_date', 'id')[:8]
+        ), request.user).exclude(status=Reminder.Status.DONE).exclude(kind=Reminder.KIND_UNPAID_LEAVE)
+        .select_related('assigned_to').order_by('due_date', 'id')[:10]
     ]
 
-    # Students who left without paying: stays on the dashboard until someone marks it done
-    unpaid_leavers = [] if is_teacher else [
+    # Students who left without paying: stays on the dashboard until someone marks it done.
+    # Their debts are money: not for a teacher or the marketer (reports audit, 2026-09-29)
+    from accounts.rbac import PERM_PAYMENTS_VIEW
+    sees_debts = not is_teacher and user_has_permission(request.user, PERM_PAYMENTS_VIEW)
+    unpaid_leavers = [] if not sees_debts else [
         {
             'reminder_id': reminder.id,
             'student_id': reminder.student_id,
             'title': reminder.title,
             'details': reminder.details,
-            'created_at': reminder.created_at.date().isoformat(),
+            # Tashkent date (a plain .date() is the UTC one: leaving before 05:00 showed yesterday)
+            'created_at': timezone.localtime(reminder.created_at).date().isoformat(),
             **unpaid_leave_state(reminder),
         }
         for reminder in filter_reminders_queryset(
@@ -1097,6 +1116,9 @@ def dashboard(request):
             1 for s in students.filter(status__in=Student.CURRENT_STATUSES)
             if _get_student_payment_info(s, _lookup_student_payment_summary(s, payments_summary))['is_debtor']
         )
+        if not user_has_permission(request.user, PERM_FINANCE_VIEW):
+            # The revenue chart is a money report: the administrator does not see it (owner, 2026-09-28)
+            finance_chart = []
 
     return ok({
         'active_leads': active_leads_count,

@@ -11,6 +11,7 @@ import { useAuthStore } from '../stores/auth';
 import { useLocaleStore, type LocaleCode } from '../stores/locale';
 import { isHiddenForTeacher, PERM } from '../utils/rbac';
 import { withCreateQuery } from '../utils/crossLinks';
+import client, { type ApiEnvelope } from '../api/client';
 
 type QuickAddItem = QuickAddMenuItem;
 
@@ -42,7 +43,7 @@ const quickAddItems = computed<QuickAddItem[]>(() => {
     { label: 'Pay Student', icon: 'pay', ...withCreateQuery('/finance/payments') },
   ];
   return items.filter((item) => {
-    if (item.path.startsWith('/finance')) return auth.can(PERM.FINANCE_WRITE);
+    if (item.path.startsWith('/finance')) return auth.can(PERM.PAYMENTS_WRITE);
     if (item.path.startsWith('/students')) return auth.can(PERM.STUDENTS_WRITE);
     return true;
   });
@@ -57,7 +58,7 @@ const appGridItems = computed(() => {
     { label: 'Teachers', path: '/teachers', permission: PERM.TEACHERS_VIEW },
     { label: 'Groups', path: '/groups', permission: PERM.GROUPS_VIEW },
     { label: 'Students', path: '/students', permission: PERM.STUDENTS_VIEW },
-    { label: 'Finance', path: '/finance/payments', permission: PERM.FINANCE_VIEW },
+    { label: 'Finance', path: '/finance/payments', permission: PERM.PAYMENTS_VIEW },
     { label: 'Reports', path: '/reports/conversion', permission: PERM.REPORTS_VIEW },
     { label: 'Settings', path: '/auto-sms', permission: PERM.SETTINGS_INTEGRATIONS },
   ];
@@ -110,12 +111,35 @@ function onDocumentClick(event: MouseEvent) {
   }
 }
 
+// Red counter on the clock icon: my overdue + today's reminders
+const reminderCount = ref(0);
+const reminderOverdue = ref(0);
+let reminderTimer: number | undefined;
+
+async function loadReminderCount() {
+  if (!auth.can(PERM.REMINDERS_VIEW)) return;
+  try {
+    const { data } = await client.get<ApiEnvelope<{ overdue: number; today: number; total: number }>>('/reminders/summary');
+    reminderCount.value = data.data.total;
+    reminderOverdue.value = data.data.overdue;
+  } catch {
+    // The counter is a hint only; the page itself shows the real list
+  }
+}
+
+watch(() => route.path, loadReminderCount);
+
 onMounted(() => {
   document.addEventListener('click', onDocumentClick);
+  window.addEventListener('reminders-changed', loadReminderCount);
+  loadReminderCount();
+  reminderTimer = window.setInterval(loadReminderCount, 5 * 60 * 1000);
 });
 
 onBeforeUnmount(() => {
   document.removeEventListener('click', onDocumentClick);
+  window.removeEventListener('reminders-changed', loadReminderCount);
+  window.clearInterval(reminderTimer);
 });
 
 function isPrimaryActive(sectionId: string) {
@@ -397,14 +421,21 @@ function logout() {
           <button
             v-if="auth.can(PERM.REMINDERS_VIEW)"
             type="button"
-            class="icon-btn-fb"
-            title="Reminders"
+            class="icon-btn-fb relative"
+            :title="reminderCount ? `Напоминания: ${reminderCount} (просрочено: ${reminderOverdue})` : 'Reminders'"
             @click="goReminders"
           >
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
               <circle cx="12" cy="12" r="9" />
               <path d="M12 7v5l3 2" />
             </svg>
+            <span
+              v-if="reminderCount"
+              class="absolute -right-0.5 -top-0.5 flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1 text-[11px] font-semibold leading-none text-white"
+              :class="reminderOverdue ? 'bg-fb-danger' : 'bg-fb-blue'"
+            >
+              {{ reminderCount > 99 ? '99+' : reminderCount }}
+            </span>
           </button>
 
           <div ref="userMenuRoot" class="relative ml-2">

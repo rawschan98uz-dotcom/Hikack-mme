@@ -26,9 +26,7 @@ import RemindersView from '../views/RemindersView.vue';
 import ReportsAttendanceView from '../views/ReportsAttendanceView.vue';
 import ReportsConversionView from '../views/ReportsConversionView.vue';
 import ReportsLeftStudentsView from '../views/ReportsLeftStudentsView.vue';
-import ReportsLeadsView from '../views/ReportsLeadsView.vue';
 import ReportsPnlView from '../views/ReportsPnlView.vue';
-import ReportsWorklyView from '../views/ReportsWorklyView.vue';
 import RoadmapView from '../views/RoadmapView.vue';
 import RoomsView from '../views/RoomsView.vue';
 import SettingsView from '../views/SettingsView.vue';
@@ -72,14 +70,15 @@ const router = createRouter({
         { path: 'reports/pnl', component: ReportsPnlView },
         { path: 'reports/conversion', component: ReportsConversionView },
         { path: 'reports/attendance', component: ReportsAttendanceView },
-        { path: 'reports/leads', component: ReportsLeadsView },
+        // One page «Лиды и конверсия» instead of two copies; Workly removed (owner, 2026-09-29)
+        { path: 'reports/leads', redirect: '/reports/conversion' },
         { path: 'reports/left-students', component: ReportsLeftStudentsView },
-        { path: 'reports/workly', component: ReportsWorklyView },
+        { path: 'reports/workly', redirect: '/dashboard/default' },
         { path: 'settings', component: SettingsView },
         { path: 'settings-grade', component: GradeSettingsView },
         { path: 'admin/voip', component: VoipSettingsView },
         { path: 'roadmap', component: RoadmapView },
-        { path: 'left-students', component: ReportsLeftStudentsView },
+        { path: 'left-students', redirect: (to) => ({ path: '/reports/left-students', query: to.query }) },
         {
           path: 'blog/news',
           component: WhatsNewView,

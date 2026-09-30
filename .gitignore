@@ -42,3 +42,6 @@ docs/
 memory-bank/
 
 backups/
+
+# Real client data (backup from the old program) — never commit
+baza/

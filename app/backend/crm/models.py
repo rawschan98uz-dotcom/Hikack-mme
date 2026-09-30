@@ -124,11 +124,18 @@ class Student(models.Model):
         status_untouched = update_fields is not None and 'status' not in update_fields
         # Read by crm/signals.py: the student has just left / finished -> check for unpaid months
         self._just_left = False
+        self._just_returned = False
+        # Read by crm/signals.py: the freeze journal (StudentFreeze) opens / closes a period
+        self._freeze_started = False
+        self._freeze_ended = False
         if self.pk and not status_untouched:
             old_status = Student.objects.filter(pk=self.pk).values_list('status', flat=True).first()
+            self._freeze_started = self.status == self.Status.FROZEN and old_status != self.Status.FROZEN
+            self._freeze_ended = old_status == self.Status.FROZEN and self.status != self.Status.FROZEN
             self._just_left = old_status in self.CURRENT_STATUSES and self.status in (
                 self.Status.LEFT, self.Status.GRADUATED,
             )
+            self._just_returned = old_status in (self.Status.LEFT, self.Status.GRADUATED)                 and self.status in self.CURRENT_STATUSES
             if self.status in left_statuses and old_status not in left_statuses:
                 if not self.left_at:
                     self.left_at = timezone.now()
@@ -141,6 +148,7 @@ class Student(models.Model):
             elif self.status != self.Status.FROZEN:
                 self.frozen_at = None
         elif not self.pk:
+            self._freeze_started = self.status == self.Status.FROZEN
             if self.status in left_statuses and not self.left_at:
                 self.left_at = timezone.now()
             if self.status == self.Status.FROZEN and not self.frozen_at:
@@ -278,6 +286,22 @@ class GroupScheduleSlot(models.Model):
 
     def __str__(self) -> str:
         return f'{self.group.name} - Day {self.weekday} ({self.start_time}-{self.end_time})'
+
+
+class StudentFreeze(models.Model):
+    """
+    Freeze periods of a student (owner, 2026-09-28): a teacher's salary does not count the lessons a student
+    was frozen for. start_date = the day of freezing; end_date = the day of unfreezing (NULL = still frozen).
+    A lesson on day d is frozen when start_date <= d < end_date.
+    """
+    company = models.ForeignKey('org.Company', on_delete=models.CASCADE, related_name='student_freezes')
+    student = models.ForeignKey('Student', on_delete=models.CASCADE, related_name='freezes')
+    start_date = models.DateField()
+    end_date = models.DateField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [models.Index(fields=['student', 'start_date'])]
 
 
 class GroupEnrollment(models.Model):

@@ -41,6 +41,11 @@ PERM_FINANCE_VIEW = 'finance.view'
 PERM_FINANCE_WRITE = 'finance.write'
 # Company-wide money that is not tied to a branch: expenses, withdrawals, P&L
 PERM_FINANCE_COMPANY = 'finance.company'
+# Student payments (owner, 2026-09-28): the administrator takes payments and gives refunds,
+# but sees no financial reports, salaries, expenses or withdrawals; only the CEO deletes a payment
+PERM_PAYMENTS_VIEW = 'payments.view'
+PERM_PAYMENTS_WRITE = 'payments.write'
+PERM_PAYMENTS_DELETE = 'payments.delete'
 
 PERM_REPORTS_VIEW = 'reports.view'
 PERM_REPORTS_WRITE = 'reports.write'
@@ -100,6 +105,9 @@ ALL_PERMISSIONS: frozenset[str] = frozenset(
         PERM_FINANCE_VIEW,
         PERM_FINANCE_WRITE,
         PERM_FINANCE_COMPANY,
+        PERM_PAYMENTS_VIEW,
+        PERM_PAYMENTS_WRITE,
+        PERM_PAYMENTS_DELETE,
         PERM_REPORTS_VIEW,
         PERM_REPORTS_WRITE,
         PERM_SETTINGS_COMPANY,
@@ -130,9 +138,7 @@ ALL_PERMISSIONS: frozenset[str] = frozenset(
 ROLE_CEO = 'ceo'
 ROLE_ADMINISTRATOR = 'administrator'
 ROLE_BRANCH_DIRECTOR = 'branch_director'
-ROLE_LIMITED_ADMIN = 'limited_admin'
 ROLE_MARKETER = 'marketer'
-ROLE_CASHIER = 'cashier'
 ROLE_TEACHER = 'teacher'
 ROLE_STUDENT = 'student'
 
@@ -140,9 +146,7 @@ ROLE_LABELS: dict[str, str] = {
     ROLE_CEO: 'CEO',
     ROLE_ADMINISTRATOR: 'Администратор',
     ROLE_BRANCH_DIRECTOR: 'Директор филиала',
-    ROLE_LIMITED_ADMIN: 'Ограниченный админ',
     ROLE_MARKETER: 'Маркетолог',
-    ROLE_CASHIER: 'Кассир',
     ROLE_TEACHER: 'Учитель',
     ROLE_STUDENT: 'Студент',
 }
@@ -189,46 +193,16 @@ _ADMIN_OFFICE: frozenset[str] = frozenset(
 
 ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
     ROLE_CEO: ALL_PERMISSIONS,
-    ROLE_ADMINISTRATOR: _ADMIN_OFFICE,
+    # Takes payments and gives refunds (also the cashier); no expenses, withdrawals, salaries or money reports
+    ROLE_ADMINISTRATOR: _ADMIN_OFFICE | {PERM_PAYMENTS_VIEW, PERM_PAYMENTS_WRITE},
     # E3: a branch director also sees (read-only) the money of own branch
-    ROLE_BRANCH_DIRECTOR: _ADMIN_OFFICE | {PERM_FINANCE_VIEW},
-    ROLE_LIMITED_ADMIN: frozenset(
-        {
-            PERM_DASHBOARD_VIEW,
-            PERM_GROUPS_VIEW,
-            PERM_GROUPS_WRITE,
-            PERM_GROUPS_EXPORT,
-            PERM_COURSES_VIEW,
-            PERM_COURSES_WRITE,
-            PERM_TEACHERS_VIEW,
-            PERM_TEACHERS_WRITE,
-            PERM_STUDENTS_VIEW,
-            PERM_STUDENTS_WRITE,
-            PERM_BRANCH_VIEW,
-            PERM_PROFILE_EDIT,
-            PERM_RATING_VIEW,
-            PERM_RATING_WRITE,
-        },
-    ),
+    ROLE_BRANCH_DIRECTOR: _ADMIN_OFFICE | {PERM_FINANCE_VIEW, PERM_PAYMENTS_VIEW},
     ROLE_MARKETER: frozenset(
         {
             PERM_DASHBOARD_VIEW,
             PERM_LEADS_VIEW,
             PERM_LEADS_WRITE,
             PERM_REPORTS_VIEW,
-            PERM_PROFILE_EDIT,
-        },
-    ),
-    ROLE_CASHIER: frozenset(
-        {
-            PERM_DASHBOARD_VIEW,
-            PERM_STUDENTS_VIEW,
-            PERM_STUDENTS_WRITE,
-            PERM_FINANCE_VIEW,
-            PERM_FINANCE_WRITE,
-            PERM_FINANCE_COMPANY,
-            PERM_REPORTS_VIEW,
-            PERM_BRANCH_VIEW,
             PERM_PROFILE_EDIT,
         },
     ),
@@ -260,7 +234,8 @@ def get_effective_role(user: User) -> str:
         return ROLE_STUDENT
     if user.staff_role and user.staff_role in ROLE_PERMISSIONS:
         return user.staff_role
-    return ROLE_LIMITED_ADMIN
+    # A staff member without a role (or with an old one): administrator — the one office role
+    return ROLE_ADMINISTRATOR
 
 
 def get_role_label(role: str) -> str:

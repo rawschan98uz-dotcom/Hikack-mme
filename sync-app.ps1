@@ -3,9 +3,13 @@
 
 $ErrorActionPreference = "Stop"
 
-$workspaceRoot = "G:\MME"
-$installedAppRoot = "C:\Users\acer\AppData\Local\Programs\HiJack-LMS"
+# Paths of the current computer: the workspace is where this script lies, the app is in this user's profile
+$workspaceRoot = $PSScriptRoot
+$installedAppRoot = "$env:LOCALAPPDATA\Programs\HiJack-LMS"
 $pythonExe = "$workspaceRoot\app\backend\.venv\Scripts\python.exe"
+if (-not (Test-Path $pythonExe)) {
+    $pythonExe = "$installedAppRoot\runtime\python\python.exe"
+}
 
 Write-Host "=== 1. Building Frontend ===" -ForegroundColor Cyan
 $env:PATH = "C:\Program Files\nodejs;$env:PATH"

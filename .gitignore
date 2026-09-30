@@ -43,5 +43,8 @@ memory-bank/
 
 backups/
 
+# Daily GitHub backup settings of this computer (operations/backup.py)
+backup.json
+
 # Real client data (backup from the old program) — never commit
 baza/

@@ -3,7 +3,9 @@ import { onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 
 import client, { type ApiEnvelope } from '../api/client';
+import { useAuthStore } from '../stores/auth';
 import { hasCreateFlag, routeWithoutCreate } from '../utils/crossLinks';
+import { todayIso } from '../utils/dates';
 import CourseLevelBadge from '../components/CourseLevelBadge.vue';
 import {
   buildCourseCardDisplay,
@@ -13,11 +15,35 @@ import {
   type CefrLevel,
 } from '../utils/courseLevel';
 
+// One record of the price history: "from this day the course costs X"
+interface PriceRecord {
+  id: number;
+  price: number;
+  valid_from: string;
+  is_first: boolean;
+  is_current: boolean;
+  is_future: boolean;
+  created_by: string;
+}
+
+interface CourseData {
+  id: number;
+  name: string;
+  code: string;
+  price: number;
+  next_price?: { price: number; valid_from: string } | null;
+  price_history?: PriceRecord[];
+  lesson_duration: number;
+  course_duration: number;
+  description: string;
+}
+
 interface CourseRow {
   id: number;
   name: string;
   code: string;
   price: number;
+  next_price?: { price: number; valid_from: string } | null;
   lesson_duration: number;
   course_duration: number;
   description: string;
@@ -32,6 +58,7 @@ interface CourseRow {
 
 const route = useRoute();
 const router = useRouter();
+const auth = useAuthStore();
 
 const rows = ref<CourseRow[]>([]);
 const loading = ref(true);
@@ -41,6 +68,9 @@ const showPanel = ref(false);
 const panelLoading = ref(false);
 const formError = ref('');
 const editingCourse = ref<CourseRow | null>(null);
+// Price history of the course in the panel; only the CEO changes prices
+const priceHistory = ref<PriceRecord[]>([]);
+const priceEdit = reactive({ id: 0, price: '', valid_from: '', saving: false, error: '' });
 
 const lessonDurations = [45, 60, 90, 120];
 
@@ -50,6 +80,7 @@ const form = reactive({
   lesson_duration: 90,
   course_duration: 12,
   price: '',
+  price_from: todayIso(),
   description: '',
 });
 
@@ -57,15 +88,16 @@ function formatPrice(value: number) {
   return `${value.toLocaleString('en-US').replace(/,/g, ' ')} UZS`;
 }
 
-function enrichCourse(course: {
-  id: number;
-  name: string;
-  code: string;
-  price: number;
-  lesson_duration: number;
-  course_duration: number;
-  description: string;
-}): CourseRow {
+function formatDay(iso: string) {
+  const [year, month, day] = iso.split('-');
+  return `${day}.${month}.${year}`;
+}
+
+function parsePrice(text: string | number) {
+  return Number(String(text).replace(/\s/g, '')) || 0;
+}
+
+function enrichCourse(course: CourseData): CourseRow {
   const display = buildCourseCardDisplay(course.code);
   return {
     ...course,
@@ -86,18 +118,69 @@ function resetForm() {
   form.lesson_duration = 90;
   form.course_duration = 12;
   form.price = '';
+  form.price_from = todayIso();
   form.description = '';
   formError.value = '';
   editingCourse.value = null;
+  priceHistory.value = [];
+  priceEdit.id = 0;
 }
 
-function fillForm(course: { name: string; code: string; lesson_duration: number; course_duration: number; price: number; description: string }) {
+function fillForm(course: CourseData) {
   form.name = course.name;
   form.code = course.code;
   form.lesson_duration = course.lesson_duration;
   form.course_duration = course.course_duration;
   form.price = String(course.price);
+  form.price_from = todayIso();
   form.description = course.description;
+  priceHistory.value = course.price_history ?? [];
+}
+
+function startPriceEdit(record: PriceRecord) {
+  priceEdit.id = record.id;
+  priceEdit.price = String(record.price);
+  priceEdit.valid_from = record.valid_from;
+  priceEdit.error = '';
+}
+
+// The server answers with the whole course: the panel and the cards show the new state at once
+async function applyCourse(course: CourseData) {
+  editingCourse.value = enrichCourse(course);
+  form.price = String(course.price);
+  priceHistory.value = course.price_history ?? [];
+  await loadCourses();
+}
+
+async function savePriceEdit() {
+  if (!editingCourse.value) return;
+  priceEdit.saving = true;
+  priceEdit.error = '';
+  try {
+    const { data } = await client.patch<ApiEnvelope<CourseData>>(
+      `/courses/${editingCourse.value.id}/prices/${priceEdit.id}`,
+      { price: parsePrice(priceEdit.price), valid_from: priceEdit.valid_from },
+    );
+    priceEdit.id = 0;
+    await applyCourse(data.data);
+  } catch (err: any) {
+    priceEdit.error = err?.response?.data?.message || 'Не удалось исправить цену';
+  } finally {
+    priceEdit.saving = false;
+  }
+}
+
+async function deletePriceRecord(record: PriceRecord) {
+  if (!editingCourse.value) return;
+  if (!window.confirm(`Удалить цену ${formatPrice(record.price)} с ${formatDay(record.valid_from)}?`)) return;
+  try {
+    const { data } = await client.delete<ApiEnvelope<CourseData>>(
+      `/courses/${editingCourse.value.id}/prices/${record.id}`,
+    );
+    await applyCourse(data.data);
+  } catch (err: any) {
+    formError.value = err?.response?.data?.message || 'Не удалось удалить цену';
+  }
 }
 
 function openPanel() {
@@ -115,15 +198,7 @@ async function openCourse(id: number) {
   showPanel.value = true;
   panelLoading.value = true;
   try {
-    const { data } = await client.get<ApiEnvelope<{
-      id: number;
-      name: string;
-      code: string;
-      price: number;
-      lesson_duration: number;
-      course_duration: number;
-      description: string;
-    }>>(`/courses/${id}`);
+    const { data } = await client.get<ApiEnvelope<CourseData>>(`/courses/${id}`);
     editingCourse.value = enrichCourse(data.data);
     fillForm(data.data);
   } finally {
@@ -138,13 +213,15 @@ async function deleteCourse() {
     await client.delete(`/courses/${editingCourse.value.id}`);
     closePanel();
     await loadCourses();
+  } catch (err: any) {
+    formError.value = err?.response?.data?.message || 'Could not delete course';
   } finally {
     deleting.value = false;
   }
 }
 
 async function loadCourses() {
-  const { data } = await client.get<ApiEnvelope<CourseRow[]>>('/courses');
+  const { data } = await client.get<ApiEnvelope<CourseData[]>>('/courses');
   rows.value = data.data.map(enrichCourse);
 }
 
@@ -176,30 +253,34 @@ async function saveCourse() {
     formError.value = 'Enter course name';
     return;
   }
-  if (!isValidCourseCode(form.code)) {
+  // A course keeps the code it already has (old ones may not fit the rule): only a new code is checked
+  const codeUnchanged = Boolean(editingCourse.value) && normalizeCourseCode(form.code) === editingCourse.value?.code;
+  if (!codeUnchanged && !isValidCourseCode(form.code)) {
     formError.value = `Enter a valid Code Course (${courseCodeHint()})`;
     return;
   }
 
   saving.value = true;
   try {
-    const payload = {
+    const payload: Record<string, unknown> = {
       name: form.name.trim(),
       code: normalizeCourseCode(form.code),
       lesson_duration: form.lesson_duration,
       course_duration: Number(form.course_duration) || 12,
-      price: Number(String(form.price).replace(/\s/g, '')) || 0,
+      price: parsePrice(form.price),
       description: form.description.trim(),
     };
     if (editingCourse.value) {
+      // A new price never rewrites the past: it starts on the chosen day
+      if (auth.isCeo && form.price_from) payload.price_from = form.price_from;
       await client.patch(`/courses/${editingCourse.value.id}`, payload);
     } else {
       await client.post('/courses', payload);
     }
     await loadCourses();
     closePanel();
-  } catch {
-    formError.value = 'Could not save course';
+  } catch (err: any) {
+    formError.value = err?.response?.data?.message || 'Could not save course';
   } finally {
     saving.value = false;
   }
@@ -248,6 +329,9 @@ async function saveCourse() {
             </h3>
             <p class="truncate text-[13px] text-fb-icon">
               {{ row.priceText }}
+            </p>
+            <p v-if="row.next_price" class="truncate text-[12px] text-amber-700">
+              с {{ formatDay(row.next_price.valid_from) }} — {{ formatPrice(row.next_price.price) }}
             </p>
           </div>
         </article>
@@ -326,9 +410,86 @@ async function saveCourse() {
               v-model="form.price"
               type="text"
               inputmode="numeric"
-              class="w-full h-11 px-4 rounded-lg border border-fb-line text-[16px] focus:outline-none focus:border-fb-blue"
+              :readonly="Boolean(editingCourse) && !auth.isCeo"
+              class="w-full h-11 px-4 rounded-lg border border-fb-line text-[16px] focus:outline-none focus:border-fb-blue read-only:bg-fb-canvas"
             />
+            <p v-if="editingCourse && !auth.isCeo" class="mt-1.5 text-[13px] text-fb-icon">
+              Цену курса меняет только CEO.
+            </p>
           </div>
+
+          <template v-if="editingCourse">
+            <div v-if="auth.isCeo">
+              <label class="block text-[15px] font-medium text-fb-secondary mb-2">Новая цена действует с</label>
+              <input
+                v-model="form.price_from"
+                type="date"
+                class="w-full h-11 px-4 rounded-lg border border-fb-line text-[16px] focus:outline-none focus:border-fb-blue"
+              />
+              <p class="mt-1.5 text-[13px] text-fb-icon">
+                Всё, что было до этой даты, останется по старой цене. Если цена была введена с ошибкой —
+                нажмите «Исправить» в истории ниже.
+              </p>
+            </div>
+
+            <div v-if="priceHistory.length">
+              <label class="block text-[15px] font-medium text-fb-secondary mb-2">История цен</label>
+              <ul class="divide-y divide-fb-line rounded-lg border border-fb-line text-[14px]">
+                <li v-for="record in priceHistory" :key="record.id" class="px-3 py-2.5">
+                  <div v-if="priceEdit.id !== record.id" class="flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <span class="text-fb-secondary">
+                      {{ record.is_first ? 'с начала' : `с ${formatDay(record.valid_from)}` }}
+                    </span>
+                    <span class="font-semibold text-fb-text">{{ formatPrice(record.price) }}</span>
+                    <span v-if="record.is_current" class="rounded-full bg-emerald-100 px-2 py-0.5 text-[12px] text-emerald-800">сейчас</span>
+                    <span v-else-if="record.is_future" class="rounded-full bg-amber-100 px-2 py-0.5 text-[12px] text-amber-800">запланирована</span>
+                    <span v-if="record.created_by" class="text-[12px] text-fb-icon">{{ record.created_by }}</span>
+                    <span v-if="auth.isCeo" class="ml-auto flex gap-3">
+                      <button type="button" class="text-fb-blue hover:underline" @click="startPriceEdit(record)">Исправить</button>
+                      <button
+                        v-if="priceHistory.length > 1"
+                        type="button"
+                        class="text-fb-danger hover:underline"
+                        @click="deletePriceRecord(record)"
+                      >
+                        Удалить
+                      </button>
+                    </span>
+                  </div>
+                  <div v-else class="space-y-2">
+                    <div class="flex gap-2">
+                      <input
+                        v-model="priceEdit.price"
+                        type="text"
+                        inputmode="numeric"
+                        class="h-10 w-1/2 rounded-lg border border-fb-line px-3 focus:outline-none focus:border-fb-blue"
+                      />
+                      <input
+                        v-model="priceEdit.valid_from"
+                        type="date"
+                        class="h-10 w-1/2 rounded-lg border border-fb-line px-3 focus:outline-none focus:border-fb-blue"
+                      />
+                    </div>
+                    <p v-if="record.is_first" class="text-[12px] text-fb-icon">
+                      Это первая цена курса: она действует и для всех дней до своей даты.
+                    </p>
+                    <p v-if="priceEdit.error" class="text-[13px] text-fb-danger">{{ priceEdit.error }}</p>
+                    <div class="flex gap-3">
+                      <button
+                        type="button"
+                        class="rounded-full bg-fb-blue px-4 py-1.5 text-white disabled:opacity-60"
+                        :disabled="priceEdit.saving"
+                        @click="savePriceEdit"
+                      >
+                        {{ priceEdit.saving ? 'Секунду…' : 'Сохранить исправление' }}
+                      </button>
+                      <button type="button" class="text-fb-secondary hover:underline" @click="priceEdit.id = 0">Отмена</button>
+                    </div>
+                  </div>
+                </li>
+              </ul>
+            </div>
+          </template>
 
           <div>
             <label class="block text-[15px] font-medium text-fb-secondary mb-2">Description</label>
@@ -350,7 +511,7 @@ async function saveCourse() {
               {{ saving ? 'Saving…' : 'Save' }}
             </button>
             <button
-              v-if="editingCourse"
+              v-if="editingCourse && auth.isCeo"
               type="button"
               class="rounded-full border border-red-300 px-6 py-3 text-[16px] text-fb-danger"
               :disabled="deleting"

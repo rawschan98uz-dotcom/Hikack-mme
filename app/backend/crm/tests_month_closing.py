@@ -183,7 +183,9 @@ class AdjustmentTests(Base):
 
 class CloseRulesTests(Base):
     def test_only_a_finished_month_and_only_once(self):
-        self.assertEqual(self.close('2026-09').status_code, 400)  # today is in September
+        from django.utils import timezone
+        # The current month is not over yet (was hard-coded as September and broke on 1 October)
+        self.assertEqual(self.close(timezone.localdate().strftime('%Y-%m')).status_code, 400)
         self.assertEqual(self.close('2026-13').status_code, 400)
         self.assertTrue(self.payroll()['can_close'])
         self.assertEqual(self.close().status_code, 201)

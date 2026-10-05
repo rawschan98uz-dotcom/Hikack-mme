@@ -60,6 +60,7 @@ MIDDLEWARE = [
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'operations.backup.DailyBackupMiddleware',
+    'crm.pricing.DailyPriceMiddleware',
 ]
 
 ROOT_URLCONF = 'config.urls'

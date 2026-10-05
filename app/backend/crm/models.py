@@ -19,6 +19,30 @@ class Course(models.Model):
         return self.name
 
 
+class CoursePrice(models.Model):
+    """
+    Price history of a course (owner, 2026-10-05; crm/pricing.py): a price is valid from a date.
+    The past keeps the price it had — only days from `valid_from` on get the new one.
+    Course.price is always the price valid today. Before the first record the first price applies.
+    """
+    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='prices')
+    price = models.PositiveBigIntegerField()
+    valid_from = models.DateField()
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='created_course_prices',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['valid_from', 'id']
+        constraints = [
+            models.UniqueConstraint(fields=['course', 'valid_from'], name='uniq_course_price_per_day'),
+        ]
+
+    def __str__(self) -> str:
+        return f'{self.course} — {self.price} с {self.valid_from}'
+
+
 class Group(models.Model):
     class Status(models.IntegerChoices):
         ACTIVE = 2, 'Активная'

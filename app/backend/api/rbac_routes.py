@@ -48,6 +48,8 @@ ROUTE_RULES: list[tuple[tuple[str, ...], str, str | None]] = [
     (('POST',), r'^courses$', P.PERM_COURSES_WRITE),
     (('GET',), r'^courses/\d+$', P.PERM_COURSES_VIEW),
     (('PATCH', 'DELETE'), r'^courses/\d+$', P.PERM_COURSES_WRITE),
+    # Price history: the view lets only the CEO through
+    (('PATCH', 'DELETE'), r'^courses/\d+/prices/\d+$', P.PERM_COURSES_WRITE),
 
     (('GET',), r'^user$', P.PERM_TEACHERS_VIEW),
     (('POST',), r'^user/staff$', P.PERM_STAFF_WRITE),

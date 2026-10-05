@@ -3,6 +3,7 @@ from django.contrib import admin
 from crm.models import (
     AttendanceRecord,
     Course,
+    CoursePrice,
     Group,
     GroupEnrollment,
     GroupScheduleSlot,
@@ -16,6 +17,12 @@ from crm.models import (
 class CourseAdmin(admin.ModelAdmin):
     list_display = ('name', 'company', 'price')
     list_filter = ('company',)
+
+
+@admin.register(CoursePrice)
+class CoursePriceAdmin(admin.ModelAdmin):
+    list_display = ('course', 'price', 'valid_from', 'created_by')
+    list_filter = ('course__company',)
 
 
 @admin.register(Group)

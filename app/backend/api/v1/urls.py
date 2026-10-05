@@ -27,6 +27,7 @@ urlpatterns = [
     path('leads/<int:lead_id>/convert', views.lead_convert_to_student),
     path('courses', views.course_list),
     path('courses/<int:course_id>', views.course_detail),
+    path('courses/<int:course_id>/prices/<int:price_id>', views.course_price_detail),
     path('user', views_extended.user_list),
     path('user/staff', views_extended.staff_create_view),
     path('user/staff/import', views_import.staff_import),

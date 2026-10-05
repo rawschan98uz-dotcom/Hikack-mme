@@ -45,7 +45,8 @@ from api.utils import (
     parse_time_safe,
     validate_course_code,
 )
-from crm.models import Course, Group, GroupEnrollment, Lead, Student
+from crm.models import Course, CoursePrice, Group, GroupEnrollment, Lead, Student
+from crm.pricing import history as price_history, next_price, price_on, set_price, sync_course
 from crm.services import (
     group_weekdays,
     sync_group_schedule_slots,
@@ -2212,16 +2213,47 @@ def lead_convert_to_student(request, lead_id: int):
         }, status_code=201)
 
 
-def _serialize_course(course: Course) -> dict:
-    return {
+def _serialize_course(course: Course, *, detailed: bool = False) -> dict:
+    planned = next_price(course)
+    payload = {
         'id': course.id,
         'name': course.name,
         'code': course.code,
         'price': course.price,
+        # A price that is already set but starts later ("с 1 ноября — 600 000")
+        'next_price': (
+            {'price': int(planned.price), 'valid_from': planned.valid_from.isoformat()} if planned else None
+        ),
         'lesson_duration': course.lesson_duration,
         'course_duration': course.course_duration,
         'description': course.description,
     }
+    if detailed:
+        payload['price_history'] = price_history(course)
+    return payload
+
+
+def _is_ceo(user) -> bool:
+    return user.is_superuser or get_effective_role(user) == ROLE_CEO
+
+
+def _parse_price(raw) -> int | None:
+    """Whole sum from 0 to 100 000 000 ("500 000" is fine); anything else -> None."""
+    if isinstance(raw, bool) or raw is None:
+        return None
+    if isinstance(raw, float):
+        if not raw.is_integer():
+            return None
+        raw = int(raw)
+    text = str(raw).strip().replace(' ', '').replace('\u00a0', '')
+    if not text.isdigit():
+        return None
+    value = int(text)
+    return value if value <= 100_000_000 else None
+
+
+def _money_text(value) -> str:
+    return f'{int(value or 0):,}'.replace(',', ' ')
 
 
 @api_view(['GET', 'POST'])
@@ -2247,14 +2279,16 @@ def course_list(request):
             return fail(f'Course with code "{code}" already exists')
 
         # ✅ ИСПРАВЛЕНО: безопасные числа
-        price = safe_int(request.data.get('price'), default=0,
-                        min_val=0, max_val=100_000_000)
+        price = _parse_price(request.data.get('price') if request.data.get('price') not in (None, '') else 0)
+        if price is None:
+            return fail('Цена — целое число от 0 до 100 000 000.')
         lesson_duration = safe_int(request.data.get('lesson_duration'), default=90,
                                   min_val=15, max_val=480)
         course_duration = safe_int(request.data.get('course_duration'), default=12,
                                   min_val=1, max_val=120)
         description = (request.data.get('description') or '').strip()
 
+        # The first price record is written by the post_save signal (crm/pricing.py)
         course = Course.objects.create(
             company=company,
             name=name,
@@ -2266,7 +2300,10 @@ def course_list(request):
         )
         return ok(_serialize_course(course), status_code=201)
 
-    data = [_serialize_course(course) for course in Course.objects.filter(company=company)]
+    data = [
+        _serialize_course(course)
+        for course in Course.objects.filter(company=company).prefetch_related('prices')
+    ]
     return ok(data)
 
 
@@ -2282,10 +2319,26 @@ def course_detail(request, course_id: int):
         return fail('Course not found', status_code=404)
 
     if request.method == 'GET':
-        return ok(_serialize_course(course))
+        return ok(_serialize_course(course, detailed=True))
 
     if request.method == 'DELETE':
-        Group.objects.filter(course=course).update(course=None)
+        # Owner (2026-10-05): a course sets the price of its groups — only the CEO removes one,
+        # and never from under a group (the groups used to lose their price silently)
+        if not _is_ceo(request.user):
+            return fail('Удалить курс может только CEO.', status_code=403)
+        groups_count = Group.objects.filter(course=course).count()
+        if groups_count:
+            return fail(
+                f'Нельзя удалить курс: на нём есть группы ({groups_count}). Сначала переведите их на другой курс.'
+            )
+        from finance.models import SalarySetting
+        if SalarySetting.objects.filter(course=course).exists():
+            return fail('Нельзя удалить курс: для него задан процент учителя. Сначала удалите эту ставку в «Зарплатах».')
+        log_audit(
+            company=company, actor=request.user, entity_type='course', entity_id=course.id, action='delete',
+            old_values={'name': course.name, 'price': course.price},
+            reason=f'Удалён курс «{course.name}» (цена {_money_text(course.price)} сум)',
+        )
         course.delete()
         return ok({'deleted': True})
 
@@ -2298,24 +2351,38 @@ def course_detail(request, course_id: int):
 
     if 'code' in request.data:
         code = str(request.data.get('code') or '').strip().lower()
-        
-        # ✅ Гибкая валидация
-        is_valid, error_msg = validate_course_code(code)
-        if not is_valid:
-            return fail(error_msg)
 
-        # Проверка на дубликат (исключая текущий)
-        if Course.objects.filter(
-            company=company, code=code
-        ).exclude(pk=course.pk).exists():
-            return fail(f'Course with code "{code}" already exists')
+        # A course keeps the code it already has: old ones may not fit today's rule (Cyrillic «а1»),
+        # and the edit form sends the code with every save — the price could not be changed at all
+        if code != (course.code or '').strip().lower():
+            is_valid, error_msg = validate_course_code(code)
+            if not is_valid:
+                return fail(error_msg)
 
-        course.code = code
+            # Проверка на дубликат (исключая текущий)
+            if Course.objects.filter(
+                company=company, code=code
+            ).exclude(pk=course.pk).exists():
+                return fail(f'Course with code "{code}" already exists')
 
-    # ✅ Безопасные числа
+            course.code = code
+
+    # Price (owner, 2026-10-05): never overwritten — "from this day the course costs X". Only the CEO.
+    price_change = None
     if 'price' in request.data:
-        course.price = safe_int(request.data.get('price'), default=0,
-                               min_val=0, max_val=100_000_000)
+        new_price = _parse_price(request.data.get('price'))
+        if new_price is None:
+            return fail('Цена — целое число от 0 до 100 000 000.')
+        price_from = timezone.localdate()
+        if request.data.get('price_from') not in (None, ''):
+            price_from = parse_date_safe(request.data.get('price_from'))
+            if price_from is None:
+                return fail('Неверная дата «действует с».')
+        # The edit form always sends the price: it is a change only when it differs on that day
+        if new_price != price_on(course, price_from):
+            if not _is_ceo(request.user):
+                return fail('Цену курса меняет только CEO.', status_code=403)
+            price_change = (new_price, price_from)
 
     if 'lesson_duration' in request.data:
         course.lesson_duration = safe_int(
@@ -2332,5 +2399,78 @@ def course_detail(request, course_id: int):
     if 'description' in request.data:
         course.description = str(request.data.get('description') or '').strip()
 
-    course.save()
-    return ok(_serialize_course(course))
+    with transaction.atomic():
+        if price_change:
+            new_price, price_from = price_change
+            old_price = price_on(course, price_from)
+            set_price(course, new_price, price_from, request.user)
+            log_audit(
+                company=company, actor=request.user, entity_type='course', entity_id=course.id,
+                action='price_change',
+                old_values={'price': old_price},
+                new_values={'price': new_price, 'valid_from': price_from.isoformat()},
+                reason=(
+                    f'Цена курса «{course.name}»: {_money_text(old_price)} → {_money_text(new_price)} сум, '
+                    f'действует с {price_from.strftime("%d.%m.%Y")}'
+                ),
+            )
+        course.save()
+    return ok(_serialize_course(course, detailed=True))
+
+
+@api_view(['PATCH', 'DELETE'])
+def course_price_detail(request, course_id: int, price_id: int):
+    """Fix or remove one record of a course's price history (a wrong sum or date was typed). CEO only."""
+    company = request.user.company
+    if company is None:
+        return fail('Company not found', status_code=404)
+    if not _is_ceo(request.user):
+        return fail('Цену курса меняет только CEO.', status_code=403)
+    try:
+        course = Course.objects.get(pk=course_id, company=company)
+        entry = CoursePrice.objects.get(pk=price_id, course=course)
+    except (Course.DoesNotExist, CoursePrice.DoesNotExist):
+        return fail('Запись о цене не найдена.', status_code=404)
+    day_text = entry.valid_from.strftime('%d.%m.%Y')
+
+    if request.method == 'DELETE':
+        if CoursePrice.objects.filter(course=course).count() <= 1:
+            return fail('Единственную цену удалить нельзя — исправьте её.')
+        with transaction.atomic():
+            log_audit(
+                company=company, actor=request.user, entity_type='course', entity_id=course.id,
+                action='price_delete',
+                old_values={'price': int(entry.price), 'valid_from': entry.valid_from.isoformat()},
+                reason=f'Удалена цена курса «{course.name}»: {_money_text(entry.price)} сум с {day_text}',
+            )
+            entry.delete()
+            sync_course(course)
+        return ok(_serialize_course(course, detailed=True))
+
+    old = {'price': int(entry.price), 'valid_from': entry.valid_from.isoformat()}
+    if 'price' in request.data:
+        new_price = _parse_price(request.data.get('price'))
+        if new_price is None:
+            return fail('Цена — целое число от 0 до 100 000 000.')
+        entry.price = new_price
+    if 'valid_from' in request.data:
+        new_day = parse_date_safe(request.data.get('valid_from'))
+        if new_day is None:
+            return fail('Неверная дата «действует с».')
+        if CoursePrice.objects.filter(course=course, valid_from=new_day).exclude(pk=entry.pk).exists():
+            return fail('На эту дату уже есть другая цена.')
+        entry.valid_from = new_day
+    new = {'price': int(entry.price), 'valid_from': entry.valid_from.isoformat()}
+    if new != old:
+        with transaction.atomic():
+            entry.save()
+            log_audit(
+                company=company, actor=request.user, entity_type='course', entity_id=course.id,
+                action='price_fix', old_values=old, new_values=new,
+                reason=(
+                    f'Исправлена цена курса «{course.name}»: {_money_text(old["price"])} сум с {day_text} → '
+                    f'{_money_text(entry.price)} сум с {entry.valid_from.strftime("%d.%m.%Y")}'
+                ),
+            )
+            sync_course(course)
+    return ok(_serialize_course(course, detailed=True))

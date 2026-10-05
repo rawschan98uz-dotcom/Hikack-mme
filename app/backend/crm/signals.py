@@ -73,6 +73,16 @@ def group_count_waiting_money(sender, instance: Group, created: bool, raw=False,
     _count_waiting_money(Student.objects.filter(group=instance).values_list('pk', flat=True))
 
 
+@receiver(post_save, sender=Course, dispatch_uid='crm_course_price_history')
+def course_price_history(sender, instance: Course, created: bool, raw=False, **kwargs):
+    """Every price a course ever had is kept with its start date (crm/pricing.py)."""
+    if raw:
+        return
+    from crm.pricing import record_direct_price
+
+    record_direct_price(instance)
+
+
 @receiver(post_save, sender=Course, dispatch_uid='crm_course_count_waiting_money')
 def course_count_waiting_money(sender, instance: Course, created: bool, raw=False, **kwargs):
     """The course got a price."""

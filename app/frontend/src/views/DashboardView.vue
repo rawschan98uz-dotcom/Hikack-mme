@@ -9,6 +9,7 @@ import SchedulePanel from '../components/SchedulePanel.vue';
 import TeacherCheckInPanel from '../components/TeacherCheckInPanel.vue';
 import type { ScheduleRow } from '../types/schedule';
 import { groupRoute, studentRoute } from '../utils/crossLinks';
+import { onCardsReturn } from '../utils/cardStack';
 import { canAccessRoute, PERM } from '../utils/rbac';
 
 interface DashboardStats {
@@ -105,8 +106,8 @@ function formatSum(value: number) {
   return value.toLocaleString('en-US').replace(/,/g, ' ');
 }
 
-async function loadDashboard() {
-  loading.value = true;
+async function loadDashboard(quiet = false) {
+  if (!quiet) loading.value = true;
   try {
     const { data } = await client.get<ApiEnvelope<DashboardStats>>('/dashboard');
     stats.value = data.data;
@@ -217,7 +218,10 @@ function onSelectGroup(groupId: number) {
   router.push(groupRoute(groupId));
 }
 
-onMounted(loadDashboard);
+// A card opened from here is closed: show fresh data without the "Loading…" blink
+onCardsReturn(-1, () => void loadDashboard(true));
+
+onMounted(() => loadDashboard());
 </script>
 
 <template>

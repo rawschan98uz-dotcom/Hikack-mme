@@ -15,10 +15,10 @@ import PaymentLinkModal, { type StudentPaymentLinkTarget } from '../components/P
 import {
   groupRoute,
   hasCreateFlag,
-  parseOpenId,
   routeWithoutCreate,
-  routeWithoutOpen,
+  studentRoute,
 } from '../utils/crossLinks';
+import { onCardsReturn, pathWithoutCards } from '../utils/cardStack';
 
 interface Branch {
   id: number;
@@ -118,6 +118,11 @@ const STATUS_OPTIONS = [
   { value: 8, label: 'Отчислен / Ушел' },
   { value: 9, label: 'Завершил курс' },
 ] as const;
+
+// Card mode: the page shows only this student's card, on top of another page (see utils/cardStack)
+const props = defineProps<{ cardId?: number; cardEdit?: boolean; cardLevel?: number }>();
+const emit = defineEmits<{ close: [] }>();
+const isCard = props.cardId != null;
 
 const route = useRoute();
 const router = useRouter();
@@ -556,12 +561,31 @@ function startEdit() {
   editingStudent.value = detailStudent.value;
 }
 
+/** The same card again, without the "Loading…" blink: after a return from a card above. */
+async function refreshDetail() {
+  const id = detailStudent.value?.id;
+  // An edit form in progress is not touched
+  if (!id || editingStudent.value) return;
+  const [{ data }] = await Promise.all([
+    client.get<ApiEnvelope<StudentRow>>(`/students/${id}`),
+    loadStudentPayments(id),
+  ]);
+  if (detailStudent.value?.id !== id || editingStudent.value) return;
+  detailStudent.value = data.data;
+  fillForm(data.data);
+}
+
+function openCard(studentId: number) {
+  router.push(studentRoute(studentId));
+}
+
 function closePanel() {
+  if (isCard) {
+    emit('close');
+    return;
+  }
   showPanel.value = false;
   resetForm();
-  if (route.query.open) {
-    router.replace(routeWithoutOpen(route));
-  }
 }
 
 function parentTgLink(code: string | null | undefined) {
@@ -611,8 +635,10 @@ async function loadOptions() {
   }
 }
 
-async function loadStudents() {
-  loading.value = true;
+async function loadStudents(quiet = false) {
+  if (isCard) return;
+  // quiet: the table stays in place (and keeps its scroll) while fresh rows arrive
+  if (!quiet) loading.value = true;
   try {
     const params: Record<string, string> = {};
     if (filters.branch_id) params.branch_id = filters.branch_id;
@@ -775,14 +801,6 @@ function goGroup(student: StudentRow | { group_id: number | null }) {
   router.push(groupRoute(student.group_id));
 }
 
-async function maybeOpenFromRoute() {
-  const id = parseOpenId(route.query);
-  if (id == null || showPanel.value) return;
-  await openDetailPanel(id);
-  // ?edit=1: straight into the edit form (e.g. from a reminder "put the student into a group")
-  if (route.query.edit === '1' && canWriteStudents.value) startEdit();
-}
-
 function maybeCreateFromRoute() {
   if (!hasCreateFlag(route.query) || showPanel.value) return;
   openCreatePanel();
@@ -804,15 +822,22 @@ function applyFilters() {
   router.push({ path: basePath, query });
 }
 
-watch(
-  () => route.fullPath,
-  async () => {
-    syncFiltersFromRoute();
-    await loadStudents();
-    await maybeOpenFromRoute();
-    maybeCreateFromRoute();
-  },
-);
+if (!isCard) {
+  watch(
+    () => pathWithoutCards(route),
+    async () => {
+      syncFiltersFromRoute();
+      await loadStudents();
+      maybeCreateFromRoute();
+    },
+  );
+}
+
+// The cards above are closed: show fresh data (the group could change)
+onCardsReturn(props.cardLevel ?? -1, () => {
+  if (isCard) void refreshDetail();
+  else void loadStudents(true);
+});
 
 watch(
   () => form.status,
@@ -829,6 +854,7 @@ let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 watch(
   () => filters.q,
   (newQ) => {
+    if (isCard) return;
     if (newQ.trim() === String(route.query.q ?? '').trim()) return;
     if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
     searchDebounceTimer = setTimeout(() => {
@@ -838,11 +864,17 @@ watch(
 );
 
 onMounted(async () => {
+  if (isCard) {
+    loadTelegramConfig();
+    await Promise.all([loadOptions(), openDetailPanel(props.cardId as number)]);
+    // straight into the edit form (e.g. from a reminder "put the student into a group")
+    if (props.cardEdit && canWriteStudents.value) startEdit();
+    return;
+  }
   syncFiltersFromRoute();
   loadTelegramConfig();
   try {
     await Promise.all([loadOptions(), loadStudents()]);
-    await maybeOpenFromRoute();
     maybeCreateFromRoute();
   } finally {
     loading.value = false;
@@ -852,6 +884,7 @@ onMounted(async () => {
 
 <template>
   <div class="space-y-4">
+    <template v-if="!isCard">
     <div class="flex flex-wrap items-center justify-between gap-3">
       <div class="flex items-baseline gap-3">
         <h1 class="text-xl font-semibold text-fb-text">{{ title }}</h1>
@@ -974,7 +1007,7 @@ onMounted(async () => {
             :key="row.id"
             class="cursor-pointer border-b border-fb-line"
             :class="canSeeMoney && row.isDebtor ? 'bg-red-50/70 hover:bg-red-100/70' : 'hover:bg-fb-hover/40'"
-            @click="openDetailPanel(row.id)"
+            @click="openCard(row.id)"
           >
             <td class="px-5 py-4">
               <div class="flex items-center gap-3">
@@ -1055,10 +1088,10 @@ onMounted(async () => {
         </tbody>
       </table>
     </div>
+    </template>
 
-    <div v-if="showPanel" class="fixed inset-0 z-50 flex justify-end">
-      <div class="absolute inset-0 bg-black/35" @click="closePanel" />
-      <div class="drawer-panel-fb max-w-lg">
+    <div v-if="showPanel" class="drawer-wide-shell">
+      <div class="drawer-panel-fb">
         <div class="flex items-center justify-between border-b border-fb-line px-6 py-4">
           <h2 class="text-lg font-semibold text-fb-text">{{ panelTitle }}</h2>
           <button type="button" class="text-fb-icon hover:text-fb-secondary" @click="closePanel">✕</button>
@@ -1068,7 +1101,7 @@ onMounted(async () => {
 
         <form v-else class="flex flex-1 flex-col overflow-hidden" @submit.prevent="submitStudent">
           <div v-if="isReadOnly && detailStudent" class="flex-1 overflow-y-auto p-6">
-            <div class="flex items-center gap-4">
+            <div class="flex flex-wrap items-center gap-5">
               <img
                 v-if="photoPreview"
                 :src="photoPreview"
@@ -1082,63 +1115,44 @@ onMounted(async () => {
                 {{ initials(detailStudent.full_name) }}
               </div>
               <div class="min-w-0">
-                <div class="truncate text-lg font-semibold text-fb-text">{{ detailStudent.full_name }}</div>
+                <div class="truncate text-2xl font-semibold text-fb-text">{{ detailStudent.full_name }}</div>
                 <span
                   class="mt-1 inline-block rounded-full px-2.5 py-0.5 text-xs font-medium"
                   :class="statusBadgeClass(detailStudent.status)"
                 >
                   {{ detailStudent.status_label }}
                 </span>
-                <div class="mt-1 text-sm text-fb-secondary">
-                  <div>{{ detailStudent.phone }}</div>
-                  <div v-if="detailStudent.phone2" class="text-xs text-fb-icon">
+                <div class="mt-1 text-base text-fb-text">
+                  <span class="font-semibold">{{ detailStudent.phone }}</span>
+                  <span v-if="detailStudent.phone2" class="ml-3 text-sm text-fb-secondary">
                     {{ detailStudent.phone2_owner ? `${detailStudent.phone2_owner}: ` : 'Extra: ' }}{{ detailStudent.phone2 }}
-                  </div>
+                  </span>
                 </div>
               </div>
             </div>
 
-            <dl class="mt-6 space-y-3 text-sm">
-              <div v-if="detailStudent.address" class="flex items-center justify-between gap-4 border-b border-fb-line pb-2">
-                <dt class="text-fb-secondary">Address</dt>
-                <dd class="text-right font-medium text-fb-text">{{ detailStudent.address }}</dd>
+            <!-- Key facts at a glance -->
+            <div class="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
+              <div v-if="canSeeMoney" class="fact-tile-fb" :class="detailStudent.is_debtor ? '!border-red-200 !bg-red-50' : ''">
+                <div class="fact-label">Долг</div>
+                <div v-if="detailStudent.debt_amount" class="fact-value !text-red-700">
+                  {{ formatSum(detailStudent.debt_amount) }} сум
+                </div>
+                <div v-else-if="detailStudent.is_debtor" class="fact-value !text-red-700">есть</div>
+                <div v-else class="fact-value !text-emerald-700">нет</div>
+                <div v-if="detailStudent.debt_amount" class="text-xs text-fb-secondary">
+                  неоплаченных месяцев: {{ detailStudent.debt_months }}
+                </div>
+                <div v-else-if="detailStudent.is_debtor" class="text-xs text-fb-secondary">
+                  сумма неизвестна: нет группы с ценой курса
+                </div>
               </div>
-              <div class="flex items-center justify-between gap-4 border-b border-fb-line pb-2">
-                <dt class="text-fb-secondary">School</dt>
-                <dd class="text-right font-medium text-fb-text">{{ detailStudent.school || '-' }}</dd>
-              </div>
-              <div v-if="detailStudent.comment" class="flex items-start justify-between gap-4 border-b border-fb-line pb-2">
-                <dt class="text-fb-secondary">Comment</dt>
-                <dd class="text-right font-medium text-fb-text whitespace-pre-wrap max-w-[240px]">{{ detailStudent.comment }}</dd>
-              </div>
-              <div class="flex items-center justify-between gap-4 border-b border-fb-line pb-2">
-                <dt class="text-fb-secondary">Telegram (student)</dt>
-                <dd class="text-right font-medium text-fb-text">{{ detailStudent.telegram || '-' }}</dd>
-              </div>
-              <div class="flex items-center justify-between gap-4 border-b border-fb-line pb-2">
-                <dt class="text-fb-secondary">Telegram (parents)</dt>
-                <dd class="text-right font-medium" :class="detailStudent.parent_telegram ? 'text-fb-text' : 'text-fb-secondary'">
-                  {{ detailStudent.parent_telegram || 'not set' }}
-                </dd>
-              </div>
-              <div class="flex items-center justify-between gap-4 border-b border-fb-line pb-2">
-                <dt class="text-fb-secondary">Start date / Anchor date (Дата старта)</dt>
-                <dd class="text-right font-medium text-fb-text">
-                  {{ detailStudent.trial_date ? formatAddedDate(detailStudent.trial_date) : '-' }}
-                </dd>
-              </div>
-              <div v-if="canSeeMoney" class="flex items-center justify-between gap-4 border-b border-fb-line pb-2">
-                <dt class="text-fb-secondary">Last payment (Последняя оплата)</dt>
-                <dd class="text-right font-medium text-fb-text">
-                  {{ detailStudent.last_payment_date ? formatAddedDate(detailStudent.last_payment_date) : 'Нет платежей' }}
-                </dd>
-              </div>
-              <div v-if="canSeeMoney" class="flex items-center justify-between gap-4 border-b border-fb-line pb-2">
-                <dt class="text-fb-secondary">Next payment (Следующая оплата)</dt>
-                <dd class="text-right flex items-center justify-end flex-wrap gap-2">
-                  <span class="font-medium text-fb-text">
-                    {{ detailStudent.next_payment_date ? formatAddedDate(detailStudent.next_payment_date) : '-' }}
-                  </span>
+              <div v-if="canSeeMoney" class="fact-tile-fb">
+                <div class="fact-label">Следующая оплата</div>
+                <div class="fact-value">
+                  {{ detailStudent.next_payment_date ? formatAddedDate(detailStudent.next_payment_date) : '—' }}
+                </div>
+                <div class="mt-1 flex flex-wrap items-center gap-2">
                   <span
                     v-if="detailStudent.is_debtor"
                     class="inline-block rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700"
@@ -1159,48 +1173,88 @@ onMounted(async () => {
                   >
                     + Оплатить
                   </button>
-                </dd>
+                </div>
               </div>
-              <div v-if="canSeeMoney && detailStudent.debt_amount" class="flex items-center justify-between gap-4 border-b border-fb-line pb-2">
-                <dt class="text-fb-secondary">Долг</dt>
-                <dd class="text-right">
-                  <span class="font-semibold text-red-700">{{ formatSum(detailStudent.debt_amount) }} сум</span>
-                  <span class="ml-1 text-xs text-fb-secondary">· месяцев: {{ detailStudent.debt_months }}</span>
-                </dd>
+              <div v-if="canSeeMoney" class="fact-tile-fb">
+                <div class="fact-label">Последняя оплата</div>
+                <div class="fact-value">
+                  {{ detailStudent.last_payment_date ? formatAddedDate(detailStudent.last_payment_date) : 'не было' }}
+                </div>
+                <div v-if="detailStudent.wallet" class="text-xs text-amber-700">
+                  копилка {{ formatSum(detailStudent.wallet) }} сум<template v-if="detailStudent.wallet_missing">
+                    · до месяца не хватает {{ formatSum(detailStudent.wallet_missing) }}</template>
+                </div>
               </div>
-              <div v-if="canSeeMoney && detailStudent.wallet" class="flex items-center justify-between gap-4 border-b border-fb-line pb-2">
-                <dt class="text-fb-secondary">Копилка</dt>
-                <dd class="text-right">
-                  <span class="font-semibold text-amber-700">{{ formatSum(detailStudent.wallet) }} сум</span>
-                  <span v-if="detailStudent.wallet_missing" class="ml-1 text-xs text-fb-secondary">
-                    · до следующего месяца не хватает {{ formatSum(detailStudent.wallet_missing) }}
-                  </span>
-                  <span v-else-if="!detailStudent.month_price" class="ml-1 text-xs text-fb-secondary">
-                    · засчитается само, когда ученик будет в группе с ценой курса
-                  </span>
-                </dd>
-              </div>
-              <div class="flex items-center justify-between gap-4 border-b border-fb-line pb-2">
-                <dt class="text-fb-secondary">Group</dt>
-                <dd class="text-right">
+              <div class="fact-tile-fb">
+                <div class="fact-label">Группа</div>
+                <div class="fact-value">
                   <button
                     v-if="detailStudent.group_id"
                     type="button"
-                    class="font-medium text-fb-blue hover:underline"
+                    class="text-left text-fb-blue hover:underline"
                     @click="goGroup(detailStudent)"
                   >
                     {{ detailStudent.group }}
                   </button>
-                  <span v-else class="font-medium text-fb-text">-</span>
+                  <span v-else>—</span>
+                </div>
+                <div v-if="detailStudent.group_teacher" class="text-xs text-fb-secondary">
+                  учитель: {{ detailStudent.group_teacher }}
+                </div>
+              </div>
+              <div class="fact-tile-fb">
+                <div class="fact-label">Курс</div>
+                <div class="fact-value">{{ detailStudent.course_name || '—' }}</div>
+                <div v-if="canSeeMoney && detailStudent.course_price" class="text-xs text-fb-secondary">
+                  {{ formatSum(detailStudent.course_price) }} сум в месяц
+                </div>
+              </div>
+              <div class="fact-tile-fb">
+                <div class="fact-label">Дата старта</div>
+                <div class="fact-value">
+                  {{ detailStudent.trial_date ? formatAddedDate(detailStudent.trial_date) : '—' }}
+                </div>
+                <div class="text-xs text-fb-secondary">с неё идут месяцы ученика</div>
+              </div>
+            </div>
+
+            <div class="mt-6 grid items-start gap-6" :class="canSeeMoney ? 'xl:grid-cols-3' : ''">
+            <div>
+            <div class="mb-2 text-base font-semibold text-fb-text">Данные ученика</div>
+            <dl class="space-y-3 text-sm">
+              <div class="flex items-center justify-between gap-4 border-b border-fb-line pb-2">
+                <dt class="text-fb-secondary">Branch (Филиал)</dt>
+                <dd class="text-right font-medium text-fb-text">{{ detailStudent.branch }}</dd>
+              </div>
+              <div class="flex items-center justify-between gap-4 border-b border-fb-line pb-2">
+                <dt class="text-fb-secondary">Address</dt>
+                <dd class="text-right font-medium text-fb-text">{{ detailStudent.address || '-' }}</dd>
+              </div>
+              <div class="flex items-center justify-between gap-4 border-b border-fb-line pb-2">
+                <dt class="text-fb-secondary">School</dt>
+                <dd class="text-right font-medium text-fb-text">{{ detailStudent.school || '-' }}</dd>
+              </div>
+              <div v-if="detailStudent.level" class="flex items-center justify-between gap-4 border-b border-fb-line pb-2">
+                <dt class="text-fb-secondary">Level</dt>
+                <dd class="text-right font-medium text-fb-text">{{ detailStudent.level }}</dd>
+              </div>
+              <div class="flex items-center justify-between gap-4 border-b border-fb-line pb-2">
+                <dt class="text-fb-secondary">Telegram (student)</dt>
+                <dd class="text-right font-medium text-fb-text">{{ detailStudent.telegram || '-' }}</dd>
+              </div>
+              <div class="flex items-center justify-between gap-4 border-b border-fb-line pb-2">
+                <dt class="text-fb-secondary">Telegram (parents)</dt>
+                <dd class="text-right font-medium" :class="detailStudent.parent_telegram ? 'text-fb-text' : 'text-fb-secondary'">
+                  {{ detailStudent.parent_telegram || 'not set' }}
                 </dd>
               </div>
               <div class="flex items-center justify-between gap-4 border-b border-fb-line pb-2">
-                <dt class="text-fb-secondary">Branch</dt>
-                <dd class="text-right font-medium text-fb-text">{{ detailStudent.branch }}</dd>
-              </div>
-              <div class="flex items-center justify-between gap-4">
-                <dt class="text-fb-secondary">Added</dt>
+                <dt class="text-fb-secondary">Added (Добавлен)</dt>
                 <dd class="text-right font-medium text-fb-text">{{ formatAddedDate(detailStudent.created_at) }}</dd>
+              </div>
+              <div v-if="detailStudent.comment" class="border-b border-fb-line pb-2">
+                <dt class="text-fb-secondary">Comment</dt>
+                <dd class="mt-1 whitespace-pre-wrap font-medium text-fb-text">{{ detailStudent.comment }}</dd>
               </div>
             </dl>
 
@@ -1222,16 +1276,20 @@ onMounted(async () => {
                 </button>
               </div>
             </div>
+            </div>
 
             <!-- The student's months: one line per month, its sum never changes -->
-            <div v-if="canSeeMoney && detailStudent.charges?.length" class="mt-5 rounded-xl border border-fb-line bg-fb-canvas p-4 text-sm">
+            <div v-if="canSeeMoney" class="rounded-xl border border-fb-line bg-fb-canvas p-4 text-sm">
               <div class="flex items-center gap-2 border-b border-fb-line pb-3">
                 <span class="font-semibold text-fb-text">Месяцы ученика</span>
                 <span class="rounded-full bg-white px-2 py-0.5 text-xs font-medium text-fb-secondary shadow-sm">
-                  {{ detailStudent.charges.length }}
+                  {{ detailStudent.charges?.length || 0 }}
                 </span>
               </div>
-              <div class="max-h-64 overflow-y-auto">
+              <div v-if="!detailStudent.charges?.length" class="py-6 text-center text-xs text-fb-secondary">
+                Месяцев пока нет: они появляются, когда ученик в группе с ценой курса.
+              </div>
+              <div v-else class="max-h-[55vh] overflow-y-auto">
                 <table class="w-full text-left">
                   <thead class="text-xs text-fb-secondary">
                     <tr>
@@ -1266,10 +1324,10 @@ onMounted(async () => {
             </div>
 
             <!-- Payment History Section -->
-            <div v-if="canSeeMoney" class="mt-5 rounded-xl border border-fb-line bg-fb-canvas p-4 text-sm">
-              <div class="flex items-center justify-between border-b border-fb-line pb-3">
+            <div v-if="canSeeMoney" class="rounded-xl border border-fb-line bg-fb-canvas p-4 text-sm">
+              <div class="flex flex-wrap items-center justify-between gap-2 border-b border-fb-line pb-3">
                 <div class="flex items-center gap-2">
-                  <span class="font-semibold text-fb-text">История оплат</span>
+                  <span class="whitespace-nowrap font-semibold text-fb-text">История оплат</span>
                   <span class="rounded-full bg-white px-2 py-0.5 text-xs font-medium text-fb-secondary shadow-sm">
                     {{ studentPayments.length }}
                   </span>
@@ -1278,7 +1336,7 @@ onMounted(async () => {
                   <button
                     v-if="canWriteStudents"
                     type="button"
-                    class="rounded-lg border border-fb-line bg-white px-2.5 py-1 text-xs font-semibold text-fb-secondary hover:border-fb-blue hover:text-fb-blue shadow-sm transition-colors"
+                    class="whitespace-nowrap rounded-lg border border-fb-line bg-white px-2.5 py-1 text-xs font-semibold text-fb-secondary hover:border-fb-blue hover:text-fb-blue shadow-sm transition-colors"
                     title="Ссылка на оплату Click / Payme / Uzum"
                     @click="openPaymentLinkModal(detailStudent)"
                   >
@@ -1287,7 +1345,7 @@ onMounted(async () => {
                   <button
                     v-if="canAcceptPayment"
                     type="button"
-                    class="rounded-lg bg-emerald-600 px-3 py-1 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700"
+                    class="whitespace-nowrap rounded-lg bg-emerald-600 px-3 py-1 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700"
                     @click="openAcceptPaymentModal"
                   >
                     + Принять оплату
@@ -1301,7 +1359,7 @@ onMounted(async () => {
               <div v-else-if="!studentPayments.length" class="py-6 text-center text-xs text-fb-secondary">
                 Оплат пока не зафиксировано
               </div>
-              <div v-else class="mt-3 space-y-2 max-h-56 overflow-y-auto pr-1">
+              <div v-else class="mt-3 space-y-2 max-h-[55vh] overflow-y-auto pr-1">
                 <div
                   v-for="p in studentPayments"
                   :key="p.id"
@@ -1344,10 +1402,11 @@ onMounted(async () => {
                 </div>
               </div>
             </div>
+            </div>
           </div>
 
-          <div v-else class="flex-1 space-y-4 overflow-y-auto p-6">
-            <div class="flex items-center gap-4">
+          <div v-else class="grid flex-1 content-start gap-x-6 gap-y-4 overflow-y-auto p-6 lg:grid-cols-2 2xl:grid-cols-3">
+            <div class="col-span-full flex items-center gap-4">
               <img
                 v-if="photoPreview"
                 :src="photoPreview"
@@ -1601,7 +1660,8 @@ onMounted(async () => {
                 ⚡ Возобновление обучения из заморозки
               </div>
               <p class="mt-0.5 text-xs text-emerald-700">
-                Укажите ниже дату возобновления — она станет новой датой расчета оплаты (Anchor date).
+                Укажите дату возобновления: с неё продолжится месяц, который шёл в момент заморозки.
+                Неоплаченные месяцы остаются долгом.
               </p>
             </div>
 
@@ -1633,7 +1693,7 @@ onMounted(async () => {
               </button>
             </div>
 
-            <p v-if="formError" class="text-sm text-fb-danger">{{ formError }}</p>
+            <p v-if="formError" class="col-span-full text-sm text-fb-danger">{{ formError }}</p>
           </div>
 
           <div class="flex flex-wrap gap-2 border-t border-fb-line px-6 py-4">
@@ -1851,6 +1911,7 @@ onMounted(async () => {
     </div>
 
     <ImportCsvModal
+      v-if="!isCard"
       v-model:open="showImportModal"
       title="Импорт учеников"
       upload-url="/students/import"
@@ -1858,7 +1919,7 @@ onMounted(async () => {
       :template-header="['first_name', 'last_name', 'phone', 'school', 'branch', 'group', 'status', 'parent_telegram']"
       :template-example="['Ali', 'Valiyev', '998901234567', 'School #5', 'Main branch', '', 'Active', '@parent_tg']"
       columns-help="Поддерживаются файлы Excel (.xlsx, .xls) и CSV. Обязательные данные: имя и номер телефона. Программа автоматически разделит ФИО, очистит телефон и сопоставит группы."
-      @imported="loadStudents"
+      @imported="loadStudents()"
     />
 
     <!-- Receipt Modal -->

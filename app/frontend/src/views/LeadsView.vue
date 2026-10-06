@@ -1006,10 +1006,9 @@ onMounted(async () => {
       </div>
     </div>
 
-    <div v-if="showPanel" class="fixed inset-0 z-50 flex justify-end">
-      <div class="absolute inset-0 bg-black/35" @click="closePanel" />
-      <aside class="drawer-panel-fb max-w-lg">
-        <div class="flex items-center justify-between border-b border-fb-line px-6 py-5">
+    <div v-if="showPanel" class="drawer-wide-shell">
+      <aside class="drawer-panel-fb">
+        <div class="flex items-center justify-between border-b border-fb-line px-8 py-5">
           <h2 class="text-[22px] font-semibold text-fb-text">{{ panelTitle }}</h2>
           <button
             type="button"
@@ -1020,7 +1019,10 @@ onMounted(async () => {
           </button>
         </div>
 
-        <form class="flex-1 space-y-5 overflow-y-auto px-6 py-6" @submit.prevent="saveLead">
+        <form
+          class="grid flex-1 content-start gap-x-6 gap-y-5 overflow-y-auto px-8 py-6 lg:grid-cols-2 2xl:grid-cols-3"
+          @submit.prevent="saveLead"
+        >
           <div class="grid grid-cols-2 gap-3">
             <div>
               <label class="mb-2 block text-[15px] font-medium text-fb-secondary">First name</label>
@@ -1201,7 +1203,7 @@ onMounted(async () => {
             </div>
           </div>
 
-          <div>
+          <div class="lg:col-span-2">
             <label class="mb-2 block text-[15px] font-medium text-fb-secondary">Comments</label>
             <textarea
               v-model="form.comment"
@@ -1248,13 +1250,13 @@ onMounted(async () => {
             />
           </div>
 
-          <p v-if="editingLead" class="text-sm text-fb-icon">
+          <p v-if="editingLead" class="col-span-full text-sm text-fb-icon">
             Created: {{ editingLead.created_at.slice(0, 10) }}
           </p>
 
-          <p v-if="formError" class="text-[15px] text-fb-danger">{{ formError }}</p>
+          <p v-if="formError" class="col-span-full text-[15px] text-fb-danger">{{ formError }}</p>
 
-          <div class="flex flex-wrap gap-2">
+          <div class="col-span-full flex flex-wrap gap-2">
             <button
               type="submit"
               class="rounded-full bg-fb-blue px-8 py-3 text-[16px] font-semibold text-white hover:opacity-90 disabled:opacity-60"

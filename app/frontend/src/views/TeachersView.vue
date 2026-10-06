@@ -10,10 +10,10 @@ import {
   groupRoute,
   groupsByTeacher,
   hasCreateFlag,
-  parseOpenId,
   routeWithoutCreate,
-  routeWithoutOpen,
+  teacherRoute,
 } from '../utils/crossLinks';
+import { onCardsReturn, pathWithoutCards } from '../utils/cardStack';
 
 interface Branch {
   id: number;
@@ -26,7 +26,14 @@ interface TeacherGroup {
   course: string;
   branch: string;
   days_label: string;
+  time?: string;
+  room?: string;
+  students_count?: number;
+  status?: number;
+  status_label?: string;
 }
+
+const GROUP_ACTIVE = 2;
 
 interface Teacher {
   id: number;
@@ -42,6 +49,11 @@ interface Teacher {
   branches: Branch[];
   groups?: TeacherGroup[];
 }
+
+// Card mode: the page shows only this teacher's card, on top of another page (see utils/cardStack)
+const props = defineProps<{ cardId?: number; cardEdit?: boolean; cardLevel?: number }>();
+const emit = defineEmits<{ close: [] }>();
+const isCard = props.cardId != null;
 
 const router = useRouter();
 const route = useRoute();
@@ -173,6 +185,7 @@ function onDocumentClick(event: MouseEvent) {
 }
 
 async function loadTeachers() {
+  if (isCard) return;
   const { data } = await client.get<ApiEnvelope<Teacher[]>>('/user', {
     params: { user_type: 'teacher' },
   });
@@ -187,8 +200,11 @@ async function loadBranches() {
 onMounted(async () => {
   document.addEventListener('click', onDocumentClick);
   try {
+    if (isCard) {
+      await Promise.all([loadBranches(), openProfile({ id: props.cardId } as Teacher)]);
+      return;
+    }
     await Promise.all([loadTeachers(), loadBranches()]);
-    await maybeOpenFromRoute();
     maybeCreateFromRoute();
   } finally {
     loading.value = false;
@@ -233,7 +249,7 @@ async function submitTeacher() {
       await loadTeachers();
       closeModal();
       if (showProfile.value && profileTeacher.value?.id === teacherId) {
-        await openProfile({ id: teacherId } as Teacher);
+        await refreshProfile();
       }
     } else {
       // Create — password auto-generated on backend
@@ -317,7 +333,6 @@ async function archiveTeacher(teacher: Teacher) {
 
 function editTeacher(teacher: Teacher) {
   closeMenu();
-  closeProfile();
   openModal(teacher);
 }
 
@@ -334,12 +349,26 @@ async function openProfile(teacher: Teacher) {
   }
 }
 
+/** The same card again, without the "Loading…" blink: after an edit or a return from a card above. */
+async function refreshProfile() {
+  const id = profileTeacher.value?.id;
+  if (!id) return;
+  const { data } = await client.get<ApiEnvelope<Teacher>>(`/user/teacher/${id}`);
+  if (profileTeacher.value?.id === id) profileTeacher.value = data.data;
+}
+
 function closeProfile() {
+  if (isCard) {
+    emit('close');
+    return;
+  }
   showProfile.value = false;
   profileTeacher.value = null;
-  if (route.query.open) {
-    router.replace(routeWithoutOpen(route));
-  }
+}
+
+function openCard(teacher: Teacher) {
+  closeMenu();
+  router.push(teacherRoute(teacher.id));
 }
 
 function goGroups(teacher?: Teacher) {
@@ -355,29 +384,25 @@ function goGroup(groupId: number) {
   router.push(groupRoute(groupId));
 }
 
-async function maybeOpenFromRoute() {
-  const id = parseOpenId(route.query);
-  if (id == null || showProfile.value) return;
-  await openProfile({ id } as Teacher);
-}
-
 function maybeCreateFromRoute() {
   if (!hasCreateFlag(route.query) || showModal.value || !canCreateTeacher.value) return;
   openModal();
   router.replace(routeWithoutCreate(route));
 }
 
-watch(
-  () => route.fullPath,
-  async () => {
-    await maybeOpenFromRoute();
-    maybeCreateFromRoute();
-  },
-);
+if (!isCard) {
+  watch(() => pathWithoutCards(route), maybeCreateFromRoute);
+}
+// The cards above are closed: show fresh data (a group could be renamed, a student moved)
+onCardsReturn(props.cardLevel ?? -1, () => {
+  if (isCard) void refreshProfile();
+  else void loadTeachers();
+});
 </script>
 
 <template>
   <div class="space-y-5">
+    <template v-if="!isCard">
     <!-- Page header -->
     <div class="flex items-start justify-between gap-4">
       <div class="flex items-baseline gap-3 flex-wrap">
@@ -457,7 +482,7 @@ watch(
         v-for="teacher in filteredTeachers"
         :key="teacher.id"
         class="relative rounded-xl border border-fb-line bg-fb-card px-5 py-4 flex items-center gap-4 hover:border-fb-line transition-colors shadow-sm overflow-visible cursor-pointer"
-        @click="openProfile(teacher)"
+        @click="openCard(teacher)"
       >
         <div class="shrink-0 w-[32%] truncate">
           <div class="text-[17px] font-semibold text-fb-text truncate">{{ teacher.name }}</div>
@@ -531,10 +556,12 @@ watch(
       </div>
     </div>
 
-    <!-- Add / edit teacher modal -->
+    </template>
+
+    <!-- Add / edit teacher modal (above the teacher card when edited from it) -->
     <div
       v-if="showModal"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4 overflow-y-auto"
+      class="fixed inset-0 z-[55] flex items-center justify-center bg-black/35 p-4 overflow-y-auto"
       @click.self="closeModal"
     >
       <div class="modal-panel-fb max-w-2xl max-h-[90vh] flex flex-col overflow-hidden my-auto">
@@ -669,10 +696,9 @@ watch(
     </div>
 
     <!-- Teacher profile drawer -->
-    <div v-if="showProfile" class="fixed inset-0 z-50 flex justify-end">
-      <div class="absolute inset-0 bg-black/35" @click="closeProfile" />
-      <aside class="drawer-panel-fb max-w-md">
-        <div class="flex items-center justify-between border-b border-fb-line px-6 py-5">
+    <div v-if="showProfile" class="drawer-wide-shell">
+      <aside class="drawer-panel-fb">
+        <div class="flex items-center justify-between border-b border-fb-line px-8 py-5">
           <h2 class="text-[22px] font-semibold text-fb-text">Teacher profile</h2>
           <button type="button" class="text-2xl leading-none text-fb-icon hover:text-fb-secondary" @click="closeProfile">
             ×
@@ -680,77 +706,119 @@ watch(
         </div>
 
         <div v-if="profileLoading" class="p-8 text-center text-fb-secondary">Loading…</div>
-        <div v-else-if="profileTeacher" class="flex-1 overflow-y-auto px-6 py-6 space-y-6">
-          <div>
-            <p class="text-2xl font-semibold text-fb-text">{{ profileTeacher.name }}</p>
-            <p v-if="profileTeacher.job_title" class="text-sm font-medium text-fb-secondary mt-0.5">
-              {{ profileTeacher.job_title }}
-            </p>
-            <p class="mt-1 text-fb-blue font-medium">{{ profileTeacher.phone_formatted || profileTeacher.phone }}</p>
+        <div v-else-if="profileTeacher" class="flex-1 overflow-y-auto px-8 py-6">
+          <div class="flex flex-wrap items-start justify-between gap-6">
+            <div>
+              <p class="text-3xl font-semibold text-fb-text">{{ profileTeacher.name }}</p>
+              <p v-if="profileTeacher.job_title" class="mt-1 text-base font-medium text-fb-secondary">
+                {{ profileTeacher.job_title }}
+              </p>
+            </div>
+            <div class="flex flex-wrap gap-2">
+              <button
+                v-if="canEditTeacher"
+                type="button"
+                class="rounded-lg bg-fb-blue px-5 py-2.5 text-sm font-semibold text-white hover:opacity-90"
+                @click="editTeacher(profileTeacher)"
+              >
+                Edit teacher
+              </button>
+              <button
+                v-if="canEditTeacher"
+                type="button"
+                class="rounded-lg border border-amber-300 px-5 py-2.5 text-sm font-medium text-amber-700 hover:bg-amber-50"
+                @click="archiveTeacher(profileTeacher)"
+              >
+                Archive
+              </button>
+              <button
+                v-if="canDeleteTeacher(profileTeacher)"
+                type="button"
+                class="rounded-lg border border-red-300 px-5 py-2.5 text-sm font-medium text-red-500 hover:bg-red-50"
+                @click="deleteTeacher(profileTeacher)"
+              >
+                Delete
+              </button>
+            </div>
           </div>
 
-          <div>
-            <p class="text-sm font-medium text-fb-secondary">Branches</p>
-            <p class="mt-1 text-fb-text">
-              {{ profileTeacher.branches.map((b) => b.name).join(', ') || '—' }}
-            </p>
+          <!-- Key facts at a glance -->
+          <div class="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <div class="fact-tile-fb">
+              <div class="fact-label">Телефон</div>
+              <div class="fact-value text-fb-blue">{{ profileTeacher.phone_formatted || profileTeacher.phone }}</div>
+            </div>
+            <div class="fact-tile-fb">
+              <div class="fact-label">Филиалы</div>
+              <div class="fact-value">{{ profileTeacher.branches.map((b) => b.name).join(', ') || '—' }}</div>
+            </div>
+            <div class="fact-tile-fb">
+              <div class="fact-label">Групп ведёт сейчас</div>
+              <div class="fact-value">
+                {{ (profileTeacher.groups || []).filter((g) => g.status === GROUP_ACTIVE).length }}
+              </div>
+            </div>
+            <div class="fact-tile-fb">
+              <div class="fact-label">Учеников в этих группах</div>
+              <div class="fact-value">
+                {{ (profileTeacher.groups || []).filter((g) => g.status === GROUP_ACTIVE).reduce((sum, g) => sum + (g.students_count || 0), 0) }}
+              </div>
+            </div>
           </div>
 
-          <div>
-            <div class="mb-2 flex items-center justify-between">
-              <p class="text-sm font-medium text-fb-secondary">Groups</p>
+          <div class="mt-8">
+            <div class="mb-3 flex items-center justify-between">
+              <p class="text-base font-semibold text-fb-text">Группы</p>
               <button type="button" class="text-sm text-fb-blue hover:underline" @click="goGroups(profileTeacher)">
                 All groups →
               </button>
             </div>
-            <div v-if="!profileTeacher.groups?.length" class="rounded-lg bg-fb-canvas py-6 text-center text-fb-icon">
+            <div v-if="!profileTeacher.groups?.length" class="rounded-lg bg-fb-canvas py-8 text-center text-fb-icon">
               No groups assigned
             </div>
-            <ul v-else class="divide-y divide-fb-line rounded-lg border border-fb-line">
-              <li
-                v-for="group in profileTeacher.groups"
-                :key="group.id"
-                class="px-4 py-3"
-              >
-                <button
-                  type="button"
-                  class="text-left font-medium text-fb-blue hover:underline"
-                  @click="goGroup(group.id)"
-                >
-                  {{ group.name }}
-                </button>
-                <p class="text-sm text-fb-secondary">
-                  {{ group.course }} · {{ group.branch }} · {{ group.days_label }}
-                </p>
-              </li>
-            </ul>
-          </div>
-
-          <div class="flex flex-wrap gap-2 pt-2">
-            <button
-              v-if="canEditTeacher"
-              type="button"
-              class="rounded-lg bg-fb-blue px-5 py-2.5 text-sm font-semibold text-white hover:opacity-90"
-              @click="editTeacher(profileTeacher)"
-            >
-              Edit teacher
-            </button>
-            <button
-              v-if="canEditTeacher"
-              type="button"
-              class="rounded-lg border border-amber-300 px-5 py-2.5 text-sm font-medium text-amber-700 hover:bg-amber-50"
-              @click="archiveTeacher(profileTeacher)"
-            >
-              Archive
-            </button>
-            <button
-              v-if="canDeleteTeacher(profileTeacher)"
-              type="button"
-              class="rounded-lg border border-red-300 px-5 py-2.5 text-sm font-medium text-red-500 hover:bg-red-50"
-              @click="deleteTeacher(profileTeacher)"
-            >
-              Delete
-            </button>
+            <div v-else class="overflow-hidden rounded-xl border border-fb-line">
+              <table class="w-full text-left text-sm">
+                <thead class="border-b border-fb-line bg-fb-canvas text-xs font-semibold uppercase tracking-wider text-fb-secondary">
+                  <tr>
+                    <th class="px-4 py-3">Группа</th>
+                    <th class="px-4 py-3">Курс</th>
+                    <th class="px-4 py-3">Дни</th>
+                    <th class="px-4 py-3">Время</th>
+                    <th class="px-4 py-3">Аудитория</th>
+                    <th class="px-4 py-3">Филиал</th>
+                    <th class="px-4 py-3 text-right">Учеников</th>
+                    <th class="px-4 py-3">Статус</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-fb-line">
+                  <tr v-for="group in profileTeacher.groups" :key="group.id" class="hover:bg-fb-hover/40">
+                    <td class="px-4 py-3">
+                      <button
+                        type="button"
+                        class="text-left font-semibold text-fb-blue hover:underline"
+                        @click="goGroup(group.id)"
+                      >
+                        {{ group.name }}
+                      </button>
+                    </td>
+                    <td class="px-4 py-3 text-fb-text">{{ group.course }}</td>
+                    <td class="px-4 py-3 text-fb-secondary">{{ group.days_label }}</td>
+                    <td class="whitespace-nowrap px-4 py-3 text-fb-secondary">{{ group.time || '—' }}</td>
+                    <td class="px-4 py-3 text-fb-secondary">{{ group.room || '—' }}</td>
+                    <td class="px-4 py-3 text-fb-secondary">{{ group.branch }}</td>
+                    <td class="px-4 py-3 text-right font-semibold text-fb-text">{{ group.students_count ?? '—' }}</td>
+                    <td class="px-4 py-3">
+                      <span
+                        class="inline-block rounded-full px-2.5 py-0.5 text-xs font-medium"
+                        :class="group.status === GROUP_ACTIVE ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600'"
+                      >
+                        {{ group.status_label || '—' }}
+                      </span>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       </aside>
@@ -807,6 +875,7 @@ watch(
     </div>
 
     <ImportCsvModal
+      v-if="!isCard"
       v-model:open="showImportModal"
       title="Import teachers"
       upload-url="/user/teacher/import"

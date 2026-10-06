@@ -1252,7 +1252,24 @@ def group_detail(request, group_id: int):
         return fail('Group not found', status_code=404)
 
     if request.method == 'GET':
-        return ok(_serialize_group(group, detailed=True))
+        payload = _serialize_group(group, detailed=True)
+        # Who in the group owes and how much: only for those who see money (never a teacher)
+        from accounts.rbac import PERM_PAYMENTS_VIEW
+        if not user_is_teacher(request.user) and user_has_permission(request.user, PERM_PAYMENTS_VIEW):
+            members = {
+                s.id: s for s in group.students.filter(status__in=Student.CURRENT_STATUSES)
+            }
+            lines = charges.company_lines(company.id)
+            freezes = charges.company_freezes(company.id)
+            for row in payload['students']:
+                state = charges.schedule(members[row['id']], lines.get(row['id'], []), freezes.get(row['id'], []))
+                row['is_debtor'] = state['is_debtor']
+                row['debt_amount'] = state['debt_amount']
+                row['debt_months'] = state['debt_months']
+                row['next_payment_date'] = state['next_due'].isoformat()
+            payload['debt_total'] = sum(row['debt_amount'] for row in payload['students'])
+            payload['debtors_count'] = sum(1 for row in payload['students'] if row['is_debtor'])
+        return ok(payload)
 
     if request.method == 'DELETE':
         archive_error = _group_archive_error(group)

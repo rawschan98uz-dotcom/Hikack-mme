@@ -6,6 +6,7 @@ import NavIcon from '../components/NavIcon.vue';
 import { APP_VERSION } from '../version';
 import QuickAddMenu, { type QuickAddMenuItem } from '../components/QuickAddMenu.vue';
 import ScheduleDrawer from '../components/ScheduleDrawer.vue';
+import CardStack from '../components/CardStack.vue';
 import { firstFlyoutLink, filterNavSections, flyoutSectionForPath, navForRole, primaryNav, sectionForPath } from '../config/navigation';
 import { useAuthStore } from '../stores/auth';
 import { useLocaleStore, type LocaleCode } from '../stores/locale';
@@ -494,6 +495,9 @@ function logout() {
     </div>
 
     <ScheduleDrawer v-if="showScheduleFab" />
+
+    <!-- Teacher / group / student cards opened on top of the current page -->
+    <CardStack />
   </div>
 </template>
 

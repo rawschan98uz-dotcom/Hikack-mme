@@ -269,16 +269,15 @@ onMounted(loadRows);
       </table>
     </div>
 
-    <div v-if="showPanel" class="fixed inset-0 z-50 flex justify-end">
-      <div class="absolute inset-0 bg-black/35" @click="closePanel" />
-      <div class="drawer-panel-fb max-w-lg">
+    <div v-if="showPanel" class="drawer-wide-shell">
+      <div class="drawer-panel-fb">
         <div class="flex items-center justify-between border-b px-6 py-4">
           <h2 class="text-lg font-semibold">{{ panelTitle }}</h2>
           <button type="button" @click="closePanel">✕</button>
         </div>
         <div v-if="panelLoading" class="p-6 text-fb-secondary">Loading…</div>
         <form v-else class="flex flex-1 flex-col overflow-hidden" @submit.prevent="submitForm">
-          <div class="flex-1 space-y-4 overflow-y-auto p-6">
+          <div class="grid flex-1 content-start gap-5 overflow-y-auto p-6 md:grid-cols-2 xl:grid-cols-3">
             <div>
               <label class="mb-1 block text-sm font-medium">First name</label>
               <input v-model="form.first_name" :readonly="isReadOnly" required class="w-full rounded-lg border px-3 py-2 read-only:bg-fb-canvas" />
@@ -331,7 +330,7 @@ onMounted(loadRows);
               <label class="mb-1 block text-sm font-medium">Password</label>
               <input v-model="form.password" type="password" :placeholder="editingStaff ? 'Leave blank to keep' : 'Default: demo1234'" class="w-full rounded-lg border px-3 py-2" />
             </div>
-            <p v-if="formError" class="text-sm text-fb-danger">{{ formError }}</p>
+            <p v-if="formError" class="col-span-full text-sm text-fb-danger">{{ formError }}</p>
           </div>
           <div class="flex gap-2 border-t px-6 py-4">
             <template v-if="isReadOnly && detailStaff">

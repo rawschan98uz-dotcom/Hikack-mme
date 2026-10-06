@@ -3,6 +3,7 @@ import { createRouter, createWebHistory } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
 import { filterNavSections, primaryNav } from '../config/navigation';
 import { canAccessRoute, isHiddenForTeacher } from '../utils/rbac';
+import { CARD_PATHS, isCardLink, parseCards, queryWithCards, resolveCardLink } from '../utils/cardStack';
 import AppLayout from '../layouts/AppLayout.vue';
 import ActivityLogsView from '../views/ActivityLogsView.vue';
 import ArchiveView from '../views/ArchiveView.vue';
@@ -107,7 +108,7 @@ const router = createRouter({
   ],
 });
 
-router.beforeEach(async (to) => {
+router.beforeEach(async (to, from) => {
   const auth = useAuthStore();
   if (to.meta.public) {
     if (auth.token && to.name === 'login') return '/dashboard/default';
@@ -122,10 +123,13 @@ router.beforeEach(async (to) => {
       return '/login';
     }
   }
+  // A click on a card this user may not open: stay where you are
+  const forbiddenCardStays = isCardLink(to) && from.matched.length > 0 && !from.meta.public;
   if (auth.user?.role === 'teacher' && isHiddenForTeacher(to.path)) {
-    return '/dashboard/default';
+    return forbiddenCardStays ? false : '/dashboard/default';
   }
   if (auth.user && !canAccessRoute(to.path, auth.user.permissions)) {
+    if (forbiddenCardStays) return false;
     if (auth.can('dashboard.view')) {
       return '/dashboard/default';
     }
@@ -135,6 +139,19 @@ router.beforeEach(async (to) => {
     if (firstChild && firstChild.type === 'link') return firstChild.to;
     auth.logout();
     return '/login';
+  }
+  // A link to a teacher / group / student card: the card opens on top of the current page
+  const cardLink = resolveCardLink(to, from);
+  if (cardLink) return cardLink;
+  // Cards of sections this user may not open are dropped from the address
+  const cards = parseCards(to.query);
+  const allowedCards = cards.filter((card) => {
+    const path = CARD_PATHS[card.kind];
+    if (auth.user?.role === 'teacher' && isHiddenForTeacher(path)) return false;
+    return canAccessRoute(path, auth.user?.permissions);
+  });
+  if (allowedCards.length !== cards.length) {
+    return { path: to.path, query: queryWithCards(to.query, allowedCards) };
   }
   return true;
 });

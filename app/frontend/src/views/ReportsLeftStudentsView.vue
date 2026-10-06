@@ -6,6 +6,7 @@ import { useRoute, useRouter } from 'vue-router';
 import client, { type ApiEnvelope } from '../api/client';
 import { downloadCsv } from '../utils/csvExport';
 import { groupRoute, studentRoute } from '../utils/crossLinks';
+import { onCardsReturn } from '../utils/cardStack';
 
 interface Branch {
   id: number;
@@ -126,8 +127,8 @@ function changePage(delta: number) {
   loadRows();
 }
 
-async function loadRows() {
-  loading.value = true;
+async function loadRows(quiet = false) {
+  if (!quiet) loading.value = true;
   try {
     const params: Record<string, string> = { page: String(currentPage.value) };
     if (filters.status) params.status = filters.status;
@@ -192,6 +193,9 @@ function openStudent(id: number) {
 function openGroup(groupId: number) {
   router.push(groupRoute(groupId));
 }
+
+// A card opened from here is closed: show fresh data without the "Loading…" blink
+onCardsReturn(-1, () => void loadRows(true));
 
 onMounted(async () => {
   // Links from the dashboard: "Ушли, не заплатив" and the cards "Left active group" / "Left after trial period"

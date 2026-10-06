@@ -180,6 +180,25 @@ main h1 {
     @apply relative flex h-full w-full flex-col border-l border-fb-line bg-fb-card shadow-fb-card;
   }
 
+  /* Big cards (student, teacher, group, lead, staff): the whole screen to the right of the left menu
+     column (128px wide), so everything is seen at once without scrolling a narrow strip */
+  .drawer-wide-shell {
+    @apply fixed inset-y-0 right-0 left-[128px] z-50 flex;
+  }
+
+  /* One fact at a glance on a big card: a small caption and a large value */
+  .fact-tile-fb {
+    @apply rounded-xl border border-fb-line bg-fb-canvas px-4 py-3;
+  }
+
+  .fact-tile-fb > .fact-label {
+    @apply text-xs font-semibold uppercase tracking-wide text-fb-secondary;
+  }
+
+  .fact-tile-fb > .fact-value {
+    @apply mt-1 text-xl font-bold text-fb-text;
+  }
+
   .modal-panel-fb {
     @apply w-full rounded-xl border border-fb-line bg-fb-card shadow-fb-card;
   }

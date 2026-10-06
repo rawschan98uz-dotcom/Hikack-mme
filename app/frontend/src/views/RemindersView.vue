@@ -5,6 +5,7 @@ import { useRoute, useRouter } from 'vue-router';
 
 import client, { type ApiEnvelope } from '../api/client';
 import { hasCreateFlag, routeWithoutCreate, studentRoute } from '../utils/crossLinks';
+import { onCardsReturn } from '../utils/cardStack';
 import { useAuthStore } from '../stores/auth';
 import { PERM } from '../utils/rbac';
 
@@ -135,8 +136,8 @@ function fillForm(reminder: ReminderRow) {
   form.assigned_to_id = reminder.assigned_to_id ?? '';
 }
 
-async function loadReminders() {
-  loading.value = true;
+async function loadReminders(quiet = false) {
+  if (!quiet) loading.value = true;
   try {
     const { data } = await client.get<ApiEnvelope<ReminderPayload>>('/reminders');
     buckets.value = data.data.buckets;
@@ -337,6 +338,9 @@ watch(
     maybeCreateFromRoute();
   },
 );
+
+// A card opened from here is closed: show fresh data without the "Loading…" blink
+onCardsReturn(-1, () => void loadReminders(true));
 
 onMounted(async () => {
   try {

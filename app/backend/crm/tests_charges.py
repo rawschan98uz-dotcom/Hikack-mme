@@ -512,3 +512,30 @@ class MonthPageTests(Base):
         self.assertEqual(self.c.get('/v1/reports/months').status_code, 200)
         self.c.force_authenticate(self.tom)     # a teacher never sees money
         self.assertEqual(self.c.get('/v1/reports/months').status_code, 403)
+
+
+class BigCardsTests(Base):
+    """The wide group and teacher cards: who owes in a group (never shown to a teacher), the teacher's groups."""
+
+    def test_group_card_shows_who_owes(self):
+        aziz = self.student(date(2026, 9, 1))
+        bek = self.student(date(2026, 9, 1), name='Bek')
+        self.pay(bek, 1_000_000, date(2026, 9, 2))
+        data = self.c.get(f'/v1/groups/{self.g.id}').json()['data']
+        self.assertEqual((data['debtors_count'], data['debt_total']), (1, 1_000_000))
+        rows = {r['id']: r for r in data['students']}
+        self.assertEqual((rows[aziz.id]['is_debtor'], rows[aziz.id]['debt_amount']), (True, 1_000_000))
+        self.assertEqual((rows[bek.id]['is_debtor'], rows[bek.id]['debt_amount']), (False, 0))
+
+    def test_teacher_sees_the_group_without_money(self):
+        self.student(date(2026, 9, 1))
+        self.c.force_authenticate(self.tom)
+        data = self.c.get(f'/v1/groups/{self.g.id}').json()['data']
+        self.assertNotIn('debtors_count', data)
+        self.assertNotIn('debt_amount', data['students'][0])
+
+    def test_teacher_card_lists_groups_with_time_and_students(self):
+        self.student(date(2026, 9, 1))
+        data = self.c.get(f'/v1/user/teacher/{self.tom.id}').json()['data']
+        group = data['groups'][0]
+        self.assertEqual((group['name'], group['students_count'], group['status']), ('G', 1, 2))

@@ -103,6 +103,10 @@ def teacher_create_view(request):
 
 
 def _teacher_groups(teacher: User) -> list[dict]:
+    """The teacher's groups for the profile card: when they study, where, and how many students are in them."""
+    groups = Group.objects.filter(teacher=teacher).select_related('course', 'branch', 'room').annotate(
+        current_students=Count('students', filter=Q(students__status__in=Student.CURRENT_STATUSES)),
+    ).order_by('status', 'name')
     return [
         {
             'id': group.id,
@@ -110,8 +114,16 @@ def _teacher_groups(teacher: User) -> list[dict]:
             'course': group.course.name if group.course else '—',
             'branch': group.branch.name,
             'days_label': group.get_days_display(),
+            'time': (
+                f'{group.lesson_start_time:%H:%M} – {group.lesson_end_time:%H:%M}'
+                if group.lesson_start_time and group.lesson_end_time else ''
+            ),
+            'room': group.room.name if group.room_id else '',
+            'students_count': group.current_students,
+            'status': group.status,
+            'status_label': group.get_status_display(),
         }
-        for group in Group.objects.filter(teacher=teacher).select_related('course', 'branch').order_by('name')
+        for group in groups
     ]
 
 

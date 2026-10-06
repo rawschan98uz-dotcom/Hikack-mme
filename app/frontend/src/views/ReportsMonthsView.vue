@@ -10,6 +10,7 @@ import { useRouter } from 'vue-router';
 import client, { type ApiEnvelope } from '../api/client';
 import { downloadCsv } from '../utils/csvExport';
 import { studentRoute } from '../utils/crossLinks';
+import { onCardsReturn } from '../utils/cardStack';
 
 interface MonthRow {
   month: string;
@@ -74,8 +75,8 @@ function day(iso: string) {
   return `${date}.${month}.${year}`;
 }
 
-async function loadMonths() {
-  loading.value = true;
+async function loadMonths(quiet = false) {
+  if (!quiet) loading.value = true;
   error.value = '';
   try {
     const { data } = await client.get<ApiEnvelope<MonthRow[]>>('/reports/months');
@@ -87,8 +88,8 @@ async function loadMonths() {
   }
 }
 
-async function openMonth(month: string) {
-  pageLoading.value = true;
+async function openMonth(month: string, quiet = false) {
+  if (!quiet) pageLoading.value = true;
   try {
     const { data } = await client.get<ApiEnvelope<MonthPage>>('/reports/months', {
       params: { month, ...(onlyUnpaid.value ? { only_unpaid: 1 } : {}) },
@@ -115,7 +116,13 @@ function exportPage() {
   );
 }
 
-onMounted(loadMonths);
+// A card opened from here is closed: show fresh data without the "Loading…" blink
+onCardsReturn(-1, () => {
+  void loadMonths(true);
+  if (page.value) void openMonth(page.value.month, true);
+});
+
+onMounted(() => loadMonths());
 </script>
 
 <template>

@@ -10,14 +10,14 @@ import { useAuthStore } from '../stores/auth';
 import { PERM } from '../utils/rbac';
 import { downloadCsv } from '../utils/csvExport';
 import {
+  groupRoute,
   hasCreateFlag,
-  parseOpenId,
   routeWithoutCreate,
-  routeWithoutOpen,
   studentRoute,
   studentsByGroup,
   teacherRoute,
 } from '../utils/crossLinks';
+import { onCardsReturn, pathWithoutCards } from '../utils/cardStack';
 
 interface Branch {
   id: number;
@@ -56,6 +56,10 @@ interface GroupStudent {
   full_name: string;
   phone: string;
   status_label: string;
+  /** Only for those who see money (never a teacher). */
+  is_debtor?: boolean;
+  debt_amount?: number;
+  debt_months?: number;
 }
 
 interface GroupRow {
@@ -84,6 +88,8 @@ interface GroupRow {
   students_count: number;
   tags: GroupTag[];
   students?: GroupStudent[];
+  debtors_count?: number;
+  debt_total?: number;
 }
 
 type SortKey =
@@ -150,6 +156,11 @@ const TABLE_COLUMNS: ColumnDef[] = [
 const COLUMN_STORAGE_KEY = 'groups-visible-columns';
 // A teacher sees only own groups: these columns and all filters / export add nothing for them
 const TEACHER_HIDDEN_COLUMNS = ['teacher', 'tagsText', 'weekOfStudy', 'actions'];
+
+// Card mode: the page shows only this group's card, on top of another page (see utils/cardStack)
+const props = defineProps<{ cardId?: number; cardEdit?: boolean; cardLevel?: number }>();
+const emit = defineEmits<{ close: [] }>();
+const isCard = props.cardId != null;
 
 const router = useRouter();
 const route = useRoute();
@@ -418,12 +429,28 @@ function startEdit() {
   editingGroup.value = detailGroup.value;
 }
 
+/** The same card again, without the "Loading…" blink: after a return from a card above. */
+async function refreshDetail() {
+  const id = detailGroup.value?.id;
+  // An edit form in progress is not touched
+  if (!id || editingGroup.value) return;
+  const { data } = await client.get<ApiEnvelope<GroupRow>>(`/groups/${id}`);
+  if (detailGroup.value?.id !== id || editingGroup.value) return;
+  detailGroup.value = data.data;
+  fillForm(data.data);
+}
+
+function openCard(groupId: number) {
+  router.push(groupRoute(groupId));
+}
+
 function closePanel() {
+  if (isCard) {
+    emit('close');
+    return;
+  }
   showPanel.value = false;
   resetForm();
-  if (route.query.open) {
-    router.replace(routeWithoutOpen(route));
-  }
 }
 
 function buildListParams() {
@@ -440,8 +467,10 @@ function buildListParams() {
   return params;
 }
 
-async function loadGroups() {
-  loading.value = true;
+async function loadGroups(quiet = false) {
+  if (isCard) return;
+  // quiet: the table stays in place (and keeps its scroll) while fresh rows arrive
+  if (!quiet) loading.value = true;
   try {
     const { data } = await client.get<ApiEnvelope<GroupRow[]>>('/groups', {
       params: buildListParams(),
@@ -592,12 +621,6 @@ function goTeacherFromTable(teacherId: number) {
   router.push(teacherRoute(teacherId));
 }
 
-async function maybeOpenFromRoute() {
-  const id = parseOpenId(route.query);
-  if (id == null || showPanel.value) return;
-  await openDetailPanel(id);
-}
-
 function maybeCreateFromRoute() {
   if (!hasCreateFlag(route.query) || showPanel.value) return;
   openCreatePanel();
@@ -624,17 +647,29 @@ watch(
 
 watch(visibleColumns, saveColumnPrefs, { deep: true });
 
-watch(
-  () => route.fullPath,
-  async () => {
-    syncFiltersFromRoute();
-    await loadGroups();
-    await maybeOpenFromRoute();
-    maybeCreateFromRoute();
-  },
-);
+if (!isCard) {
+  watch(
+    () => pathWithoutCards(route),
+    async () => {
+      syncFiltersFromRoute();
+      await loadGroups();
+      maybeCreateFromRoute();
+    },
+  );
+}
+
+// The cards above are closed: show fresh data (a payment taken, a student moved)
+onCardsReturn(props.cardLevel ?? -1, () => {
+  if (isCard) void refreshDetail();
+  else void loadGroups(true);
+});
 
 onMounted(async () => {
+  if (isCard) {
+    await Promise.all([loadOptions(), openDetailPanel(props.cardId as number)]);
+    if (props.cardEdit && canWriteGroups.value) startEdit();
+    return;
+  }
   loadColumnPrefs();
   if (isTeacher.value) {
     for (const key of TEACHER_HIDDEN_COLUMNS) visibleColumns.value[key] = false;
@@ -642,7 +677,6 @@ onMounted(async () => {
   syncFiltersFromRoute();
   try {
     await Promise.all([loadOptions(), loadGroups()]);
-    await maybeOpenFromRoute();
     maybeCreateFromRoute();
   } finally {
     loading.value = false;
@@ -652,6 +686,7 @@ onMounted(async () => {
 
 <template>
   <div class="space-y-4">
+    <template v-if="!isCard">
     <div class="flex flex-wrap items-center justify-between gap-3">
       <div class="flex flex-wrap items-baseline gap-3">
         <h1>Groups</h1>
@@ -804,7 +839,7 @@ onMounted(async () => {
               v-for="row in tableRows"
               :key="row.id"
               class="table-row-fb cursor-pointer"
-              @click="openDetailPanel(row.id)"
+              @click="openCard(row.id)"
             >
               <td v-if="visibleColumns.name !== false" class="font-medium text-fb-text">{{ row.name }}</td>
               <td v-if="visibleColumns.courseName !== false">{{ row.courseName }}</td>
@@ -830,7 +865,7 @@ onMounted(async () => {
                   <button
                     type="button"
                     class="text-sm text-fb-blue hover:underline"
-                    @click="openDetailPanel(row.id)"
+                    @click="openCard(row.id)"
                   >
                     Open
                   </button>
@@ -848,10 +883,10 @@ onMounted(async () => {
         </table>
       </div>
     </div>
+    </template>
 
-    <div v-if="showPanel" class="fixed inset-0 z-50 flex justify-end">
-      <div class="absolute inset-0 bg-black/35" @click="closePanel" />
-      <div class="drawer-panel-fb max-w-lg">
+    <div v-if="showPanel" class="drawer-wide-shell">
+      <div class="drawer-panel-fb">
         <div class="flex items-center justify-between border-b border-fb-line px-6 py-4">
           <h2 class="text-lg font-semibold text-fb-text">{{ panelTitle }}</h2>
           <button type="button" class="text-fb-icon hover:text-fb-secondary" @click="closePanel">✕</button>
@@ -860,7 +895,53 @@ onMounted(async () => {
         <div v-if="panelLoading" class="flex-1 p-6 text-fb-secondary">Loading…</div>
 
         <form v-else class="flex flex-1 flex-col overflow-hidden" @submit.prevent="submitGroup">
-          <div class="flex-1 space-y-4 overflow-y-auto p-6">
+          <div class="flex-1 overflow-y-auto p-6">
+          <!-- Key facts at a glance (an existing group) -->
+          <div v-if="detailGroup" class="mb-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+            <div class="fact-tile-fb">
+              <div class="fact-label">Учитель</div>
+              <div class="fact-value">
+                <button v-if="detailGroup.teacher_id" type="button" class="text-left text-fb-blue hover:underline" @click="goTeacher(detailGroup)">
+                  {{ detailGroup.teacher }}
+                </button>
+                <span v-else>—</span>
+              </div>
+            </div>
+            <div class="fact-tile-fb">
+              <div class="fact-label">Расписание</div>
+              <div class="fact-value">
+                {{ detailGroup.days_label }}
+                <span v-if="detailGroup.lesson_start_time" class="whitespace-nowrap">
+                  · {{ detailGroup.lesson_start_time }}–{{ detailGroup.lesson_end_time }}
+                </span>
+              </div>
+            </div>
+            <div class="fact-tile-fb">
+              <div class="fact-label">Курс и цена в месяц</div>
+              <div class="fact-value">
+                {{ detailGroup.course?.name || '—' }}
+                <span v-if="!isTeacher && detailGroup.course?.price" class="whitespace-nowrap text-base font-semibold text-fb-secondary">
+                  · {{ detailGroup.course.price.toLocaleString('ru-RU') }}
+                </span>
+              </div>
+            </div>
+            <div class="fact-tile-fb">
+              <div class="fact-label">Учеников</div>
+              <div class="fact-value">{{ detailGroup.students?.length ?? detailGroup.students_count ?? 0 }}</div>
+            </div>
+            <div v-if="detailGroup.debtors_count !== undefined" class="fact-tile-fb">
+              <div class="fact-label">Должников</div>
+              <div class="fact-value" :class="detailGroup.debtors_count ? 'text-red-700' : 'text-emerald-700'">
+                {{ detailGroup.debtors_count }}
+                <span v-if="detailGroup.debt_total" class="whitespace-nowrap text-base font-semibold">
+                  · {{ detailGroup.debt_total.toLocaleString('ru-RU') }} сум
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div class="grid items-start gap-6" :class="detailGroup?.students?.length ? 'xl:grid-cols-5' : ''">
+          <div class="grid content-start gap-4 md:grid-cols-2" :class="detailGroup?.students?.length ? 'xl:col-span-3' : '2xl:grid-cols-3'">
             <div>
               <label class="mb-1 block text-sm font-medium text-fb-secondary">Group name</label>
               <input
@@ -997,7 +1078,7 @@ onMounted(async () => {
               </div>
             </div>
 
-            <div v-if="form.days === CUSTOM_DAYS">
+            <div v-if="form.days === CUSTOM_DAYS" class="col-span-full">
               <label class="mb-1 block text-sm font-medium text-fb-secondary">Lesson weekdays</label>
               <div class="flex flex-wrap gap-2">
                 <label
@@ -1053,18 +1134,15 @@ onMounted(async () => {
               </div>
             </div>
 
-            <div v-if="detailGroup?.teacher_id" class="rounded-lg border border-fb-line bg-fb-canvas px-4 py-3 text-sm">
-              <span class="text-fb-secondary">Teacher: </span>
-              <span class="font-medium text-fb-text">{{ detailGroup.teacher }}</span>
-              <button type="button" class="ml-3 text-fb-blue hover:underline" @click="goTeacher(detailGroup)">
-                Open teacher →
-              </button>
-            </div>
+            <p class="col-span-full text-xs text-fb-secondary">
+              «Training end» — только план: после этой даты уроки отмечаются как обычно, группу закрывает человек.
+            </p>
+          </div>
 
-            <div v-if="detailGroup?.students?.length" class="rounded-lg border border-fb-line p-4">
-              <div class="mb-3 flex items-center justify-between">
-                <h3 class="text-sm font-semibold text-fb-secondary">
-                  Students ({{ detailGroup.students.length }})
+            <div v-if="detailGroup?.students?.length" class="rounded-xl border border-fb-line xl:col-span-2">
+              <div class="flex items-center justify-between border-b border-fb-line px-4 py-3">
+                <h3 class="text-base font-semibold text-fb-text">
+                  Ученики ({{ detailGroup.students.length }})
                 </h3>
                 <button
                   type="button"
@@ -1074,25 +1152,40 @@ onMounted(async () => {
                   All students →
                 </button>
               </div>
-              <ul class="divide-y divide-fb-line">
-                <li
-                  v-for="student in detailGroup.students"
-                  :key="student.id"
-                  class="flex items-center justify-between py-2 text-sm"
-                >
-                  <button
-                    type="button"
-                    class="text-left font-medium text-fb-blue hover:underline"
-                    @click="goStudent(student.id)"
-                  >
-                    {{ student.full_name }}
-                  </button>
-                  <span class="text-fb-secondary">{{ student.status_label }}</span>
-                </li>
-              </ul>
+              <table class="w-full text-left text-sm">
+                <thead class="bg-fb-canvas text-xs font-semibold uppercase tracking-wider text-fb-secondary">
+                  <tr>
+                    <th class="px-4 py-2">Ученик</th>
+                    <th class="px-4 py-2">Телефон</th>
+                    <th class="px-4 py-2">Статус</th>
+                    <th v-if="detailGroup.debtors_count !== undefined" class="px-4 py-2 text-right">Долг</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-fb-line">
+                  <tr v-for="student in detailGroup.students" :key="student.id" :class="student.is_debtor ? 'bg-red-50/60' : ''">
+                    <td class="px-4 py-2">
+                      <button
+                        type="button"
+                        class="text-left font-medium text-fb-blue hover:underline"
+                        @click="goStudent(student.id)"
+                      >
+                        {{ student.full_name }}
+                      </button>
+                    </td>
+                    <td class="whitespace-nowrap px-4 py-2 text-fb-secondary">{{ student.phone || '—' }}</td>
+                    <td class="px-4 py-2 text-fb-secondary">{{ student.status_label }}</td>
+                    <td v-if="detailGroup.debtors_count !== undefined" class="whitespace-nowrap px-4 py-2 text-right font-semibold" :class="student.debt_amount ? 'text-red-700' : 'text-fb-secondary'">
+                      <template v-if="student.debt_amount">{{ student.debt_amount.toLocaleString('ru-RU') }}</template>
+                      <template v-else-if="student.is_debtor">просрочено</template>
+                      <template v-else>—</template>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
+          </div>
 
-            <p v-if="formError" class="text-sm text-fb-danger">{{ formError }}</p>
+            <p v-if="formError" class="mt-4 text-sm text-fb-danger">{{ formError }}</p>
           </div>
 
           <div class="flex flex-wrap gap-2 border-t border-fb-line px-6 py-4">

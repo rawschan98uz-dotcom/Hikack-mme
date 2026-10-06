@@ -71,6 +71,11 @@ def group_count_waiting_money(sender, instance: Group, created: bool, raw=False,
     if raw or created:
         return
     _count_waiting_money(Student.objects.filter(group=instance).values_list('pk', flat=True))
+    if instance.course_id:
+        # The group may have just got its course: its students' months can be written now
+        from finance.charges import ensure_for
+
+        ensure_for(Student.objects.filter(group=instance))
 
 
 @receiver(post_save, sender=Course, dispatch_uid='crm_course_price_history')
@@ -89,6 +94,9 @@ def course_count_waiting_money(sender, instance: Course, created: bool, raw=Fals
     if raw or created or not instance.price:
         return
     _count_waiting_money(Student.objects.filter(group__course=instance).values_list('pk', flat=True))
+    from finance.charges import ensure_for
+
+    ensure_for(Student.objects.filter(group__course=instance))
 
 
 @receiver(post_save, sender=Student, dispatch_uid='crm_student_scores_follow_group')
@@ -136,8 +144,38 @@ def student_freeze_journal(sender, instance: Student, created: bool, raw=False, 
 
     today = timezone.localdate()
     if getattr(instance, '_freeze_ended', False):
-        StudentFreeze.objects.filter(student=instance, end_date__isnull=True).update(end_date=today)
+        # The pause ends on the day the student really comes back (given in the unfreeze form), else today
+        ended = getattr(instance, '_resume_date', None) or today
+        StudentFreeze.objects.filter(student=instance, end_date__isnull=True).update(end_date=ended)
     if getattr(instance, '_freeze_started', False):
         start = timezone.localtime(instance.frozen_at).date() if instance.frozen_at else today
         if not StudentFreeze.objects.filter(student=instance, end_date__isnull=True).exists():
             StudentFreeze.objects.create(company_id=instance.company_id, student=instance, start_date=start)
+
+
+CHARGE_FIELDS = {'group', 'group_id', 'status', 'trial_date', 'frozen_at', 'left_at'}
+
+
+@receiver(post_save, sender=Student, dispatch_uid='crm_student_month_lines')
+def student_month_lines(sender, instance: Student, created: bool, update_fields=None, raw=False, **kwargs):
+    """
+    Month lines of the student (finance/charges.py): a new student gets the line of the first month at once;
+    a freeze pauses the running month; leaving stops new months. Registered last: the history of groups
+    and the freeze journal above are already written.
+    """
+    if raw:
+        return
+    if update_fields is not None and not (CHARGE_FIELDS & set(update_fields)):
+        return
+    from django.utils import timezone
+    from finance import charges
+
+    # Re-read: the caller may hold dates as strings in memory (trial_date='2026-09-01')
+    student = Student.objects.select_related('group__course').get(pk=instance.pk)
+    frozen_from = getattr(instance, '_frozen_from', None)
+    if getattr(instance, '_freeze_ended', False) and frozen_from and student.status in Student.CURRENT_STATUSES:
+        resume = getattr(instance, '_resume_date', None) or timezone.localdate()
+        charges.shift_after_freeze(student, timezone.localtime(frozen_from).date(), resume)
+    if getattr(instance, '_just_returned', False):
+        charges.resume_from(student, timezone.localdate())
+    charges.reallocate(student)

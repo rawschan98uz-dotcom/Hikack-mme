@@ -29,10 +29,12 @@ def remind_about_unpaid_leave(student: Student):
     ).exclude(status=Reminder.Status.DONE).exists():
         return None
 
-    amount = (
-        f', примерно {_money(debt["approx_amount"])} сум ({debt["months"]} × {_money(debt["monthly_price"])})'
-        if debt['monthly_price'] else ''
-    )
+    # Exact since the month lines: every owed month at its own price
+    amount = ''
+    if debt['approx_amount']:
+        amount = f', {_money(debt["approx_amount"])} сум'
+        if debt['monthly_price'] and debt['months'] > 1:
+            amount += f' ({debt["months"]} × {_money(debt["monthly_price"])})'
     phones = f'Телефон: {student.phone}' + (f', доп.: {student.phone2}' if student.phone2 else '')
     lines = [
         f'Не оплачено: {debt["months"]} мес. — с {debt["unpaid_since"].strftime("%d.%m.%Y")}{amount}.',
@@ -103,6 +105,9 @@ def close_unpaid_leave(reminder, user, write_off_reason: str = '') -> str | None
             old_values={'debt_months': state['debt_months'], 'debt_amount': state['debt_amount']},
         )
         reminder.written_off = True
+        # The forgiven months are closed in the student's lines: they are no debt anywhere any more
+        from finance.charges import write_off
+        write_off(reminder.student, timezone.localtime(reminder.created_at).date())
     else:
         reminder.resolution = f'Долг оплачен, закрыто {stamp} ({who})'
     reminder.status = Reminder.Status.DONE

@@ -60,7 +60,8 @@ def lesson_days(group, start: date, end: date) -> list[date]:
 
     weekdays = set(group_weekdays(group.days, group.weekdays))
     first = max(start, group.group_start_date) if group.group_start_date else start
-    last = min(end, group.group_end_date) if group.group_end_date else end
+    # The planned end date does not stop lessons (owner, 2026-10-05): a group lives until it is closed
+    last = end
     if group.archived_at:
         last = min(last, timezone.localtime(group.archived_at).date())
     if first > last or not weekdays:

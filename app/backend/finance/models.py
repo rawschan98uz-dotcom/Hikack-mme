@@ -312,3 +312,62 @@ class PaymentTransaction(models.Model):
 
     def __str__(self) -> str:
         return f'{self.provider} #{self.trans_id} ({self.status}) - {self.amount}'
+
+
+class StudentCharge(models.Model):
+    """
+    "Строка" (owner, 2026-10-05; finance/charges.py): one month of one student — who, which month, what sum.
+    The sum is written once, when the month starts, at the course price of that day, and is never recounted:
+    later changes of prices, groups or schedules do not touch it. Payments are attached to lines
+    (PaymentAllocation), the oldest unpaid line first.
+    A student's month runs from their start date: came on 17 September -> 17.09–17.10, then 17.10–17.11.
+    """
+
+    class Status(models.TextChoices):
+        OPEN = 'open', 'Действует'
+        WRITTEN_OFF = 'written_off', 'Списано CEO'
+
+    company = models.ForeignKey('org.Company', on_delete=models.CASCADE, related_name='student_charges')
+    student = models.ForeignKey('crm.Student', on_delete=models.CASCADE, related_name='charges')
+    # Snapshots of the day the month started
+    group = models.ForeignKey('crm.Group', on_delete=models.SET_NULL, null=True, blank=True, related_name='charges')
+    course = models.ForeignKey('crm.Course', on_delete=models.SET_NULL, null=True, blank=True, related_name='charges')
+    seq = models.PositiveIntegerField()  # 0 = the student's first month
+    period_start = models.DateField(db_index=True)
+    period_end = models.DateField()  # the first day of the NEXT month of the student
+    # Day of the month the student's months turn on (31 -> 28 February -> 31 March: no drift)
+    pay_day = models.PositiveSmallIntegerField()
+    price = models.BigIntegerField()
+    discount = models.BigIntegerField(default=0)
+    amount = models.BigIntegerField()  # to pay: price − discount
+    paid_amount = models.BigIntegerField(default=0)  # the sum of its allocations
+    paid_at = models.DateField(null=True, blank=True)  # the day it was paid in full
+    # Lessons the group could have in this month by the schedule of that day (teacher's share per lesson)
+    lessons_planned = models.PositiveIntegerField(default=0)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.OPEN)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['student_id', 'seq']
+        constraints = [
+            models.UniqueConstraint(fields=['student', 'seq'], name='uniq_student_charge_seq'),
+        ]
+
+    @property
+    def remaining(self) -> int:
+        return max(0, self.amount - self.paid_amount) if self.status == self.Status.OPEN else 0
+
+    def __str__(self) -> str:
+        return f'{self.student_id}: {self.period_start} — {self.period_end} = {self.amount}'
+
+
+class PaymentAllocation(models.Model):
+    """Which line a payment's money closed (the September debt paid in December closes the September line)."""
+    payment = models.ForeignKey(Payment, on_delete=models.CASCADE, related_name='allocations')
+    charge = models.ForeignKey(StudentCharge, on_delete=models.CASCADE, related_name='allocations')
+    amount = models.BigIntegerField()
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['payment', 'charge'], name='uniq_payment_charge_allocation'),
+        ]

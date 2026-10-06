@@ -133,6 +133,8 @@ class Student(models.Model):
     paid_this_month = models.BooleanField(default=False)
     trial_date = models.DateField(null=True, blank=True)
     payment_offset = models.IntegerField(default=0)
+    # After a freeze the student's next month may not start before the day they came back (finance/charges.py)
+    charge_resume_date = models.DateField(null=True, blank=True)
     left_at = models.DateTimeField(null=True, blank=True)
     frozen_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -152,6 +154,8 @@ class Student(models.Model):
         # Read by crm/signals.py: the freeze journal (StudentFreeze) opens / closes a period
         self._freeze_started = False
         self._freeze_ended = False
+        # Read by crm/signals.py when a freeze ends: the day it began (frozen_at is cleared below)
+        self._frozen_from = self.frozen_at
         if self.pk and not status_untouched:
             old_status = Student.objects.filter(pk=self.pk).values_list('status', flat=True).first()
             self._freeze_started = self.status == self.Status.FROZEN and old_status != self.Status.FROZEN

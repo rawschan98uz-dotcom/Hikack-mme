@@ -113,6 +113,9 @@ TEACHER_HIDDEN_STUDENT_FIELDS = (
     'is_debtor',
     'overdue_days',
     'paid_count',
+    'debt_months',
+    'debt_amount',
+    'charges',
     'payment_offset',
     'course_price',
     'wallet',
@@ -145,7 +148,11 @@ def filter_reminders_queryset(qs, user: User):
     common = Q(assigned_to__isnull=True)
     limit = branch_limit(user)
     if limit is not None:
-        common &= Q(student__isnull=True) | Q(student__branch_id=limit)
+        common &= (
+            Q(student__isnull=True, group__isnull=True)
+            | Q(student__branch_id=limit)
+            | Q(group__branch_id=limit)
+        )
     return qs.filter(Q(assigned_to=user) | Q(created_by=user) | common)
 
 

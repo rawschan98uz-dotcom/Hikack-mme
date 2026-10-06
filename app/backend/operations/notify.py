@@ -384,16 +384,12 @@ def _payments_summary(company) -> dict:
 
 
 def _student_due(student, payments: dict):
-    info = payments.get(student.id) or payments.get(f"legacy:{student.full_name}") or {}
-    months_covered = info.get('months_covered', info.get('count', 0))
-    last_date = info.get('last_date')
-    first_date = info.get('first_date')
+    """(last payment day, next payment day) — the same day the program shows, read from the month lines."""
+    from finance import charges
 
-    offset = getattr(student, 'payment_offset', 0) or 0
-    effective_count = max(0, months_covered - offset)
-    anchor_date = student.trial_date or first_date or student.created_at.date()
-    next_due = _add_months(anchor_date, effective_count)
-    return last_date, next_due
+    info = payments.get(student.id) or payments.get(f"legacy:{student.full_name}") or {}
+    charges.refresh(student)
+    return info.get('last_date'), charges.schedule(student)['next_due']
 
 
 PAYING_STATUSES = None  # filled lazily to avoid import-time surprises

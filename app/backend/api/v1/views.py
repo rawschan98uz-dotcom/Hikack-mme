@@ -53,10 +53,10 @@ from crm.services import (
     validate_group_schedule,
 )
 
-from finance.refunds import EFFECTIVE_MONTHS
+from finance import charges
 from crm.debts import unpaid_leave_state
 from finance.wallet import ACTIVE_PAYMENT_Q, current_month_price, wallet_info
-from finance.models import Payment
+from finance.models import Payment, StudentCharge
 from operations import notify as notifications
 from operations.models import Reminder, Tag, log_audit
 from org.models import Branch, Company, Room
@@ -437,11 +437,7 @@ def _apply_group_fields(group: Group, company: Company, data: dict) -> str | Non
 
 
 def _add_months(d: date, num_months: int) -> date:
-    import calendar
-    year = d.year + (d.month - 1 + num_months) // 12
-    month = (d.month - 1 + num_months) % 12 + 1
-    max_day = calendar.monthrange(year, month)[1]
-    return date(year, month, min(d.day, max_day))
+    return charges.add_months(d, num_months)
 
 
 def _get_student_payments_queryset(student: Student, company: Company):
@@ -468,84 +464,51 @@ def _get_student_payments_queryset(student: Student, company: Company):
 
 
 def _get_student_payment_info(student: Student, info: dict | None = None) -> dict:
+    """
+    Where the student stands with payments, read from their month lines (finance/charges.py):
+    the next payment day is the first line that is not paid in full; a debtor owes exactly those lines.
+    `info` — data loaded for the whole company at once (lists), else it is read for this student.
+    """
     if info is None:
         payments = _get_student_payments_queryset(student, student.company)
-        months_covered = payments.aggregate(total=Sum(EFFECTIVE_MONTHS))['total'] or 0
         last = payments.order_by('-payment_date', '-created_at').first()
-        first = payments.order_by('payment_date', 'created_at').first()
         last_date = (last.payment_date or timezone.localtime(last.created_at).date()) if last else None
-        first_date = (first.payment_date or timezone.localtime(first.created_at).date()) if first else None
+        charges.refresh(student)  # a new month may have begun since the last look
+        lines, freezes = charges.student_lines(student), None
     else:
-        months_covered = info.get('months_covered', info.get('count', 0))
         last_date = info.get('last_date')
-        first_date = info.get('first_date')
+        lines, freezes = info.get('lines') or [], info.get('freezes') or []
 
-    offset = getattr(student, 'payment_offset', 0) or 0
-    effective_count = max(0, months_covered - offset)
-    anchor_date = student.trial_date or first_date or student.created_at.date()
-    next_due = _add_months(anchor_date, effective_count)
-
-    today = timezone.localdate()
-    # A student is only a debtor if currently studying and next payment due date is in the past
-    # Studying: overdue as of today. Frozen (owner, 2026-09-27): a debt from before the freeze is shown
-    # too, counted up to the day of freezing (the pause itself never adds debt).
-    if student.status == Student.Status.STUDYING:
-        check_date = today
-    elif student.status == Student.Status.FROZEN:
-        check_date = timezone.localtime(student.frozen_at).date() if student.frozen_at else today
-    else:
-        check_date = None
-    is_debtor = check_date is not None and check_date > next_due
-    overdue_days = (check_date - next_due).days if is_debtor else 0
-
+    state = charges.schedule(student, lines, freezes)
     return {
         'last_payment_date': last_date,
-        'next_payment_date': next_due,
-        'is_debtor': is_debtor,
-        'overdue_days': overdue_days,
-        'paid_count': effective_count,
+        'next_payment_date': state['next_due'],
+        'is_debtor': state['is_debtor'],
+        'overdue_days': state['overdue_days'],
+        'paid_count': state['paid_count'],
+        # Exact: every owed month at its own price
+        'debt_months': state['debt_months'],
+        'debt_amount': state['debt_amount'],
+        'lines': lines,
     }
-
-
-def _student_monthly_price(student: Student) -> int:
-    """Course price of the student's current group, or of the last group in their history."""
-    if student.group_id and student.group and student.group.course:
-        return student.group.course.price or 0
-    last = (
-        GroupEnrollment.objects.filter(student=student, group__course__isnull=False)
-        .select_related('group__course').order_by('-joined_date', '-id').first()
-    )
-    return (last.group.course.price or 0) if last else 0
 
 
 def student_debt_on(student: Student, on_date: date | None = None) -> dict | None:
     """
-    Unpaid months on `on_date` (default: the day the student left, or today), regardless of status.
-    Returns None when nothing is owed.
+    What the student owes on `on_date` (default: the day they left, or today), regardless of status:
+    the month lines that had begun by that day and are not paid in full. None when nothing is owed.
     """
-    if on_date is None:
-        on_date = timezone.localtime(student.left_at).date() if student.left_at else timezone.localdate()
-    due = _get_student_payment_info(student)['next_payment_date']
-    if on_date <= due:
-        return None
-    months = 1
-    while _add_months(due, months) < on_date:
-        months += 1
-    price = _student_monthly_price(student)
-    return {
-        'unpaid_since': due,
-        'months': months,
-        'days': (on_date - due).days,
-        'monthly_price': price,
-        'approx_amount': price * months,
-    }
+    charges.refresh(student)
+    return charges.debt_on(student, on_date)
 
 
 PAID_DAY = Coalesce('payment_date', TruncDate('created_at'))
 
 
 def _company_payments_summary(company: Company) -> dict:
+    """Payment dates of every student plus their month lines and freezes (lists: no query per student)."""
     from collections import Counter
+    charges.ensure_current()
     # Detect names that belong to multiple students to prevent mixing namesakes on legacy payments
     names = [
         f"{fn} {ln}".strip().lower()
@@ -563,7 +526,7 @@ def _company_payments_summary(company: Company) -> dict:
         .values('student_id', 'student_name')
         .annotate(
             count=Count('id'),
-            total_months=Sum(EFFECTIVE_MONTHS),
+            total_months=Sum('months_covered'),
             # The day the money was actually brought (payment_date); old payments without it — the day entered
             last_paid=Max(PAID_DAY),
             first_paid=Min(PAID_DAY),
@@ -604,22 +567,28 @@ def _company_payments_summary(company: Company) -> dict:
                     summary[key]['first_date'] = item['first_date']
             else:
                 summary[key] = dict(item)
+    summary['__lines__'] = charges.company_lines(company.id)
+    summary['__freezes__'] = charges.company_freezes(company.id)
     return summary
 
 
-def _lookup_student_payment_summary(student: Student, summary: dict) -> dict | None:
+def _lookup_student_payment_summary(student: Student, summary: dict) -> dict:
     direct = summary.get(student.id)
     legacy = summary.get(f"legacy:{student.full_name}")
     if direct and legacy:
         dates_last = [d for d in (direct['last_date'], legacy['last_date']) if d]
         dates_first = [d for d in (direct['first_date'], legacy['first_date']) if d]
-        return {
+        found = {
             'count': direct['count'] + legacy['count'],
             'months_covered': direct['months_covered'] + legacy['months_covered'],
             'last_date': max(dates_last) if dates_last else None,
             'first_date': min(dates_first) if dates_first else None,
         }
-    return direct or legacy
+    else:
+        found = dict(direct or legacy or {})
+    found['lines'] = summary.get('__lines__', {}).get(student.id, [])
+    found['freezes'] = summary.get('__freezes__', {}).get(student.id, [])
+    return found
 
 
 
@@ -658,6 +627,8 @@ def _serialize_student(student: Student, *, payment_info: dict | None = None, de
         'is_debtor': p_info['is_debtor'],
         'overdue_days': p_info['overdue_days'],
         'paid_count': p_info['paid_count'],
+        'debt_months': p_info.get('debt_months', 0),
+        'debt_amount': p_info.get('debt_amount', 0),
         **wallet_info(student),
         'payment_offset': student.payment_offset,
         'branch_id': student.branch_id,
@@ -673,49 +644,27 @@ def _serialize_student(student: Student, *, payment_info: dict | None = None, de
     }
     if detailed:
         payload['telegram_code'] = student.telegram_code
+        # The student's months: what was charged, what is paid, what is left (finance/charges.py)
+        payload['charges'] = charges.serialize_lines(p_info.get('lines') or [])
     return payload
-
-
-def _months_days_between(start: date, end: date) -> tuple[int, int]:
-    """(whole months, leftover days) from start to end, end >= start: end = start + months + days."""
-    months = (end.year - start.year) * 12 + (end.month - start.month)
-    while months > 0 and _add_months(start, months) > end:
-        months -= 1
-    return months, (end - _add_months(start, months)).days
 
 
 class UnfreezeError(ValueError):
     pass
 
 
-def _unfreeze_schedule(student: Student, company: Company, resume_date: date) -> tuple[date, int]:
+def _unfreeze_day(student: Student, resume_date: date) -> date:
     """
-    Freeze = the payment clock is paused, nothing is forgiven and nothing is lost.
-
-    Whatever the student had at the moment of freezing is carried over to the resume date:
-    - prepaid time left (e.g. 2 months) -> next payment = resume date + 2 months;
-    - a debt (e.g. unpaid since 1 May, frozen 26 Sep) -> still the same months/days overdue after resuming.
-    Repeated freezes work the same way because each one starts from the current schedule.
-
-    Returns (new anchor date, new payment_offset) that encode the shifted schedule.
+    Freeze = the payment clock is paused, nothing is forgiven and nothing is lost. The month that was running
+    continues from the day the student comes back with exactly what was left of it; an unpaid month stays
+    a debt (finance/charges.py: shift_after_freeze). Here only the date is checked.
     """
     freeze_date = timezone.localtime(student.frozen_at).date() if student.frozen_at else resume_date
     if resume_date < freeze_date:
         raise UnfreezeError(
             f'Дата возобновления не может быть раньше даты заморозки ({freeze_date.strftime("%d.%m.%Y")})'
         )
-
-    old_due = _get_student_payment_info(student)['next_payment_date']
-    paid_total = _get_student_payments_queryset(student, company).aggregate(total=Sum(EFFECTIVE_MONTHS))['total'] or 0
-
-    if old_due >= freeze_date:
-        # Prepaid time left at freeze: `months` + `days`, all of it is kept
-        months, days = _months_days_between(freeze_date, old_due)
-        return resume_date + timedelta(days=days), max(0, paid_total - months)
-
-    # Debt at freeze: unpaid since old_due -> keep exactly the same overdue after resuming
-    months, days = _months_days_between(old_due, freeze_date)
-    return _add_months(resume_date, -months) - timedelta(days=days), paid_total
+    return resume_date
 
 
 def _apply_student_fields(student: Student, company: Company, data: dict) -> str | None:
@@ -782,15 +731,11 @@ def _apply_student_fields(student: Student, company: Company, data: dict) -> str
             # trial_date in an unfreeze request = the day the student comes back
             resume_date = parse_date_safe(data.get('trial_date')) if data.get('trial_date') else None
             try:
-                student.trial_date, student.payment_offset = _unfreeze_schedule(
-                    student, company, resume_date or timezone.localdate(),
-                )
+                # Read by crm/signals.py after the save: the running month continues from this day
+                student._resume_date = _unfreeze_day(student, resume_date or timezone.localdate())
             except UnfreezeError as exc:
                 return str(exc)
         student.status = status
-
-    if 'payment_offset' in data:
-        student.payment_offset = max(0, safe_int(data.get('payment_offset'), default=0))
 
     # paid_this_month is computed from Payment records only (see sync_student_paid_this_month).
     # Manual override removed to prevent inconsistency between the flag and actual payments.
@@ -1620,10 +1565,47 @@ def student_detail(request, student_id: int):
                     status_code=400
                 )
 
+    old_start, old_anchor = student.trial_date, charges.anchor_of(student)
     error = _apply_student_fields(student, company, request.data) or _student_branch_error(request.user, student)
     if error:
         return fail(error)
-    student.save()  # GroupEnrollment is synced by the post_save signal
+
+    # The start date sets the student's months. Once months are charged, moving it rewrites them
+    # (a debt could simply be erased that way): only the CEO, and it goes to the journal.
+    start_moved = (
+        charges.anchor_of(student) != old_anchor
+        and StudentCharge.objects.filter(student=student).exists()
+    )
+    if start_moved and not _is_ceo(request.user):
+        return fail(
+            'По этой дате старта ученику уже начислены месяцы. Изменить её может только CEO.',
+            status_code=403,
+        )
+    with transaction.atomic():
+        debt_before = student_debt_on(student, timezone.localdate()) if start_moved else None
+        student.save()  # GroupEnrollment and the month lines are synced by the post_save signals
+        if start_moved:
+            charges.rebuild(student)
+            debt_after = student_debt_on(student, timezone.localdate())
+            log_audit(
+                company=company, actor=request.user, entity_type='student', entity_id=student.id,
+                action='start_date_change',
+                old_values={
+                    'trial_date': old_start.isoformat() if old_start else None,
+                    'debt': debt_before['approx_amount'] if debt_before else 0,
+                },
+                new_values={
+                    'trial_date': student.trial_date.isoformat() if student.trial_date else None,
+                    'debt': debt_after['approx_amount'] if debt_after else 0,
+                },
+                reason=(
+                    f'Изменена дата старта ученика {student.full_name}: '
+                    f'{old_start.strftime("%d.%m.%Y") if old_start else "—"} → '
+                    f'{student.trial_date.strftime("%d.%m.%Y") if student.trial_date else "—"}; '
+                    f'долг {_money_text(debt_before["approx_amount"] if debt_before else 0)} → '
+                    f'{_money_text(debt_after["approx_amount"] if debt_after else 0)} сум'
+                ),
+            )
     student = Student.objects.select_related('group', 'branch').get(pk=student.pk)
     return ok(_serialize_student(student, detailed=True))
 
@@ -2464,12 +2446,25 @@ def course_price_detail(request, course_id: int, price_id: int):
     if new != old:
         with transaction.atomic():
             entry.save()
+            note = ''
+            if new['price'] != old['price']:
+                # The wrong sum was typed: months already written at it and not paid at all get the right one
+                records = list(CoursePrice.objects.filter(course=course).order_by('valid_from', 'id'))
+                position = next(i for i, record in enumerate(records) if record.pk == entry.pk)
+                fixed, untouched = charges.reprice_unpaid(
+                    course, old['price'], new['price'],
+                    valid_from=None if position == 0 else entry.valid_from,
+                    valid_until=records[position + 1].valid_from if position + 1 < len(records) else None,
+                )
+                note = f'; неоплаченных месяцев учеников исправлено: {fixed}'
+                if untouched:
+                    note += f', с оплатами оставлено как было: {untouched}'
             log_audit(
                 company=company, actor=request.user, entity_type='course', entity_id=course.id,
                 action='price_fix', old_values=old, new_values=new,
                 reason=(
                     f'Исправлена цена курса «{course.name}»: {_money_text(old["price"])} сум с {day_text} → '
-                    f'{_money_text(entry.price)} сум с {entry.valid_from.strftime("%d.%m.%Y")}'
+                    f'{_money_text(entry.price)} сум с {entry.valid_from.strftime("%d.%m.%Y")}{note}'
                 ),
             )
             sync_course(course)

@@ -1860,7 +1860,7 @@ def _lesson_day_error(group: Group, day) -> str | None:
     if not lesson_days(group, day, day):
         return (
             f'{day:%d.%m.%Y} у группы «{group.name}» нет урока по расписанию '
-            '(не её день недели, праздник или вне дат группы).'
+            '(не её день недели, праздник или раньше даты начала группы).'
         )
     return None
 
@@ -2838,10 +2838,9 @@ def _no_lesson_reason(group: Group, day) -> str | None:
         return 'Группа в архиве'
     if day.weekday() not in group_weekdays(group.days, group.weekdays):
         return 'Сегодня у этой группы нет урока по расписанию'
-    if (group.group_start_date and day < group.group_start_date) or (
-        group.group_end_date and day > group.group_end_date
-    ):
-        return 'Сегодня группа не занимается (вне дат начала и окончания группы)'
+    # The end date is only a plan (owner, 2026-10-05): lessons go on until somebody closes the group
+    if group.group_start_date and day < group.group_start_date:
+        return 'Группа ещё не начала заниматься (раньше даты начала группы)'
     return None
 
 
@@ -2986,10 +2985,14 @@ def _left_debt(student: Student) -> dict | None:
 
 
 def _serialize_left_student(student: Student, written_off: dict | None = None) -> dict:
+    from finance import charges
+
     left_dt = student.left_at or student.created_at
     debt = _left_debt(student)
-    # The CEO wrote this debt off: it is not a debt any more, the report shows it as "written off"
-    write_off_note = (written_off or {}).get(student.id) if debt else None
+    # The CEO wrote the debt off: those months are closed in the student's lines, the report shows them
+    # as "written off" with the reason kept in the reminder
+    forgiven = charges.written_off(charges.student_lines(student)) if student.status == Student.Status.LEFT else None
+    write_off_note = ((written_off or {}).get(student.id) or 'Списано') if forgiven else None
     return {
         'id': student.id,
         'full_name': student.full_name,
@@ -3002,12 +3005,12 @@ def _serialize_left_student(student: Student, written_off: dict | None = None) -
         'group': student.group.name if student.group_id else '—',
         'comment': student.comment or '—',
         'left_at': timezone.localtime(left_dt).date().isoformat() if left_dt else '',
-        'debt_months': debt['months'] if debt and write_off_note is None else 0,
-        'debt_amount': debt['approx_amount'] if debt and write_off_note is None else 0,
-        'debt_since': debt['unpaid_since'].isoformat() if debt and write_off_note is None else None,
-        'written_off': write_off_note is not None,
-        'written_off_months': debt['months'] if write_off_note is not None else 0,
-        'written_off_amount': debt['approx_amount'] if write_off_note is not None else 0,
+        'debt_months': debt['months'] if debt else 0,
+        'debt_amount': debt['approx_amount'] if debt else 0,
+        'debt_since': debt['unpaid_since'].isoformat() if debt else None,
+        'written_off': forgiven is not None,
+        'written_off_months': forgiven['months'] if forgiven else 0,
+        'written_off_amount': forgiven['amount'] if forgiven else 0,
         'written_off_note': write_off_note or '',
     }
 
@@ -3079,10 +3082,11 @@ def report_left_students(request):
     qs = scope_branch(_left_students_queryset(company, request.query_params), request.user)
     left_active = qs.filter(status=Student.Status.LEFT).select_related('group__course')
     written_off = written_off_debts(left_active.values_list('id', flat=True))
-    with_debt_ids = [s.id for s in left_active if _left_debt(s)]
-    # A written-off debt is not a debt any more
-    debtor_ids = [sid for sid in with_debt_ids if sid not in written_off]
-    written_off_ids = [sid for sid in with_debt_ids if sid in written_off]
+    # A written-off debt is not a debt any more: those months are closed in the student's lines
+    from finance import charges
+    debtor_ids = [s.id for s in left_active if _left_debt(s)]
+    lines_by_student = charges.company_lines(company.id)
+    written_off_ids = [s.id for s in left_active if charges.written_off(lines_by_student.get(s.id, []))]
     if request.query_params.get('with_debt') in ('1', 'true'):
         qs = qs.filter(id__in=debtor_ids)
     total = qs.count()

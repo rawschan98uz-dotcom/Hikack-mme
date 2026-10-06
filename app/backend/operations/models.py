@@ -30,6 +30,14 @@ class Reminder(models.Model):
         blank=True,
         related_name='reminders',
     )
+    # Set for automatic reminders about a group (its end date has passed / nobody is left in it)
+    group = models.ForeignKey(
+        'crm.Group',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='reminders',
+    )
     # '' = created by a person; 'unpaid_leave' = automatic "student left without paying"
     kind = models.CharField(max_length=32, blank=True, default='')
     # How an automatic reminder was closed ("оплачено" / "списано CEO: причина")
@@ -51,6 +59,10 @@ class Reminder(models.Model):
     KIND_ONLINE_PAYMENT_CHECK = 'online_payment_check'
     # The daily GitHub backup has not worked for several days (operations/backup.py); closes by itself
     KIND_BACKUP_FAILED = 'backup_failed'
+    # The planned end date of a group has passed but students still study in it (crm/group_watch.py)
+    KIND_GROUP_END_PASSED = 'group_end_passed'
+    # Nobody is left in a group: time to close it
+    KIND_GROUP_EMPTY = 'group_empty'
     TITLE_MAX_LENGTH = 255
 
     @property

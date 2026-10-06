@@ -59,8 +59,10 @@ class FreezeKeepsScheduleTests(Base):
         self.assertEqual(res.status_code, 200, res.content)
         d = self.detail(s)
         self.assertTrue(d['is_debtor'])
-        # Same 4 months 25 days overdue as on the day of freezing, shifted by the 1-day pause
-        self.assertEqual(d['next_payment_date'], '2026-05-02')
+        # Month lines (2026-10-05): the unpaid May line is history and keeps its own date; the same
+        # months are owed as on the day of freezing (the 1-day pause is only taken out of the days of delay)
+        self.assertEqual(d['next_payment_date'], '2026-05-01')
+        self.assertGreaterEqual(d['debt_months'], 5)  # May … September, and whatever began after the return
 
     def test_prepaid_time_is_kept(self):
         s = self.student(date(2026, 6, 1))

@@ -102,8 +102,12 @@ class WalletTests(TestCase):
     def test_no_course_price_money_waits_in_wallet(self):
         # Owner (2026-09-28): no hand-typed months any more — without a course price the money waits
         # in the копилка and is counted when the student is in a group with a price
-        self.group.course = None
-        self.group.save()
+        # A student who never had a group with a price (months already charged at a price stay charged)
+        no_price = Group.objects.create(company=self.company, branch=self.branch, name='No price')
+        self.student = Student.objects.create(
+            company=self.company, branch=self.branch, group=no_price, first_name='Nodir',
+            phone='901234512', trial_date=date(2026, 9, 1),
+        )
         data = self.pay(1_000_000, months_covered=2)
         self.assertEqual(data['months_covered'], 0)
         self.assertTrue(data['months_auto'])
@@ -111,15 +115,16 @@ class WalletTests(TestCase):
         self.assertEqual(card['wallet'], 1_000_000)
         self.assertEqual(card['next_payment_date'], '2026-09-01')
 
-    def test_old_hand_entered_payments_are_untouched(self):
+    def test_old_payments_count_by_their_money(self):
+        # Month lines (2026-10-05): months typed by hand in old payments no longer count — only the money does
         Payment.objects.create(
             company=self.company, student=self.student, student_name='Dilnora', amount=100,
             months_covered=2, transaction_type=Payment.TransactionType.PAYMENT, payment_date=date(2026, 9, 1),
         )
         self.pay(1_200_000, payment_date='2026-09-02')
         card = self.card()
-        self.assertEqual(card['paid_count'], 3)  # 2 old + 1 from the new money
-        self.assertEqual(card['wallet'], 400_000)
+        self.assertEqual(card['paid_count'], 1)  # 1 200 100 at 800 000 a month: one month…
+        self.assertEqual(card['wallet'], 400_100)  # …and the rest lies on the next one
 
     def test_online_payment_uses_wallet(self):
         payment = Payment.objects.create(

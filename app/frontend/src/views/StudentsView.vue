@@ -67,8 +67,35 @@ interface StudentRow {
   wallet?: number | null;
   month_price?: number | null;
   wallet_missing?: number | null;
+  /** Exact debt: every owed month at its own price. */
+  debt_months?: number | null;
+  debt_amount?: number | null;
+  /** The student's months ("строки"): charged, paid, left. Newest first. */
+  charges?: StudentCharge[] | null;
   created_at: string;
 }
+
+interface StudentCharge {
+  id: number;
+  period_start: string;
+  period_end: string;
+  group: string;
+  price: number;
+  discount: number;
+  amount: number;
+  paid: number;
+  left: number;
+  paid_at: string | null;
+  state: 'paid' | 'partial' | 'unpaid' | 'ahead' | 'written_off';
+}
+
+const CHARGE_STATE: Record<StudentCharge['state'], { label: string; cls: string }> = {
+  paid: { label: 'Оплачено', cls: 'bg-emerald-100 text-emerald-700' },
+  partial: { label: 'Оплачено частично', cls: 'bg-amber-100 text-amber-800' },
+  unpaid: { label: 'Не оплачено', cls: 'bg-red-100 text-red-700' },
+  ahead: { label: 'Аванс', cls: 'bg-sky-100 text-sky-800' },
+  written_off: { label: 'Списано', cls: 'bg-slate-200 text-slate-700' },
+};
 
 interface StudentPayment {
   id: number;
@@ -441,6 +468,7 @@ const tableRows = computed(() =>
     nextPaymentDate: row.next_payment_date ? formatAddedDate(row.next_payment_date) : '—',
     isDebtor: Boolean(row.is_debtor),
     overdueDays: row.overdue_days || 0,
+    debtAmount: row.debt_amount || 0,
     isFrozen: row.status === 2,
   })),
 );
@@ -1010,6 +1038,9 @@ onMounted(async () => {
                 <span class="inline-flex items-center rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-semibold text-red-700">
                   Просрочено на {{ row.overdueDays }} дн.
                 </span>
+                <span v-if="row.debtAmount" class="text-xs font-semibold text-red-700">
+                  долг {{ formatSum(row.debtAmount) }} сум
+                </span>
                 <span
                   v-if="row.isFrozen"
                   class="inline-flex items-center rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-medium text-sky-700"
@@ -1134,6 +1165,13 @@ onMounted(async () => {
                   </button>
                 </dd>
               </div>
+              <div v-if="canSeeMoney && detailStudent.debt_amount" class="flex items-center justify-between gap-4 border-b border-fb-line pb-2">
+                <dt class="text-fb-secondary">Долг</dt>
+                <dd class="text-right">
+                  <span class="font-semibold text-red-700">{{ formatSum(detailStudent.debt_amount) }} сум</span>
+                  <span class="ml-1 text-xs text-fb-secondary">· месяцев: {{ detailStudent.debt_months }}</span>
+                </dd>
+              </div>
               <div v-if="canSeeMoney && detailStudent.wallet" class="flex items-center justify-between gap-4 border-b border-fb-line pb-2">
                 <dt class="text-fb-secondary">Копилка</dt>
                 <dd class="text-right">
@@ -1187,6 +1225,48 @@ onMounted(async () => {
                   Copy
                 </button>
               </div>
+            </div>
+
+            <!-- The student's months: one line per month, its sum never changes -->
+            <div v-if="canSeeMoney && detailStudent.charges?.length" class="mt-5 rounded-xl border border-fb-line bg-fb-canvas p-4 text-sm">
+              <div class="flex items-center gap-2 border-b border-fb-line pb-3">
+                <span class="font-semibold text-fb-text">Месяцы ученика</span>
+                <span class="rounded-full bg-white px-2 py-0.5 text-xs font-medium text-fb-secondary shadow-sm">
+                  {{ detailStudent.charges.length }}
+                </span>
+              </div>
+              <div class="max-h-64 overflow-y-auto">
+                <table class="w-full text-left">
+                  <thead class="text-xs text-fb-secondary">
+                    <tr>
+                      <th class="py-2 pr-2 font-medium">Месяц</th>
+                      <th class="py-2 pr-2 text-right font-medium">Начислено</th>
+                      <th class="py-2 pr-2 text-right font-medium">Оплачено</th>
+                      <th class="py-2 text-right font-medium">Осталось</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="line in detailStudent.charges" :key="line.id" class="border-t border-fb-line">
+                      <td class="py-2 pr-2 text-fb-text">
+                        <div class="whitespace-nowrap">
+                          {{ formatAddedDate(line.period_start) }} — {{ formatAddedDate(line.period_end) }}
+                        </div>
+                        <span class="mt-1 inline-block whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-medium" :class="CHARGE_STATE[line.state].cls">
+                          {{ CHARGE_STATE[line.state].label }}
+                        </span>
+                      </td>
+                      <td class="py-2 pr-2 text-right align-top text-fb-text">{{ formatSum(line.amount) }}</td>
+                      <td class="py-2 pr-2 text-right align-top text-fb-text">{{ formatSum(line.paid) }}</td>
+                      <td class="py-2 text-right align-top font-semibold" :class="line.left ? 'text-red-700' : 'text-fb-secondary'">
+                        {{ formatSum(line.left) }}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <p class="mt-2 text-xs text-fb-secondary">
+                Сумма месяца записывается в его первый день и потом не меняется. Оплата закрывает самый старый неоплаченный месяц.
+              </p>
             </div>
 
             <!-- Payment History Section -->

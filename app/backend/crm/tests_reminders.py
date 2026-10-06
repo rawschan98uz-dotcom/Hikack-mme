@@ -239,14 +239,25 @@ class WriteOffInReportsTests(Base):
         self.assertFalse(row['written_off'])
 
     def test_leaving_again_after_write_off_is_a_new_debt(self):
+        from datetime import timedelta
+        from django.utils import timezone
+
         s, rem = self.left_with_debt()
         self.as_(self.ceo).post(f'/v1/reminders/{rem.id}/complete', {'write_off_reason': 'moved away'}, format='json')
+        # Month lines (2026-10-05): the forgiven months stay forgiven and the months of absence are not
+        # charged — a new month starts on the day of return
         self.client.patch(f'/v1/students/{s.id}', {'status': Student.Status.STUDYING, 'group_id': self.g1.id})
-        self.client.patch(f'/v1/students/{s.id}', {'status': Student.Status.LEFT})
+        self.assertFalse(self.client.get(f'/v1/students/{s.id}').json()['data']['is_debtor'])
+        # Studies 40 days without paying and leaves again: that is a new debt, of the new months only
+        later = timezone.now() + timedelta(days=40)
+        with mock.patch('django.utils.timezone.now', return_value=later):
+            self.client.patch(f'/v1/students/{s.id}', {'status': Student.Status.LEFT})
         self.assertEqual(Reminder.objects.filter(student=s, kind=Reminder.KIND_UNPAID_LEAVE).count(), 2)
         row = self.report()['rows'][0]
-        self.assertFalse(row['written_off'])
-        self.assertGreater(row['debt_months'], 0)
+        # The month that was running when they left (and was forgiven) simply went on; the next one
+        # began after the return and is the new debt
+        self.assertEqual(row['debt_months'], 1)
+        self.assertTrue(row['written_off'])  # the old months are still shown as forgiven
 
 
 class ReturnAndDatesTests(Base):

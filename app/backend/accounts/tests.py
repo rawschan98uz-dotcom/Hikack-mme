@@ -12,6 +12,12 @@ from operations.models import AuditLogRecord, StudentScore, TeacherAttendanceRec
 from org.models import Company, Branch, Room
 
 
+def priced_group(company, branch, price=500_000, name='Paid group'):
+    """Month lines (2026-10-05) need a course price: a group whose course costs `price` a month."""
+    course = Course.objects.create(company=company, name=f'{name} course', price=price)
+    return Group.objects.create(company=company, branch=branch, course=course, name=name)
+
+
 
 class UserDeletionPermissionTests(TestCase):
     def setUp(self):
@@ -355,6 +361,7 @@ class LeadToStudentConversionTests(TestCase):
         student = Student.objects.create(
             company=self.company,
             branch=self.branch,
+            group=priced_group(self.company, self.branch),
             first_name='Anvar',
             last_name='Toshmatov',
             phone='901239999',
@@ -371,6 +378,7 @@ class LeadToStudentConversionTests(TestCase):
         # 1st payment made late (e.g. Nov 20): next payment advances to 2026-11-15 (NOT Nov 20!)
         Payment.objects.create(
             company=self.company,
+            student=student,
             student_name=student.full_name,
             amount=500000,
         )
@@ -383,6 +391,7 @@ class LeadToStudentConversionTests(TestCase):
         # 2nd payment made: advances to 2026-12-15
         Payment.objects.create(
             company=self.company,
+            student=student,
             student_name=student.full_name,
             amount=500000,
         )
@@ -398,6 +407,7 @@ class LeadToStudentConversionTests(TestCase):
         student = Student.objects.create(
             company=self.company,
             branch=self.branch,
+            group=priced_group(self.company, self.branch),
             first_name='Timur',
             last_name='Bek',
             phone='909998877',
@@ -406,6 +416,7 @@ class LeadToStudentConversionTests(TestCase):
         )
         Payment.objects.create(
             company=self.company,
+            student=student,
             student_name=student.full_name,
             amount=500000,
         )
@@ -429,20 +440,22 @@ class LeadToStudentConversionTests(TestCase):
         self.assertEqual(patch_res.status_code, 200)
         data = patch_res.json()['data']
         self.assertEqual(data['status'], Student.Status.STUDYING)
-        self.assertEqual(data['trial_date'], '2026-12-05')
-        self.assertEqual(data['payment_offset'], 1)
-        self.assertEqual(data['paid_count'], 0)  # 0 new payments for the new period
-        self.assertEqual(data['next_payment_date'], '2026-12-05')  # due on new start date
+        # Month lines (2026-10-05): a freeze no longer rewrites the start date — the month paid before
+        # the pause stays a paid line, and the next month begins on the day of return
+        self.assertEqual(data['trial_date'], '2026-10-15')
+        self.assertEqual(data['paid_count'], 1)
+        self.assertEqual(data['next_payment_date'], '2026-12-05')  # due on the day of return
 
         # 4. Student pays for the new period
         Payment.objects.create(
             company=self.company,
+            student=student,
             student_name=student.full_name,
             amount=500000,
         )
         res_after_pay = self.client.get(f'/v1/students/{student.id}')
         data_after = res_after_pay.json()['data']
-        self.assertEqual(data_after['paid_count'], 1)
+        self.assertEqual(data_after['paid_count'], 2)
         self.assertEqual(data_after['next_payment_date'], '2027-01-05')
 
 
@@ -926,9 +939,11 @@ class CoreAuditedFeaturesTests(TestCase):
     def test_payment_isolation_between_namesakes(self):
         """Payment of Aziz Karimov #1 must NEVER be counted for Aziz Karimov #2."""
         self.client.force_authenticate(user=self.admin)
+        group = priced_group(self.company, self.branch, price=250_000, name='Namesakes')
         s1 = Student.objects.create(
             company=self.company,
             branch=self.branch,
+            group=group,
             first_name='Aziz',
             last_name='Karimov',
             phone='901234567',
@@ -938,6 +953,7 @@ class CoreAuditedFeaturesTests(TestCase):
         s2 = Student.objects.create(
             company=self.company,
             branch=self.branch,
+            group=group,
             first_name='Aziz',
             last_name='Karimov',
             phone='907654321',
@@ -1210,6 +1226,7 @@ class P0RegressionTests(TestCase):
         student = Student.objects.create(
             company=self.company,
             branch=self.branch,
+            group=priced_group(self.company, self.branch),
             first_name='Kamol',
             last_name='Rakhimov',
             phone='901112233',
@@ -1245,11 +1262,9 @@ class P0RegressionTests(TestCase):
         self.assertEqual(patch_res.status_code, 200)
         data = patch_res.json()['data']
 
-        # payment_offset must be 3 (Sum of months_covered), NOT 1 (.count())
-        self.assertEqual(data['payment_offset'], 3)
-        # paid_count = months_covered(3) - offset(3) = 0 new payments in new period
-        self.assertEqual(data['paid_count'], 0)
-        # Next due is the new anchor
+        # Month lines (2026-10-05): the three paid months stay three paid lines (no free months),
+        # and the next month begins — and is due — on the day of return
+        self.assertEqual(data['paid_count'], 3)
         self.assertEqual(data['next_payment_date'], '2026-10-01')
 
     def test_paid_this_month_cannot_be_set_via_patch(self):
@@ -1368,6 +1383,7 @@ class P0RegressionTests(TestCase):
         student = Student.objects.create(
             company=self.company,
             branch=self.branch,
+            group=priced_group(self.company, self.branch),
             first_name='Sherzod',
             last_name='Baymatov',
             phone='901556677',
@@ -1400,8 +1416,9 @@ class P0RegressionTests(TestCase):
         self.assertEqual(patch_res.status_code, 200)
         data = patch_res.json()['data']
 
-        # payment_offset must be 3 (Sum), not 2 (.count())
-        self.assertEqual(data['payment_offset'], 3)
+        # Month lines (2026-10-05): all the money counts — three paid months, the next one from the return
+        self.assertEqual(data['paid_count'], 3)
+        self.assertEqual(data['next_payment_date'], '2026-10-15')
         self.assertEqual(data['status'], Student.Status.STUDYING)
 
 
@@ -1686,9 +1703,12 @@ class P1RegressionTests(TestCase):
         res2 = self.client.get(f'/v1/students/{s2.id}')
         self.assertEqual(res2.json()['data']['paid_count'], 0)
 
-        # Unique student gets the fallback safely
+        # Month lines (2026-10-05): a payment closes months only when it belongs to a student (owner,
+        # 2026-09-28: a payment is always entered for a chosen student). An old unlinked payment is still
+        # shown as the student's last payment day, but it no longer counts as a paid month by the name alone.
         res_u = self.client.get(f'/v1/students/{s_unique.id}')
-        self.assertEqual(res_u.json()['data']['paid_count'], 1)
+        self.assertEqual(res_u.json()['data']['paid_count'], 0)
+        self.assertIsNotNone(res_u.json()['data']['last_payment_date'])
 
     def test_replenishment_by_name_rejects_ambiguous_namesakes(self):
         """
@@ -3045,6 +3065,7 @@ class Block2FinanceRemediationTests(TestCase):
         student = Student.objects.create(
             company=self.company,
             branch=self.branch,
+            group=priced_group(self.company, self.branch),
             first_name='Jasur',
             last_name='Umarov',
             phone='901235566',
@@ -3075,11 +3096,11 @@ class Block2FinanceRemediationTests(TestCase):
         self.assertEqual(res.status_code, 200)
         data = res.json()['data']
 
-        # Offset consumes ONLY 1 month, NOT 3!
-        self.assertEqual(data['payment_offset'], 1)
-        # Paid count remaining = 3 - 1 = 2
-        self.assertEqual(data['paid_count'], 2)
-        # Next payment date is 2 months from new anchor: 2026-12-01!
+        # Month lines (2026-10-05): all three months stay paid lines; the two that were not used
+        # continue from the day of return
+        self.assertEqual(data['paid_count'], 3)
+        self.assertFalse(data['is_debtor'])
+        # Next payment date is 2 months from the day of return: 2026-12-01!
         self.assertEqual(data['next_payment_date'], '2026-12-01')
 
     def test_p1_4_prepayment_while_frozen_not_wiped_on_unfreeze(self):
@@ -3091,6 +3112,7 @@ class Block2FinanceRemediationTests(TestCase):
         student = Student.objects.create(
             company=self.company,
             branch=self.branch,
+            group=priced_group(self.company, self.branch),
             first_name='Nodir',
             last_name='Karimov',
             phone='907776655',

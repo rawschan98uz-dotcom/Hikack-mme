@@ -102,6 +102,7 @@ ROUTE_RULES: list[tuple[tuple[str, ...], str, str | None]] = [
     (('GET',), r'^reports/conversion$', P.PERM_REPORTS_VIEW),
     # Debts of the students who left are money: not for the marketer (reports audit, 2026-09-29)
     (('GET',), r'^reports/left-students$', P.PERM_PAYMENTS_VIEW),
+    (('GET',), r'^reports/months$', P.PERM_PAYMENTS_VIEW),
     (('GET',), r'^reports/attendance$', P.PERM_ATTENDANCE_VIEW),
     (('POST',), r'^reports/attendance$', P.PERM_ATTENDANCE_WRITE),
     (('GET',), r'^reports/attendance/(day|month)$', P.PERM_ATTENDANCE_VIEW),

@@ -2,8 +2,10 @@
 Closing a month (owner, 2026-09-29) — the rule of accounting systems like ERPNext / Odoo:
 a month that is over and checked is closed by the CEO, and after that its numbers never change silently.
 
-  * Salaries are frozen: every person's accrual is saved as it was at closing time (PayrollSnapshot).
-    Later changes of course prices, percents, schedules, holidays or lesson marks do not touch it.
+  * Salaries: an office worker's monthly sum is saved as it was at closing time (PayrollSnapshot).
+    A teacher's month is counted from facts that cannot change any more — the lessons of the month are
+    locked and every lesson gets its percent for good (stamp_percents) — so only a student's late payment
+    adds to it ("the rest is paid when the students pay").
     A correction is a visible PayrollAdjustment (+/−, with a reason) — never a silent recount.
   * Money records dated in a closed month (payments, refunds, expenses, withdrawals, salary payout expenses)
     and teachers' lesson marks cannot be added, changed or deleted.
@@ -59,14 +61,18 @@ def closed_error(company_id, *days) -> str | None:
 
 def close_month(company, key: str, user) -> ClosedMonth:
     """Close a finished month: save everybody's salary for it. The caller checks the month is valid and over."""
-    from finance.payroll import live_accrual, parse_month, payroll_people
+    from accounts.models import User
+    from finance.payroll import live_accrual, parse_month, payroll_people, stamp_percents
 
     _, start, end = parse_month(key)
     with transaction.atomic():
         closed = ClosedMonth.objects.create(company=company, month=key, closed_by=user)
+        stamp_percents(company, start, end)
         for person in payroll_people(company, key, closed=None):
+            if person.user_type == User.UserType.TEACHER:
+                continue
             accrued, details = live_accrual(company, person, start, end)
-            if accrued or details.get('groups'):
+            if accrued:
                 PayrollSnapshot.objects.create(closed_month=closed, person=person, accrued=accrued, details=details)
     return closed
 

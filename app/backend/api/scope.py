@@ -116,7 +116,6 @@ TEACHER_HIDDEN_STUDENT_FIELDS = (
     'debt_months',
     'debt_amount',
     'charges',
-    'payment_offset',
     'course_price',
     'wallet',
     'month_price',

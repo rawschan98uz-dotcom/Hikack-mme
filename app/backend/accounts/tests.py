@@ -2487,14 +2487,17 @@ class Phase3PayrollAndSalaryTests(TestCase):
         self.assertEqual(self.client.get('/v1/salary-settings').status_code, 200)
         self.assertEqual(self.client.get('/v1/finance/payroll').status_code, 200)
 
-    # --- Salaries by lessons (owner, 2026-09-28): percent of (course price ÷ possible lessons) per held lesson ---
+    # --- Salaries by lessons. Since 2026-10-05: percent of the student's PAID month ÷ its lessons, per held lesson ---
 
-    def _student_in(self, group, name, phone, joined):
+    def _student_in(self, group, name, phone, joined, paid_months=1):
         student = Student.objects.create(
             company=self.company, branch=self.branch, group=group, first_name=name, last_name='Student',
             phone=phone, status=Student.Status.STUDYING, trial_date=joined,
         )
         GroupEnrollment.objects.filter(student=student).update(joined_date=joined)
+        if paid_months:
+            Payment.objects.create(company=self.company, student=student, student_name=name,
+                                   amount=1_000_000 * paid_months, payment_date=joined)
         return student
 
     def _held(self, teacher, group, day):
@@ -2546,7 +2549,7 @@ class Phase3PayrollAndSalaryTests(TestCase):
             company=self.company, teacher=self.teacher_a, teacher_name=self.teacher_a.display_name(),
             salary_type=SalarySetting.SalaryType.PERCENT, amount=50, effective_from='2026-09-01',
         )
-        self._student_in(self.group_a, 'Vali', '998909991112', dt.date(2026, 8, 1))
+        self._student_in(self.group_a, 'Vali', '998909991112', dt.date(2026, 8, 1), paid_months=2)
         self._held(self.teacher_a, self.group_a, dt.date(2026, 8, 3))
         self._held(self.teacher_a, self.group_a, dt.date(2026, 9, 7))
 
@@ -2581,22 +2584,26 @@ class Phase3PayrollAndSalaryTests(TestCase):
         self.assertEqual((a['held_lessons'], a['student_lessons']), (2, 1))
         self.assertEqual(b['student_lessons'], 1)
 
-    def test_refund_does_not_change_teacher_salary(self):
-        """The base is the course price, not the money: a refund to the student does not cut the teacher's pay."""
+    def test_refund_to_the_student_lowers_what_is_payable_to_the_teacher(self):
+        """Owner (2026-10-05): the teacher is paid from the money the student really paid — a refund takes its share back."""
         import datetime as dt
         self.client.force_authenticate(user=self.ceo)
         SalarySetting.objects.create(company=self.company, teacher=self.teacher_a,
                                      salary_type=SalarySetting.SalaryType.PERCENT, amount=50)
-        student = self._student_in(self.group_a, 'Davron', '998909991114', dt.date(2026, 9, 1))
+        student = self._student_in(self.group_a, 'Davron', '998909991114', dt.date(2026, 9, 1), paid_months=0)
         self._held(self.teacher_a, self.group_a, dt.date(2026, 9, 7))
-        before = self._row(self.teacher_a, '2026-09')['accrued']
+        lessons = self._lessons(self.group_a, '2026-09')
+        self.assertEqual(self._row(self.teacher_a, '2026-09')['accrued'], 0)  # nothing paid yet
         payment_id = self.client.post('/v1/replenishments', {
             'student_id': student.id, 'amount': 1000000, 'method': 'cash', 'payment_date': '2026-09-02',
         }).json()['data']['id']
+        self.assertEqual(self._row(self.teacher_a, '2026-09')['accrued'], 1_000_000 * 50 // (lessons * 100))
         res_refund = self.client.post(f'/v1/payments/{payment_id}/refund', {'amount': 300000, 'comment': 'Partial'})
         self.assertEqual(res_refund.status_code, 201)
         self.assertEqual(res_refund.json()['data']['transaction_type'], 'refund')
-        self.assertEqual(self._row(self.teacher_a, '2026-09')['accrued'], before)
+        row = self._row(self.teacher_a, '2026-09')
+        self.assertEqual(row['accrued'], 700_000 * 50 // (lessons * 100))
+        self.assertEqual(row['earned'], 1_000_000 * 50 // (lessons * 100))
 
     def test_payroll_pay_and_overpayment_protection(self):
         """Payroll payment creates first-class PayrollPayment record and guards against overpayments."""
@@ -2952,8 +2959,8 @@ class Block2FinanceRemediationTests(TestCase):
         # 3. If that payment is reversed -> must no longer mark paid
         refund.reverses_payment = pay
         refund.save(update_fields=['reverses_payment'])
-        from finance.refunds import recalc_refunded_months
-        recalc_refunded_months(pay)  # the refund API does this; full refund takes back the month
+        from finance.refunds import apply_refunds
+        apply_refunds(pay)  # the refund API does this; full refund takes back the month
         is_paid = sync_student_paid_this_month(self.student)
         self.assertFalse(is_paid)
 
@@ -3142,7 +3149,6 @@ class Block2FinanceRemediationTests(TestCase):
         data = res.json()['data']
 
         # Consumed months = 0 -> offset = 0!
-        self.assertEqual(data['payment_offset'], 0)
         self.assertEqual(data['paid_count'], 2)
         self.assertEqual(data['next_payment_date'], '2026-12-01')
 

@@ -1,4 +1,9 @@
-"""Closing a month (owner, 2026-09-29): frozen salaries, locked money records, corrections, CEO only."""
+"""
+Closing a month (owner, 2026-09-29): locked money records, corrections, CEO only.
+Since 2026-10-05 a teacher is paid from what the students have paid, and a month is counted from facts that
+do not change (lessons with their percents, the students' month lines) — closed or not. Closing locks the
+records of the month and saves the monthly sums of office staff.
+"""
 from datetime import date
 from io import StringIO
 
@@ -8,7 +13,7 @@ from rest_framework.test import APIClient
 
 from accounts.models import TeacherBranch, User
 from crm.models import Course, Group, GroupEnrollment, Student
-from finance.models import ClosedMonth, Expense, PayrollSnapshot, SalarySetting, Withdrawal
+from finance.models import ClosedMonth, Expense, Payment, PayrollSnapshot, SalarySetting, Withdrawal
 from operations.models import AuditLogRecord, TeacherAttendanceRecord
 from org.models import Branch, Company
 
@@ -34,6 +39,9 @@ class Base(TestCase):
             s = Student.objects.create(company=self.company, branch=self.a, group=self.g, first_name=f'S{i}',
                                        phone=f'90200{i:04d}', trial_date=date(2026, 8, 1))
             GroupEnrollment.objects.filter(student=s).update(joined_date=date(2026, 8, 1))
+            # Everybody has paid August: the teacher's percent is payable
+            Payment.objects.create(company=self.company, student=s, student_name=s.first_name, amount=500_000,
+                                   payment_date=date(2026, 8, 1))
         self.ali = Student.objects.get(first_name='S0')
         self.setting = SalarySetting.objects.create(company=self.company, teacher=self.tom, teacher_name='Tom',
                                                     salary_type='percent', amount=30)
@@ -44,8 +52,8 @@ class Base(TestCase):
         ]
         self.c.force_authenticate(self.ceo)
 
-    # 10 students × 500 000 × 5 lessons × 30% ÷ 13 possible lessons
-    ACCRUED = 10 * 500_000 * 5 * 30 // (13 * 100)
+    # 10 students, each: 500 000 × 5 lessons × 30% ÷ 13 lessons of the month
+    ACCRUED = 10 * (500_000 * 5 * 30 // (13 * 100))
 
     def payroll(self, month=AUG):
         return self.c.get('/v1/finance/payroll', {'month': month}).json()['data']
@@ -102,15 +110,17 @@ class FrozenSalaryTests(Base):
         self.course.price = 600_000
         self.course.save()
         g = self.row()['groups'][0]
-        self.assertEqual((g['course_price'], g['held_lessons'], g['percent']), (500_000, 5, 30))
+        self.assertEqual((g['held_lessons'], g['percent'], g['accrued']), (5, 30, self.ACCRUED))
 
-    def test_open_month_is_still_counted_live(self):
+    def test_open_month_does_not_follow_the_price_either(self):
+        # It used to: a month that was not closed was recounted at today's price (the owner's "hole")
         TeacherAttendanceRecord.objects.create(company=self.company, teacher=self.tom, group=self.g,
                                                attend_date=date(2026, 9, 7), status=1)
-        before = self.row('2026-09')['accrued']
+        before = self.row('2026-09')['earned']
+        self.assertGreater(before, 0)
         self.course.price = 600_000
         self.course.save()
-        self.assertGreater(self.row('2026-09')['accrued'], before)
+        self.assertEqual(self.row('2026-09')['earned'], before)
         self.assertFalse(self.row('2026-09')['month_closed'])
 
     def test_reopen_counts_again_and_is_logged(self):
@@ -121,7 +131,8 @@ class FrozenSalaryTests(Base):
         self.assertEqual(res.status_code, 200)
         r = self.row()
         self.assertFalse(r['month_closed'])
-        self.assertEqual(r['accrued'], 10 * 600_000 * 5 * 30 // (13 * 100))
+        # Opening a month no longer recounts the teacher: the months of the students keep their sums
+        self.assertEqual(r['accrued'], self.ACCRUED)
         self.assertTrue(AuditLogRecord.objects.filter(entity_type='finance_month', action='reopen',
                                                       reason__contains='Ошибка в цене').exists())
 
@@ -202,7 +213,7 @@ class CloseRulesTests(Base):
 
     def test_staff_fixed_salary_is_frozen(self):
         SalarySetting.objects.create(company=self.company, teacher=self.admin, teacher_name='Adm',
-                                     salary_type='fixed', amount=3_000_000)
+                                     salary_type='fixed', amount=3_000_000, effective_from=date(2026, 8, 1))
         self.close()
         SalarySetting.objects.filter(teacher=self.admin).update(amount=4_000_000)
         r = self.row(person=self.admin)
@@ -273,7 +284,9 @@ class CommandAndStaffTests(Base):
                                                attend_date=date(2026, 7, 6), status=1)
         call_command('close_months', '--until', AUG, stdout=StringIO())
         self.assertEqual(set(ClosedMonth.objects.values_list('month', flat=True)), {'2026-07', AUG})
-        self.assertEqual(PayrollSnapshot.objects.get(closed_month__month=AUG, person=self.tom).accrued, self.ACCRUED)
+        # A teacher's month needs no saved copy: it is counted from facts that no longer change
+        self.assertFalse(PayrollSnapshot.objects.filter(person=self.tom).exists())
+        self.assertEqual(self.row()['accrued'], self.ACCRUED)
         call_command('close_months', '--until', AUG, stdout=StringIO())  # twice is harmless
         self.assertEqual(ClosedMonth.objects.count(), 2)
 

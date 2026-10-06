@@ -480,3 +480,35 @@ class PreviewTests(Base):
         aziz = self.student(date(2026, 9, 17))
         self.c.force_authenticate(self.tom)
         self.assertEqual(self.c.post(f'/v1/students/{aziz.id}/payment-preview', {'amount': 1}, format='json').status_code, 403)
+
+
+class MonthPageTests(Base):
+    """Stage 5: the «month page» — the students' month lines by the month they begin in."""
+
+    def test_a_debt_paid_later_leaves_its_own_month_page(self):
+        aziz = self.student(date(2026, 9, 1))               # September and October
+        bek = self.student(date(2026, 9, 17), name='Bek')    # September only
+        self.pay(bek, 300_000, date(2026, 9, 20))
+        months = {m['month']: m for m in self.c.get('/v1/reports/months').json()['data']}
+        self.assertEqual(sorted(months), ['2026-09', '2026-10'])
+        sep = months['2026-09']
+        self.assertEqual((sep['title'], sep['lines'], sep['charged'], sep['paid'], sep['left'], sep['debtors']),
+                         ('Сентябрь 2026', 2, 1_000_000, 300_000, 700_000, 2))
+
+        page = self.c.get('/v1/reports/months', {'month': '2026-09'}).json()['data']
+        self.assertEqual([(r['student'], r['left'], r['state']) for r in page['rows']],
+                         [('Aziz', 500_000, 'unpaid'), ('Bek', 200_000, 'partial')])
+
+        # Aziz pays September in December: the September page shows it paid, October is still owed
+        self.at(date(2026, 12, 20))
+        self.pay(aziz, 500_000)
+        page = self.c.get('/v1/reports/months', {'month': '2026-09', 'only_unpaid': 1}).json()['data']
+        self.assertEqual([r['student'] for r in page['rows']], ['Bek'])
+        self.assertEqual(page['summary']['left'], 200_000)
+
+    def test_who_sees_it(self):
+        self.student(date(2026, 9, 1))
+        self.c.force_authenticate(self.admin)   # takes payments: sees debts
+        self.assertEqual(self.c.get('/v1/reports/months').status_code, 200)
+        self.c.force_authenticate(self.tom)     # a teacher never sees money
+        self.assertEqual(self.c.get('/v1/reports/months').status_code, 403)

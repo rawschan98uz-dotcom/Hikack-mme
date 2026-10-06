@@ -112,12 +112,17 @@ class TeacherPayrollHistoryTests(TestCase):
             company=self.company, teacher=self.teacher, teacher_name='Tom',
             salary_type=SalarySetting.SalaryType.PERCENT, amount=100,
         )
+        from finance.models import Payment
         for i in range(3):
-            s = Student.objects.create(company=self.company, branch=self.branch, first_name=f'S{i}', phone=f'90188{i:04d}')
-            GroupEnrollment.objects.filter(student=s).delete()
+            # Since 2026-10-05 the percent is paid from the students' paid months: all three started
+            # on 1 August and paid August
+            s = Student.objects.create(company=self.company, branch=self.branch, group=self.group, first_name=f'S{i}',
+                                       phone=f'90188{i:04d}', trial_date=date(2026, 8, 1))
+            Payment.objects.create(company=self.company, student=s, student_name=s.first_name, amount=3_100_000,
+                                   payment_date=date(2026, 8, 1))
             # all three were in the group in August; two of them left on 20 September
-            GroupEnrollment.objects.create(
-                company=self.company, student=s, group=self.group, joined_date=date(2026, 8, 1),
+            GroupEnrollment.objects.filter(student=s).update(
+                joined_date=date(2026, 8, 1),
                 left_date=date(2026, 9, 20) if i < 2 else None,
                 status=GroupEnrollment.Status.LEFT if i < 2 else GroupEnrollment.Status.ACTIVE,
             )
@@ -130,7 +135,7 @@ class TeacherPayrollHistoryTests(TestCase):
             rows = self.client.get(f'/v1/finance/payroll?month={month}').json()['data']['rows']
             return next(r['accrued'] for r in rows if r['teacher_id'] == self.teacher.id)
 
-        # every day is a lesson day: 31 possible lessons in August; 3 students × 3 100 000 ÷ 31 × 1 lesson
+        # every day is a lesson day: 31 lessons in the students' August; 3 students × 3 100 000 ÷ 31 × 1 lesson
         self.assertEqual(accrued('2026-08'), 3 * 3_100_000 // 31)  # even if two left later
         self.assertEqual(accrued('2026-07'), 0)                     # nobody was in the group yet
 

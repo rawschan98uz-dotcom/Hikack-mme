@@ -10,9 +10,8 @@ from api.csv_utils import normalize_phone as import_normalize_phone
 from api.utils import capitalize_name
 from crm.models import AttendanceRecord, Group, Lead, Student
 from crm.services import match_student_to_lead
-from finance.billing import split_monthly
 from finance.models import ExpenseCategory, Payment, SalarySetting
-from finance.salary import resolve_salary_setting
+from finance.payroll import teacher_percent
 from operations.models import ArchivedPerson, Reminder, StudentScore, TeacherAttendanceRecord
 from org.models import Branch, Company, Room
 
@@ -284,13 +283,15 @@ class SalaryTests(Block4Base):
 
     def test_newest_period_wins(self):
         SalarySetting.objects.create(
-            company=self.company, teacher=self.teacher, teacher_name='t', amount=1,
+            company=self.company, teacher=self.teacher, teacher_name='t', amount=1, salary_type='percent',
             effective_from=date(2026, 1, 1), effective_to=date(2026, 6, 15),
         )
         newer = SalarySetting.objects.create(
-            company=self.company, teacher=self.teacher, teacher_name='t', amount=2, effective_from=date(2026, 6, 16),
+            company=self.company, teacher=self.teacher, teacher_name='t', amount=2, salary_type='percent',
+            effective_from=date(2026, 6, 16),
         )
-        self.assertEqual(resolve_salary_setting(self.company, self.teacher, date(2026, 6, 1), date(2026, 6, 30)), newer)
+        group = Group.objects.filter(company=self.company).first()
+        self.assertEqual(teacher_percent(self.company, self.teacher, group, date(2026, 6, 1), date(2026, 6, 30)), newer)
 
 
 class CapacityTests(Block4Base):
@@ -309,14 +310,6 @@ class CapacityTests(Block4Base):
 
 class BillingAndImportTests(Block4Base):
     """B6 + import passwords"""
-
-    def test_split_monthly_keeps_every_sum(self):
-        dates = [date(2026, 9, d) for d in range(1, 13)]
-        parts = split_monthly(1_000_000, dates)
-        self.assertEqual(sum(parts.values()), 1_000_000)
-        self.assertEqual(parts[dates[0]], 83_333)
-        self.assertEqual(parts[dates[-1]], 83_337)
-        self.assertEqual(split_monthly(100, []), {})
 
     def test_staff_import_generates_unique_passwords(self):
         self.client.force_authenticate(self.ceo)

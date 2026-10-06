@@ -292,14 +292,10 @@ def _allocate(student: Student, today: date) -> None:
                 paid_amount=new[0], paid_at=new[1], discount=new[2], amount=new[3],
             )
     for payment in payments:
-        if (
-            payment.months_covered != closed_by[payment.id]
-            or payment.refunded_amount != given_back[payment.id]
-            or payment.refunded_months
-        ):
+        if payment.months_covered != closed_by[payment.id] or payment.refunded_amount != given_back[payment.id]:
             # Kept for the lists and receipts: how many months this payment closed
             Payment.objects.filter(pk=payment.pk).update(
-                months_covered=closed_by[payment.id], refunded_amount=given_back[payment.id], refunded_months=0,
+                months_covered=closed_by[payment.id], refunded_amount=given_back[payment.id],
             )
     # "Копилка": money already brought towards a month that is not paid in full yet
     wallet = waiting + sum(

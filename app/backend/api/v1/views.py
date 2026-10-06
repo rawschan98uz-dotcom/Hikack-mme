@@ -436,10 +436,6 @@ def _apply_group_fields(group: Group, company: Company, data: dict) -> str | Non
 
 
 
-def _add_months(d: date, num_months: int) -> date:
-    return charges.add_months(d, num_months)
-
-
 def _get_student_payments_queryset(student: Student, company: Company):
     """
     Returns Payment queryset for student.
@@ -630,7 +626,6 @@ def _serialize_student(student: Student, *, payment_info: dict | None = None, de
         'debt_months': p_info.get('debt_months', 0),
         'debt_amount': p_info.get('debt_amount', 0),
         **wallet_info(student),
-        'payment_offset': student.payment_offset,
         'branch_id': student.branch_id,
         'branch': student.branch.name if student.branch_id else '—',
         'group_id': student.group_id,

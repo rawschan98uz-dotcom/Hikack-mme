@@ -33,13 +33,15 @@ interface GroupAccrual {
   group_id: number;
   group: string;
   branch: string;
-  course_price: number;
-  possible_lessons: number;
   held_lessons: number;
   student_lessons: number;
   percent: number;
   percent_scope: string;
+  /** Earned if every student pays in full / payable now from what is paid / still waiting for payments. */
+  earned: number;
   accrued: number;
+  waiting: number;
+  students_unpaid: number;
 }
 
 interface Payout {
@@ -62,6 +64,8 @@ interface PayrollRow {
   groups: GroupAccrual[];
   fixed_amount: number | null;
   accrued: number;
+  earned: number;
+  waiting: number;
   paid: number;
   balance: number;
   overpaid: number;
@@ -89,6 +93,7 @@ interface ClosedInfo {
 
 interface PayrollSummary {
   total_accrued: number;
+  total_waiting?: number;
   total_paid: number;
   total_balance: number;
   teachers_count: number;
@@ -471,7 +476,7 @@ onMounted(async () => {
       <div>
         <h1 class="text-2xl font-bold text-fb-text">Зарплаты</h1>
         <p class="mt-0.5 text-sm text-fb-secondary">
-          Учителя — процент по проведённым урокам, сотрудники — фиксированная сумма в месяц
+          Учителя — процент с оплаченных месяцев учеников за проведённые уроки, сотрудники — фиксированная сумма в месяц
         </p>
       </div>
       <button
@@ -538,14 +543,21 @@ onMounted(async () => {
 
       <div v-if="monthClosed" class="rounded-2xl border border-slate-300 bg-slate-50 px-5 py-3 text-sm text-slate-700">
         <strong class="capitalize">{{ monthTitle }}</strong> закрыт {{ monthClosed.closed_at }}{{ monthClosed.closed_by ? ` (${monthClosed.closed_by})` : '' }}.
-        Зарплаты зафиксированы и не пересчитываются. Оплаты, расходы, изъятия и отметки учителей с датой этого месяца
-        менять нельзя. Исправление — только «Поправкой» (CEO) или открыв месяц.
+        Оплаты, расходы, изъятия и отметки учителей с датой этого месяца менять нельзя; оклады сотрудников
+        зафиксированы. Учителю доначисляется только когда ученик гасит долг за этот месяц. Исправление —
+        «Поправкой» (CEO) или открыв месяц.
       </div>
 
-      <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+      <div class="grid grid-cols-1 gap-4 sm:grid-cols-4">
         <div class="rounded-2xl border border-fb-line bg-fb-card p-5 shadow-sm">
-          <div class="text-xs font-semibold uppercase tracking-wider text-fb-secondary">Начислено</div>
+          <div class="text-xs font-semibold uppercase tracking-wider text-fb-secondary">К выплате</div>
           <div class="mt-2 text-2xl font-black text-fb-text">{{ money(payrollSummary.total_accrued) }} <span class="text-xs text-fb-secondary">UZS</span></div>
+          <div class="mt-1 text-xs text-fb-secondary">С того, что ученики уже оплатили</div>
+        </div>
+        <div class="rounded-2xl border border-fb-line bg-fb-card p-5 shadow-sm">
+          <div class="text-xs font-semibold uppercase tracking-wider text-amber-700">Ждёт оплаты учеников</div>
+          <div class="mt-2 text-2xl font-black text-amber-700">{{ money(payrollSummary.total_waiting ?? 0) }} <span class="text-xs text-fb-secondary">UZS</span></div>
+          <div class="mt-1 text-xs text-fb-secondary">Добавится к выплате, когда должники заплатят</div>
         </div>
         <div class="rounded-2xl border border-fb-line bg-fb-card p-5 shadow-sm">
           <div class="text-xs font-semibold uppercase tracking-wider text-emerald-700">Выплачено</div>
@@ -566,7 +578,8 @@ onMounted(async () => {
           <thead class="border-b border-fb-line bg-fb-canvas text-xs font-semibold uppercase tracking-wider text-fb-secondary">
             <tr>
               <th class="px-5 py-3">Кто</th>
-              <th class="px-5 py-3 text-right">Начислено</th>
+              <th class="px-5 py-3 text-right">К выплате</th>
+              <th class="px-5 py-3 text-right">Ждёт оплаты учеников</th>
               <th class="px-5 py-3 text-right">Выплачено</th>
               <th class="px-5 py-3 text-right">Осталось</th>
               <th class="px-5 py-3">Статус</th>
@@ -589,6 +602,7 @@ onMounted(async () => {
                     в т.ч. поправки {{ row.accrued - row.accrued_base >= 0 ? '+' : '−' }}{{ money(Math.abs(row.accrued - row.accrued_base)) }}
                   </div>
                 </td>
+                <td class="px-5 py-3 text-right text-amber-700">{{ row.waiting ? money(row.waiting) : '—' }}</td>
                 <td class="px-5 py-3 text-right text-emerald-700">{{ money(row.paid) }}</td>
                 <td class="px-5 py-3 text-right font-semibold text-rose-700">{{ money(row.balance) }}</td>
                 <td class="px-5 py-3">
@@ -613,35 +627,39 @@ onMounted(async () => {
                 </td>
               </tr>
               <tr v-if="expanded === row.person_id" class="bg-fb-canvas/50">
-                <td colspan="6" class="px-5 py-4">
+                <td colspan="7" class="px-5 py-4">
                   <div v-if="row.kind === 'teacher'">
                     <p class="mb-2 text-xs text-fb-secondary">
-                      Урок = цена курса ученика (минус скидка) ÷ сколько уроков могло быть в месяце. Учитель получает свой
-                      процент с проведённых уроков, за каждый урок — только ученики, которые были в группе и не в заморозке.
+                      Урок ученика = сумма его месяца ÷ уроков в этом месяце. Учитель получает свой процент за каждый
+                      проведённый урок — но только с тех денег, что ученик уже заплатил. Заплатили 7 из 10 — к выплате
+                      за семерых; остальное добавится, когда должники заплатят. Процент берётся тот, что был в день урока.
                     </p>
                     <table class="w-full text-xs">
                       <thead class="text-fb-secondary">
                         <tr>
                           <th class="py-1 text-left">Группа</th>
                           <th class="py-1 text-left">Филиал</th>
-                          <th class="py-1 text-right">Цена курса</th>
-                          <th class="py-1 text-right">Уроков могло быть</th>
-                          <th class="py-1 text-right">Проведено</th>
+                          <th class="py-1 text-right">Уроков проведено</th>
                           <th class="py-1 text-right">Ученико-уроков</th>
                           <th class="py-1 text-right">Процент</th>
-                          <th class="py-1 text-right">Начислено</th>
+                          <th class="py-1 text-right">Заработано</th>
+                          <th class="py-1 text-right">Ждёт оплаты</th>
+                          <th class="py-1 text-right">К выплате</th>
                         </tr>
                       </thead>
                       <tbody>
                         <tr v-for="g in row.groups" :key="g.group_id">
                           <td class="py-1">{{ g.group }}</td>
                           <td class="py-1">{{ g.branch }}</td>
-                          <td class="py-1 text-right">{{ money(g.course_price) }}</td>
-                          <td class="py-1 text-right">{{ g.possible_lessons }}</td>
                           <td class="py-1 text-right">{{ g.held_lessons }}</td>
                           <td class="py-1 text-right">{{ g.student_lessons }}</td>
                           <td class="py-1 text-right" :class="g.percent_scope === 'не задан' ? 'text-rose-700' : ''">
                             {{ g.percent }}% <span class="text-fb-secondary">({{ g.percent_scope }})</span>
+                          </td>
+                          <td class="py-1 text-right">{{ money(g.earned) }}</td>
+                          <td class="py-1 text-right text-amber-700">
+                            {{ g.waiting ? money(g.waiting) : '—' }}
+                            <span v-if="g.students_unpaid" class="text-fb-secondary">(должников: {{ g.students_unpaid }})</span>
                           </td>
                           <td class="py-1 text-right font-semibold">{{ money(g.accrued) }}</td>
                         </tr>
@@ -653,7 +671,8 @@ onMounted(async () => {
                     Фиксированная сумма в месяц: <strong>{{ row.fixed_amount === null ? 'не задана' : money(row.fixed_amount) + ' сум' }}</strong>
                   </p>
                   <p v-if="row.month_closed" class="mt-2 text-[11px] text-slate-600">
-                    🔒 Посчитано при закрытии месяца — поздние изменения цен, процентов и расписания сюда не попадают.
+                    🔒 Месяц закрыт: уроки и их проценты зафиксированы. Поздние изменения цен, процентов и расписания
+                    сюда не попадают — добавляется только оплата учеником долга за этот месяц.
                   </p>
                   <div v-if="row.adjustments.length || auth.isCeo" class="mt-3">
                     <p class="mb-1 flex items-center gap-3 text-xs font-semibold text-fb-text">
@@ -803,6 +822,15 @@ onMounted(async () => {
               <input v-model="panel.effective_to" type="date" class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm" />
             </div>
           </div>
+          <p class="text-[11px] text-fb-secondary">
+            <template v-if="panelIsTeacher">
+              Процент запоминается в день, когда отмечен урок: уже проведённые уроки при его изменении не
+              пересчитываются. Исправить прошлое можно «Поправкой» в ведомости.
+            </template>
+            <template v-else>
+              Оклад без даты «действует с» считается со дня, когда он введён: за прошлые месяцы он не начисляется.
+            </template>
+          </p>
           <p v-if="panel.error" class="text-sm text-fb-danger">{{ panel.error }}</p>
         </div>
         <div class="flex gap-2 border-t px-6 py-4">
@@ -823,7 +851,7 @@ onMounted(async () => {
         <div class="border-b border-fb-line px-6 py-4">
           <h2 class="text-lg font-semibold text-fb-text">Выплата зарплаты</h2>
           <p class="text-sm text-fb-secondary">
-            {{ payModal.row?.teacher_name }} · {{ selectedMonth }} · начислено {{ money(payModal.row?.accrued) }}, осталось
+            {{ payModal.row?.teacher_name }} · {{ selectedMonth }} · к выплате {{ money(payModal.row?.accrued) }}, осталось
             {{ money(payModal.row?.balance) }}
           </p>
         </div>
@@ -924,7 +952,7 @@ onMounted(async () => {
       <div class="w-full max-w-md overflow-hidden rounded-2xl bg-fb-card shadow-2xl">
         <div class="border-b border-fb-line px-6 py-4">
           <h2 class="text-lg font-semibold text-fb-text">Поправка к зарплате</h2>
-          <p class="text-sm text-fb-secondary">{{ adjModal.row?.teacher_name }} · {{ monthTitle }} · начислено {{ money(adjModal.row?.accrued) }}</p>
+          <p class="text-sm text-fb-secondary">{{ adjModal.row?.teacher_name }} · {{ monthTitle }} · к выплате {{ money(adjModal.row?.accrued) }}</p>
         </div>
         <div class="space-y-3 px-6 py-5">
           <div class="flex gap-2">

@@ -28,7 +28,6 @@ interface PaymentRow {
   discount_amount?: number;
   months_covered?: number;
   /** Months taken back by refunds of this payment. */
-  refunded_months?: number;
   refunded_amount?: number;
   /** true = months counted from the money (копилка), false = entered by hand. */
   months_auto?: boolean;

@@ -1,4 +1,8 @@
-"""Finance audit, block 3 (2026-09-28): teacher = percent of lessons held, staff = fixed, payouts by branch."""
+"""
+Finance audit, block 3 (2026-09-28): teacher = percent of lessons held, staff = fixed, payouts by branch.
+Since 2026-10-05 the percent is paid from what the students have really paid (their month lines), so the
+students of these tests have paid September unless a test says otherwise.
+"""
 from datetime import date
 
 from django.test import TestCase
@@ -39,10 +43,13 @@ class Base(TestCase):
         )
         self.c.force_authenticate(self.ceo)
 
-    def student(self, name, group, phone, joined=SEPT, **kw):
+    def student(self, name, group, phone, joined=SEPT, paid=True, **kw):
         s = Student.objects.create(company=self.company, branch=group.branch, group=group, first_name=name,
-                                   phone=phone, trial_date=SEPT, **kw)
+                                   phone=phone, trial_date=kw.pop('trial_date', SEPT), **kw)
         GroupEnrollment.objects.filter(student=s).update(joined_date=joined)
+        if paid and s.status != Student.Status.LEFT_TRIAL:
+            Payment.objects.create(company=self.company, student=s, student_name=name, amount=500_000,
+                                   payment_date=SEPT)
         return s
 
     def held(self, group, days, teacher=None):
@@ -73,15 +80,21 @@ class FormulaTests(Base):
         # 10 × 500 000 = 5 000 000 ÷ 12 × 3 × 30% = 375 000
         self.assertEqual(self.row()['accrued'], 375_000)
 
-    def test_debtors_count_the_base_is_the_course_price(self):
-        self.student('Ali', self.ga, '901000001')  # never paid anything
+    def test_a_debtor_brings_the_teacher_nothing_until_he_pays(self):
+        # Owner (2026-10-05): the teacher is paid only from what the students have paid
+        ali = self.student('Ali', self.ga, '901000001', paid=False)  # never paid anything
         self.percent(30)
         self.held(self.ga, [date(2026, 9, 7)])
-        self.assertEqual(self.row()['accrued'], 500_000 * 1 * 30 // (13 * 100))
+        row = self.row()
+        self.assertEqual((row['accrued'], row['waiting']), (0, 500_000 * 1 * 30 // (13 * 100)))
+        Payment.objects.create(company=self.company, student=ali, student_name='Ali', amount=500_000)
+        row = self.row()
+        self.assertEqual((row['accrued'], row['waiting']), (500_000 * 1 * 30 // (13 * 100), 0))
 
     def test_student_joined_mid_month_counts_only_from_that_day(self):
         self.student('Ali', self.ga, '901000001')
-        self.student('Bek', self.ga, '901000002', joined=date(2026, 9, 15))
+        # His month starts on the 15th (start date): earlier lessons are not his
+        self.student('Bek', self.ga, '901000002', joined=date(2026, 9, 15), trial_date=date(2026, 9, 15))
         self.percent(100)
         self.held(self.ga, [date(2026, 9, 7), date(2026, 9, 16)])  # Bek only on the 16th
         g = self.row()['groups'][0]
@@ -106,7 +119,7 @@ class FormulaTests(Base):
         self.assertFalse(StudentFreeze.objects.filter(student=ali, end_date__isnull=True).exists())
 
     def test_discount_lowers_the_base(self):
-        ali = self.student('Ali', self.ga, '901000001')
+        ali = self.student('Ali', self.ga, '901000001', paid=False)
         Payment.objects.create(company=self.company, student=ali, student_name='Ali', amount=400_000,
                                discount_amount=100_000, months_covered=1, month_price=500_000,
                                payment_date=date(2026, 9, 2))
@@ -120,11 +133,13 @@ class FormulaTests(Base):
         self.held(self.ga, [date(2026, 9, 7)])
         self.assertEqual(self.row()['accrued'], 0)
 
-    def test_only_lessons_on_schedule_days_count(self):
+    def test_a_lesson_cannot_be_marked_on_a_day_without_one(self):
+        # A mark is a fact once made (a later change of the schedule does not drop it), so the day is
+        # checked when the lesson is marked
         self.student('Ali', self.ga, '901000001')
-        self.percent(100)
-        self.held(self.ga, [date(2026, 9, 8)])  # a Tuesday: not a GA lesson day
-        self.assertEqual(self.row()['groups'][0]['held_lessons'], 0)
+        res = self.c.post('/v1/reports/teacher-attendance', {'teacher_id': self.tom.id, 'group_id': self.ga.id,
+                                                             'date': '2026-09-08'}, format='json')  # a Tuesday
+        self.assertEqual(res.status_code, 400)
 
     def test_percent_group_over_course_over_general_and_no_rounding_loss(self):
         gb = Group.objects.create(company=self.company, branch=self.b, name='GB', course=self.course, teacher=self.tom,
@@ -137,8 +152,9 @@ class FormulaTests(Base):
         self.held(self.ga, [date(2026, 9, 7)])
         self.held(gb, [date(2026, 9, 7)])
         groups = {g['group']: (g['percent'], g['percent_scope'], g['accrued']) for g in self.row()['groups']}
-        self.assertEqual(groups['GA'], (20, 'общий', 1_500_000 * 20 // (13 * 100)))
-        self.assertEqual(groups['GB'], (40, 'группа', 1_500_000 * 40 // (13 * 100)))
+        # Counted student by student, in whole sums
+        self.assertEqual(groups['GA'], (20, 'общий', 3 * (500_000 * 20 // (13 * 100))))
+        self.assertEqual(groups['GB'], (40, 'группа', 3 * (500_000 * 40 // (13 * 100))))
 
     def test_substitute_teacher_gets_the_lesson(self):
         sub = User.objects.create_user(phone='998905770009', password='x', first_name='Sub', company=self.company,
@@ -167,7 +183,7 @@ class RulesTests(Base):
         admin = User.objects.create_user(phone='998905770010', password='x', first_name='Adm', company=self.company,
                                          user_type=User.UserType.STAFF, staff_role=User.StaffRole.ADMINISTRATOR)
         SalarySetting.objects.create(company=self.company, teacher=admin, teacher_name='Adm', salary_type='fixed',
-                                     amount=3_000_000)
+                                     amount=3_000_000, effective_from=SEPT)
         row = self.row(admin)
         self.assertEqual((row['kind'], row['accrued'], row['balance']), ('staff', 3_000_000, 3_000_000))
         # no branch of their own: the CEO picks one when paying
@@ -207,10 +223,12 @@ class RulesTests(Base):
     def test_total_owed_is_person_by_person(self):
         anna = User.objects.create_user(phone='998905770011', password='x', first_name='Anna', company=self.company,
                                         user_type=User.UserType.STAFF, staff_role=User.StaffRole.ADMINISTRATOR, branch=None)
-        SalarySetting.objects.create(company=self.company, teacher=anna, teacher_name='Anna', salary_type='fixed', amount=3_000_000)
+        SalarySetting.objects.create(company=self.company, teacher=anna, teacher_name='Anna', salary_type='fixed',
+                                     amount=3_000_000, effective_from=SEPT)
         boss = User.objects.create_user(phone='998905770012', password='x', first_name='Boss', company=self.company,
                                         user_type=User.UserType.STAFF, staff_role=User.StaffRole.ADMINISTRATOR, branch=self.a)
-        SalarySetting.objects.create(company=self.company, teacher=boss, teacher_name='Boss', salary_type='fixed', amount=4_000_000)
+        SalarySetting.objects.create(company=self.company, teacher=boss, teacher_name='Boss', salary_type='fixed',
+                                     amount=4_000_000, effective_from=SEPT)
         self.c.post('/v1/finance/payroll/pay', {'teacher_id': boss.id, 'amount': 5_000_000, 'month': MONTH, 'force': True}, format='json')
         summary = self.c.get('/v1/finance/payroll', {'month': MONTH}).json()['data']['summary']
         self.assertEqual(summary['total_balance'], 3_000_000)  # Anna is still owed all of it

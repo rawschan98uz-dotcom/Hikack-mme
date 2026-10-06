@@ -26,6 +26,7 @@ import RemindersView from '../views/RemindersView.vue';
 import ReportsAttendanceView from '../views/ReportsAttendanceView.vue';
 import ReportsConversionView from '../views/ReportsConversionView.vue';
 import ReportsLeftStudentsView from '../views/ReportsLeftStudentsView.vue';
+import ReportsMonthsView from '../views/ReportsMonthsView.vue';
 import ReportsPnlView from '../views/ReportsPnlView.vue';
 import RoadmapView from '../views/RoadmapView.vue';
 import RoomsView from '../views/RoomsView.vue';
@@ -73,6 +74,7 @@ const router = createRouter({
         // One page «Лиды и конверсия» instead of two copies; Workly removed (owner, 2026-09-29)
         { path: 'reports/leads', redirect: '/reports/conversion' },
         { path: 'reports/left-students', component: ReportsLeftStudentsView },
+        { path: 'reports/months', component: ReportsMonthsView },
         { path: 'reports/workly', redirect: '/dashboard/default' },
         { path: 'settings', component: SettingsView },
         { path: 'settings-grade', component: GradeSettingsView },

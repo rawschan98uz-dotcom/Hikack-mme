@@ -7,7 +7,7 @@ from rest_framework.test import APIClient
 
 from accounts.models import TeacherBranch, User
 from crm.models import AttendanceRecord, Course, Group, GroupEnrollment, Lead, Student
-from finance.models import ClosedMonth, SalarySetting
+from finance.models import ClosedMonth, Payment, SalarySetting
 from finance.payroll import teacher_accrual
 from operations.models import AuditLogRecord, Holiday, TeacherAttendanceRecord
 from org.models import Branch, Company
@@ -52,6 +52,8 @@ class Base(TestCase):
         s = Student.objects.create(company=self.company, branch=group.branch, group=group, first_name=name,
                                    phone=phone, trial_date=D(1))
         GroupEnrollment.objects.filter(student=s).update(joined_date=D(1))
+        # Since 2026-10-05 a teacher is paid from what the students have paid: September is paid
+        Payment.objects.create(company=self.company, student=s, student_name=name, amount=600_000, payment_date=D(1))
         return s
 
     def next_lesson_day(self):

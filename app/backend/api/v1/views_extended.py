@@ -22,7 +22,7 @@ from accounts.rbac import (
 )
 from api.archive import archive_teacher
 from finance.closing import closed_error
-from finance.refunds import recalc_refunded_months
+from finance.refunds import apply_refunds
 from finance.wallet import PRICE_PENDING, current_month_price, recalc_student_wallet
 from finance.salary import find_overlapping_setting, overlap_error
 from api.responses import fail, ok
@@ -41,7 +41,7 @@ from api.scope import (
     scope_teachers,
 )
 from api.utils import name_taken, normalize_phone, paginate_queryset, safe_int, parse_date_safe
-from crm.models import AttendanceRecord, Group, Lead, Student
+from crm.models import AttendanceRecord, Course, Group, Lead, Student
 from crm.debts import written_off_debts
 from operations.models import TeacherAttendanceRecord, log_audit
 from org.models import Branch
@@ -742,7 +742,6 @@ def _serialize_payment(payment: Payment) -> dict:
         'transaction_type': getattr(payment, 'transaction_type', 'payment') or 'payment',
         'reverses_payment_id': payment.reverses_payment_id,
         'months_covered': getattr(payment, 'months_covered', 1) if getattr(payment, 'months_covered', None) is not None else 1,
-        'refunded_months': getattr(payment, 'refunded_months', 0) or 0,
         # Money given back from this payment, and over how many months its discount is spread
         'refunded_amount': getattr(payment, 'refunded_amount', 0) or 0,
         'discount_months': getattr(payment, 'discount_months', 1) or 1,
@@ -941,7 +940,7 @@ def payment_refund(request, payment_id: int):
             created_by=request.user,
         )
         # Owner's rule: whole months are taken back only when the refunded sum reaches the monthly price
-        recalc_refunded_months(original)
+        apply_refunds(original)
         log_audit(
             company=company, actor=request.user, entity_type='payment', entity_id=refund.id, action='refund',
             new_values={'refund_of': original.id, 'amount': _money_str(refund_amount), 'comment': comment},
@@ -1009,7 +1008,7 @@ def payment_detail(request, payment_id: int):
             payment.delete()
             if refunded_payment is not None:
                 # A refund record was removed -> its months come back to the original payment
-                recalc_refunded_months(refunded_payment)
+                apply_refunds(refunded_payment)
             elif student:
                 recalc_student_wallet(student)  # money of a копилка payment leaves the копилка
             if student:
@@ -1108,7 +1107,7 @@ def payment_detail(request, payment_id: int):
             old_snapshot, _payment_snapshot(payment), PAYMENT_FIELD_LABELS,
         )
         # Amount / months changed -> the months taken back by refunds may change too
-        recalc_refunded_months(payment.reverses_payment or payment)
+        apply_refunds(payment.reverses_payment or payment)
         # Копилка: the money moved or changed -> recount both students
         if old_student and old_student != payment.student:
             recalc_student_wallet(old_student)
@@ -3155,6 +3154,116 @@ def report_left_students(request):
     })
 
 
+@api_view(['GET'])
+def report_months(request):
+    """
+    "Страница месяца" (owner, 2026-10-05) — like a page of a paper ledger: the students' month lines by the
+    month they begin in. Without `month`: every month with its totals (charged, paid, the tail still owed).
+    With `month=2026-09`: the lines of that month, student by student. A September debt paid in December
+    disappears from the September page (and is December's income in the P&L).
+    """
+    from finance import charges
+    from finance.closing import month_title
+    from finance.models import StudentCharge
+    from finance.payroll import parse_month
+
+    company = _company(request)
+    if company is None:
+        return ok([])
+    charges.ensure_current()
+    today = timezone.localdate()
+    lines = StudentCharge.objects.filter(company=company).select_related('student', 'student__branch', 'group')
+    limit = branch_limit(request.user)
+    if limit is not None:
+        lines = lines.filter(student__branch_id=limit)
+
+    def left_of(line) -> int:
+        """The tail of a line: not paid, not written off, and its month has begun (a month ahead is no debt)."""
+        if line.status != StudentCharge.Status.OPEN or line.period_start > today:
+            return 0
+        return max(0, line.amount - line.paid_amount)
+
+    month = request.query_params.get('month')
+    if not month:
+        totals: dict[str, dict] = {}
+        for line in lines:
+            key = f'{line.period_start:%Y-%m}'
+            row = totals.setdefault(key, {
+                'month': key, 'title': month_title(key), 'lines': 0, 'charged': 0, 'paid': 0, 'left': 0,
+                'written_off': 0, 'debtors': set(),
+            })
+            row['lines'] += 1
+            row['paid'] += line.paid_amount
+            if line.status == StudentCharge.Status.WRITTEN_OFF:
+                row['charged'] += line.amount
+                row['written_off'] += max(0, line.amount - line.paid_amount)
+            else:
+                row['charged'] += line.amount
+                tail = left_of(line)
+                row['left'] += tail
+                if tail:
+                    row['debtors'].add(line.student_id)
+        result = []
+        for key in sorted(totals, reverse=True):
+            row = totals[key]
+            row['debtors'] = len(row['debtors'])
+            result.append(row)
+        return ok(result)
+
+    parsed = parse_month(month)
+    if parsed is None:
+        return fail('Неверный месяц (нужно ГГГГ-ММ).')
+    key, start, end = parsed
+    lines = lines.filter(period_start__gte=start, period_start__lte=end)
+    rows = []
+    for line in lines:
+        tail = left_of(line)
+        if line.status == StudentCharge.Status.WRITTEN_OFF:
+            state = 'written_off'
+        elif line.paid_amount >= line.amount:
+            state = 'paid'
+        elif line.period_start > today:
+            state = 'ahead'
+        elif line.paid_amount > 0:
+            state = 'partial'
+        else:
+            state = 'unpaid'
+        rows.append({
+            'id': line.id,
+            'student_id': line.student_id,
+            'student': line.student.full_name,
+            'phone': line.student.phone,
+            'student_status': line.student.status,
+            'student_status_label': line.student.get_status_display(),
+            'branch': line.student.branch.name if line.student.branch_id else '',
+            'group_id': line.group_id,
+            'group': line.group.name if line.group_id else '',
+            'period_start': line.period_start.isoformat(),
+            'period_end': line.period_end.isoformat(),
+            'price': line.price,
+            'discount': line.discount,
+            'amount': line.amount,
+            'paid': line.paid_amount,
+            'left': tail,
+            'written_off': max(0, line.amount - line.paid_amount) if state == 'written_off' else 0,
+            'paid_at': line.paid_at.isoformat() if line.paid_at else None,
+            'state': state,
+        })
+    # The totals are of the whole page, whatever the list below is narrowed to
+    summary = {
+        'lines': len(rows),
+        'charged': sum(row['amount'] for row in rows),
+        'paid': sum(row['paid'] for row in rows),
+        'left': sum(row['left'] for row in rows),
+        'written_off': sum(row['written_off'] for row in rows),
+        'debtors': len({row['student_id'] for row in rows if row['left']}),
+    }
+    if request.query_params.get('only_unpaid') in ('1', 'true'):
+        rows = [row for row in rows if row['left']]
+    rows.sort(key=lambda row: (-row['left'], row['student'].casefold(), row['period_start']))
+    return ok({'month': key, 'title': month_title(key), 'summary': summary, 'rows': rows})
+
+
 @api_view(['GET', 'POST'])
 def company_settings(request):
     company = _company(request)
@@ -3420,6 +3529,8 @@ def payroll_summary(request):
         'can_close': closed is None and month_is_over(month_key),
         'summary': {
             'total_accrued': sum(r['accrued'] for r in rows),
+            # Earned by teachers but not payable yet: waits for the students' payments
+            'total_waiting': sum(r['waiting'] for r in rows),
             'total_paid': sum(r['paid'] for r in rows),
             # What is owed, person by person: an overpayment to one never hides a debt to another
             'total_balance': sum(r['balance'] for r in rows),

@@ -71,6 +71,7 @@ urlpatterns = [
     path('teacher-attendance/today', views_extended.teacher_attendance_today),
     path('teacher-attendance/my', views_extended.teacher_attendance_my),
     path('reports/left-students', views_extended.report_left_students),
+    path('reports/months', views_extended.report_months),
     path('reminders', views_misc.reminder_index),
     path('reminders/assignees', views_misc.reminder_assignees),
     path('reminders/summary', views_misc.reminder_summary),

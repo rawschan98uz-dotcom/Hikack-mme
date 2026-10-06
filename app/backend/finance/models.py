@@ -25,14 +25,12 @@ class Payment(models.Model):
     student_name = models.CharField(max_length=255)
     payment_date = models.DateField(null=True, blank=True, db_index=True)
     amount = models.BigIntegerField()
+    # How many month lines of the student this payment closed in full (written by finance/charges.py)
     months_covered = models.PositiveIntegerField(default=1)
-    # Months taken back by refunds of this payment (finance/refunds.py). Only whole months:
-    # a refund smaller than the price of one month does not change the paid period.
-    refunded_months = models.PositiveIntegerField(default=0)
-    # "Копилка" mode (finance/wallet.py). Price of one month when the payment was made.
-    # NULL = months were set by hand (payments before the копилка, or the student had no course price).
+    # Price of one month on the day of the payment — kept for reference; 0 = the student had no course
+    # price then and the money was waiting for one (finance/wallet.py: PRICE_PENDING)
     month_price = models.BigIntegerField(null=True, blank=True)
-    # Money given back by refunds of this payment (копилка mode takes it out of the student's money)
+    # Money given back by refunds of this payment: it leaves the month lines it had closed
     refunded_amount = models.BigIntegerField(default=0)
     method = models.CharField(max_length=20, choices=Method.choices, default=Method.CASH)
     transaction_type = models.CharField(

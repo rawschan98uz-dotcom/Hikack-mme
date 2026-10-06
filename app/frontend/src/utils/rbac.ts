@@ -73,6 +73,8 @@ const ROUTE_PERMISSION_RULES: readonly [string, string | null][] = [
   ['/reports/attendance', PERM.ATTENDANCE_VIEW],
   // Debts of the students who left are money: not for the marketer
   ['/reports/left-students', PERM.PAYMENTS_VIEW],
+  // The students' months and their unpaid tails are money too
+  ['/reports/months', PERM.PAYMENTS_VIEW],
   ['/reports/', PERM.REPORTS_VIEW],
   ['/attendance-reports', PERM.ATTENDANCE_VIEW],
   ['/teacher-attendance-reports', PERM.TEACHER_ATTENDANCE_VIEW],

@@ -25,7 +25,6 @@ The next payment date is calculated from the last payment: same day of
 month, next month (Jan 31 -> Feb 28). Payments are matched to students
 by the student name stored in finance.Payment.student_name.
 """
-import calendar
 import json
 import os
 import sys
@@ -321,13 +320,6 @@ def send_telegram_payment_link(student, amount: int | None = None, message_intro
     return True, 'Ссылка на оплату успешно отправлена'
 
 
-def _add_months(d: date, num_months: int) -> date:
-    year = d.year + (d.month - 1 + num_months) // 12
-    month = (d.month - 1 + num_months) % 12 + 1
-    max_day = calendar.monthrange(year, month)[1]
-    return date(year, month, min(d.day, max_day))
-
-
 def _payments_summary(company) -> dict:
     from collections import Counter
     names = [
@@ -390,9 +382,6 @@ def _student_due(student, payments: dict):
     info = payments.get(student.id) or payments.get(f"legacy:{student.full_name}") or {}
     charges.refresh(student)
     return info.get('last_date'), charges.schedule(student)['next_due']
-
-
-PAYING_STATUSES = None  # filled lazily to avoid import-time surprises
 
 
 def _paying_students(company):

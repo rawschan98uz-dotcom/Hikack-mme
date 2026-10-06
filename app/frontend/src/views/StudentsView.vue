@@ -54,7 +54,6 @@ interface StudentRow {
   is_debtor?: boolean;
   overdue_days?: number;
   paid_count?: number;
-  payment_offset?: number;
   status: number;
   status_label: string;
   branch_id: number;

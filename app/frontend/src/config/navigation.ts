@@ -150,6 +150,7 @@ export const primaryNav: NavSection[] = [
       { type: 'link', label: 'Лиды и конверсия', to: '/reports/conversion', icon: 'conversion', permission: PERM.REPORTS_VIEW },
       { type: 'link', label: 'Посещаемость учеников', to: '/reports/attendance', icon: 'attendance', permission: PERM.ATTENDANCE_VIEW },
       { type: 'link', label: 'Ушедшие студенты', to: '/reports/left-students', icon: 'left-students', permission: PERM.PAYMENTS_VIEW },
+      { type: 'link', label: 'Месяцы учеников (долги)', to: '/reports/months', icon: 'reports', permission: PERM.PAYMENTS_VIEW },
     ],
   },
   {

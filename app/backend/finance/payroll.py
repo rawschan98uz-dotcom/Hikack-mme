@@ -1,16 +1,15 @@
 """
 Salaries (owner's rules, 2026-09-28).
 
-Teacher — only a percent, counted per group and per lesson:
-  * a lesson of the group is worth, for every student, (course price − the student's monthly discount)
-    ÷ the number of lessons the group COULD have in the month (its weekday schedule, inside the group's
-    start / end / archive dates, without holidays of its branch);
-  * the teacher gets their percent of the lessons they HELD ("Я пришёл" or the administrator's mark,
-    present or late), only on lesson days of the schedule;
-  * a lesson counts only the students who were in the group that day (group history) and were not frozen
-    that day (freeze journal); students who left after the trial lesson are not counted; debtors are counted
-    (the base is the course price, not the money that came).
-  Example: 10 students × 500 000, 12 possible lessons, 3 held, 30% → 5 000 000 ÷ 12 × 3 × 30% = 375 000.
+Teacher — only a percent, and only from money the students have really paid (owner, 2026-10-05):
+  * every month line of a student (finance/charges.py) is worth its sum; one lesson = sum ÷ lessons
+    planned in that month of the student;
+  * the teacher earns their percent for each lesson they HELD ("Я пришёл" or the administrator's mark)
+    while the student was in the group and not frozen — a missed lesson earns nothing;
+  * it is PAYABLE in the share of the line that is paid: 10 students, 7 paid -> paid for 7 now, for the
+    other 3 when they pay (whenever that is — the lesson stays on its own month's sheet);
+  * a lesson keeps the percent of the day it was marked: changing the percent later recounts nothing.
+  Example: a line of 500 000, 13 lessons planned, 12 held, 20% → 92 307 when the line is paid.
   Percent: the group's own percent → the course's percent → the teacher's general percent.
 
 Office staff (administrator, director…) — a fixed amount a month.
@@ -106,90 +105,148 @@ def teacher_percent(company, teacher, group, start: date, end: date) -> SalarySe
 
 
 def staff_fixed(company, person, start: date, end: date) -> SalarySetting | None:
+    """
+    The monthly sum of an office worker. A sum set without a start date counts from the day it was entered:
+    months before that are not owed (it used to show a debt for every past month ever).
+    """
     return _newest(SalarySetting.objects.filter(
         company=company, teacher=person, salary_type=SalarySetting.SalaryType.FIXED,
-    ).filter(_period_q(start, end)))
+    ).filter(_period_q(start, end)).filter(
+        Q(effective_from__isnull=False) | Q(created_at__date__lte=end),
+    ))
 
 
 # ---------------------------------------------------------------------------
 # Teacher accrual
 # ---------------------------------------------------------------------------
 
-def monthly_discount(student, price: int, month_end: date) -> int:
-    """
-    The student's discount for a month: the discount of their latest payment made by the end of the month,
-    spread over the months that payment closed (a payment for 3 months with 300 000 off = 100 000 a month).
-    """
-    payment = Payment.objects.filter(
-        student=student, transaction_type=Payment.TransactionType.PAYMENT,
-    ).filter(Q(payment_date__lte=month_end) | Q(payment_date__isnull=True, created_at__date__lte=month_end)).order_by(
-        F('payment_date').desc(nulls_last=True), '-created_at', '-id',
-    ).first()
-    if payment is None or not payment.discount_amount:
-        return 0
-    months = max(1, payment.months_covered or 1)
-    return min(price, payment.discount_amount // months)
+def percent_on(company, teacher, group, day: date) -> int | None:
+    """The teacher's percent for a lesson of `group` on `day`; None when no percent is set at all."""
+    setting = teacher_percent(company, teacher, group, day, day)
+    return int(setting.amount) if setting else None
 
 
-def _group_accrual(company, teacher, group, held_dates: set, start: date, end: date) -> dict:
+def _record_percent(company, teacher, group, record) -> int:
+    """
+    The percent of one held lesson. A lesson keeps the percent of the day it was marked (stored in the
+    record), so a later change of the teacher's percent never recounts lessons already given. A lesson
+    marked before any percent was set gets the one valid for its day now.
+    """
+    if record.percent is not None:
+        return int(record.percent)
+    return percent_on(company, teacher, group, record.attend_date) or 0
+
+
+def _group_accrual(company, teacher, group, records: list, start: date, end: date) -> dict:
+    """
+    Owner (2026-10-05): the teacher is paid only from what the students have really paid, and only for
+    the lessons the teacher really held.
+
+    Every month line of a student (finance/charges.py) is worth its sum; one lesson of it is worth
+    sum ÷ lessons planned in that month of the student. For each lesson held, the teacher earns their
+    percent of that — "earned" if the line were paid in full, "payable" in the share that IS paid.
+    When the student pays later (a September debt paid in December), the rest becomes payable then.
+        Example: Азиз's line 500 000, 13 lessons planned, Том held 12, percent 20.
+        Paid in full -> 500 000 × 12 ÷ 13 × 20% = 92 307. Paid 250 000 so far -> 46 153 now, 46 154 waiting.
+    """
     from crm.models import GroupEnrollment, Student, StudentFreeze
+    from finance.models import StudentCharge
+    from operations.models import TeacherAttendanceRecord
 
-    possible_days = lesson_days(group, start, end)
-    possible = len(possible_days)
-    held_days = sorted(set(possible_days) & held_dates)
+    held = {r.attend_date: _record_percent(company, teacher, group, r) for r in records}
     setting = teacher_percent(company, teacher, group, start, end)
-    percent = setting.amount if setting else 0
-    price = (group.course.price or 0) if group.course_id else 0
-
-    enrollments = list(
-        GroupEnrollment.objects.filter(group=group, joined_date__lte=end)
-        .filter(Q(left_date__isnull=True) | Q(left_date__gt=start))
-        .exclude(student__status=Student.Status.LEFT_TRIAL)  # the trial lesson is free: never a paying student
-        .select_related('student')
-    )
-    student_ids = {e.student_id for e in enrollments}
-    freezes = {}
-    for f in StudentFreeze.objects.filter(student_id__in=student_ids, start_date__lte=end).filter(
-        Q(end_date__isnull=True) | Q(end_date__gt=start),
-    ):
-        freezes.setdefault(f.student_id, []).append((f.start_date, f.end_date))
-    base = {
-        e.student_id: max(0, price - monthly_discount(e.student, price, end)) for e in enrollments
-    } if price else {}
-
-    money_lessons = 0      # Σ over held lessons of the students' monthly bases
-    student_lessons = 0    # how many student-lessons were counted
-    for day in held_days:
-        present = set()
-        for e in enrollments:
-            if e.student_id in present:
-                continue
-            if e.joined_date > day or (e.left_date is not None and e.left_date <= day):
-                continue
-            if any(s <= day and (f_end is None or day < f_end) for s, f_end in freezes.get(e.student_id, ())):
-                continue
-            present.add(e.student_id)
-            money_lessons += base.get(e.student_id, 0)
-        student_lessons += len(present)
-
-    # One exact integer division at the end: no sum is lost on rounding
-    accrued = money_lessons * percent // (possible * 100) if possible else 0
-    return {
+    row = {
         'group_id': group.id,
         'group': group.name,
         'branch_id': group.branch_id,
         'branch': group.branch.name if group.branch_id else '',
-        'course_price': price,
-        'possible_lessons': possible,
-        'held_lessons': len(held_days),
-        'student_lessons': student_lessons,
-        'percent': percent,
+        'held_lessons': len(held),
+        'student_lessons': 0,
+        'percent': max(held.values()) if held else (int(setting.amount) if setting else 0),
         'percent_scope': (
             'группа' if setting and setting.group_id else 'курс' if setting and setting.course_id
             else 'общий' if setting else 'не задан'
         ),
-        'accrued': accrued,
+        'earned': 0,    # if every student pays in full
+        'accrued': 0,   # payable now: from the money already paid
+        'waiting': 0,   # will become payable when the students pay
+        'students_unpaid': 0,
     }
+    if not held:
+        return row
+
+    # Who could be at these lessons: students whose history of groups has this group in the month, and
+    # students whose month line was written for this group (a card created later than the start date:
+    # the history of groups begins on the day of creation, the line says the student already studied)
+    overlap = Q(period_start__lte=end, period_end__gt=start)
+    student_ids = set(GroupEnrollment.objects.filter(group=group, joined_date__lte=end).filter(
+        Q(left_date__isnull=True) | Q(left_date__gt=start),
+    ).values_list('student_id', flat=True)) | set(
+        StudentCharge.objects.filter(overlap, group=group).values_list('student_id', flat=True)
+    )
+    # The trial lesson is free: who left after it was never a paying student
+    student_ids -= set(Student.objects.filter(pk__in=student_ids, status=Student.Status.LEFT_TRIAL).values_list('pk', flat=True))
+    if not student_ids:
+        return row
+    stays: dict[int, list] = {}
+    for e in GroupEnrollment.objects.filter(student_id__in=student_ids):
+        stays.setdefault(e.student_id, []).append((e.group_id, e.joined_date, e.left_date))
+    freezes: dict[int, list] = {}
+    for f in StudentFreeze.objects.filter(student_id__in=student_ids, start_date__lte=end).filter(
+        Q(end_date__isnull=True) | Q(end_date__gt=start),
+    ):
+        freezes.setdefault(f.student_id, []).append((f.start_date, f.end_date))
+    lines = list(StudentCharge.objects.filter(overlap, student_id__in=student_ids).order_by('student_id', 'seq'))
+    if not lines:
+        return row
+
+    # Every lesson held in this group (by anybody) inside the months of these lines: a month never pays
+    # for more lessons than it has
+    span = (min(line.period_start for line in lines), max(line.period_end for line in lines))
+    all_held = sorted(set(TeacherAttendanceRecord.objects.filter(
+        company=company, group=group, status__in=HELD_STATUSES,
+        attend_date__gte=span[0], attend_date__lt=span[1],
+    ).values_list('attend_date', flat=True)))
+
+    def attended(line, day: date) -> bool:
+        """Was the student of this line a member of this group on `day` and not frozen?"""
+        history = stays.get(line.student_id, ())
+        here = None
+        for group_id, joined, left in history:
+            if joined <= day and (left is None or day < left):
+                here = group_id == group.id
+                break
+        if here is None:
+            # Before the history of groups began: the group the line was written for
+            began = min((joined for _g, joined, _l in history), default=None)
+            here = (began is None or day < began) and line.group_id == group.id
+        if not here:
+            return False
+        return not any(s <= day and (e is None or day < e) for s, e in freezes.get(line.student_id, ()))
+
+    unpaid_students = set()
+    for line in lines:
+        weight = 0   # Σ percent over the lessons of this line the teacher held in the month
+        for day, percent in held.items():
+            if line.period_start <= day < line.period_end and attended(line, day):
+                weight += percent
+                row['student_lessons'] += 1
+        if not weight:
+            continue
+        planned = line.lessons_planned or len(lesson_days(group, line.period_start, line.period_end - timedelta(days=1)))
+        given = sum(1 for day in all_held if line.period_start <= day < line.period_end and attended(line, day))
+        planned = max(planned, given, 1)
+        # A written-off month will never be paid further: only its money counts
+        worth = line.amount if line.status == StudentCharge.Status.OPEN else line.paid_amount
+        earned = worth * weight // (planned * 100)
+        payable = min(earned, line.paid_amount * weight // (planned * 100))
+        row['earned'] += earned
+        row['accrued'] += payable
+        if payable < earned:
+            unpaid_students.add(line.student_id)
+    row['waiting'] = row['earned'] - row['accrued']
+    row['students_unpaid'] = len(unpaid_students)
+    return row
 
 
 def teacher_accrual(company, teacher, start: date, end: date) -> dict:
@@ -197,19 +254,43 @@ def teacher_accrual(company, teacher, start: date, end: date) -> dict:
     from crm.models import Group
     from operations.models import TeacherAttendanceRecord
 
-    held = {}
-    for group_id, day in TeacherAttendanceRecord.objects.filter(
+    held: dict[int, list] = {}
+    for record in TeacherAttendanceRecord.objects.filter(
         company=company, teacher=teacher, attend_date__gte=start, attend_date__lte=end,
         status__in=HELD_STATUSES,
-    ).values_list('group_id', 'attend_date'):
-        held.setdefault(group_id, set()).add(day)
+    ):
+        held.setdefault(record.group_id, []).append(record)
     # Groups the teacher leads now are listed too (with 0 lessons), so a missing mark is visible
     group_ids = set(held) | set(
         Group.objects.filter(company=company, teacher=teacher, status=Group.Status.ACTIVE).values_list('id', flat=True)
     )
     groups = Group.objects.filter(pk__in=group_ids).select_related('course', 'branch').order_by('name')
-    rows = [_group_accrual(company, teacher, g, held.get(g.id, set()), start, end) for g in groups]
-    return {'groups': rows, 'accrued': sum(r['accrued'] for r in rows)}
+    rows = [_group_accrual(company, teacher, g, held.get(g.id, []), start, end) for g in groups]
+    return {
+        'groups': rows,
+        'accrued': sum(r['accrued'] for r in rows),
+        'earned': sum(r['earned'] for r in rows),
+        'waiting': sum(r['waiting'] for r in rows),
+    }
+
+
+def stamp_percents(company, start: date, end: date) -> int:
+    """
+    A month is being closed: every lesson of it that has no percent of its own yet gets the percent valid
+    for its day now — after that the percents of the closed month never move.
+    """
+    from operations.models import TeacherAttendanceRecord
+
+    stamped = 0
+    for record in TeacherAttendanceRecord.objects.filter(
+        company=company, attend_date__gte=start, attend_date__lte=end, percent__isnull=True,
+        status__in=HELD_STATUSES,
+    ).select_related('teacher', 'group'):
+        percent = percent_on(company, record.teacher, record.group, record.attend_date) if record.group_id else None
+        if percent is not None:
+            TeacherAttendanceRecord.objects.filter(pk=record.pk).update(percent=percent)
+            stamped += 1
+    return stamped
 
 
 # ---------------------------------------------------------------------------
@@ -251,7 +332,10 @@ def live_accrual(company, person, start: date, end: date) -> tuple[int, dict]:
     """The salary counted from today's data: (accrued, details for "Как посчитано")."""
     if _is_teacher(person):
         accrual = teacher_accrual(company, person, start, end)
-        return accrual['accrued'], {'groups': accrual['groups'], 'fixed_amount': None}
+        return accrual['accrued'], {
+            'groups': accrual['groups'], 'fixed_amount': None,
+            'earned': accrual['earned'], 'waiting': accrual['waiting'],
+        }
     setting = staff_fixed(company, person, start, end)
     amount = setting.amount if setting else 0
     return amount, {'groups': [], 'fixed_amount': amount if setting else None}
@@ -303,12 +387,15 @@ def person_payroll(company, person, month_key: str, start: date, end: date, clos
     if closed is _LOOKUP:
         closed = closed_month_of(company, month_key)
     is_teacher = _is_teacher(person)
-    if closed is not None:
-        # Closed month: the salary saved at closing time, whatever changed since
+    if closed is not None and not is_teacher:
+        # Closed month, office staff: the monthly sum saved at closing time, whatever changed since
         snapshot = PayrollSnapshot.objects.filter(closed_month=closed, person=person).first()
         base = snapshot.accrued if snapshot else 0
         details = snapshot.details if snapshot else {}
     else:
+        # A teacher's month is counted from facts that no longer change (lessons with their percents, the
+        # students' month lines) — closed or not. Only a late payment of a student adds to it: that is
+        # exactly "the rest is paid when the students pay".
         base, details = live_accrual(company, person, start, end)
     groups = details.get('groups') or []
     fixed_amount = details.get('fixed_amount')
@@ -354,6 +441,9 @@ def person_payroll(company, person, month_key: str, start: date, end: date, clos
             for a in adjustments
         ],
         'accrued': accrued,
+        # Teacher: earned if every student pays in full, and the part still waiting for the students' money
+        'earned': (details.get('earned') or 0) if is_teacher else accrued,
+        'waiting': (details.get('waiting') or 0) if is_teacher else 0,
         'paid': paid,
         # Owed to THIS person (never offset by an overpayment to somebody else)
         'balance': max(0, balance),

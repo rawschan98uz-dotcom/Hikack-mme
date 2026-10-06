@@ -132,7 +132,6 @@ class Student(models.Model):
     wallet_amount = models.BigIntegerField(default=0)
     paid_this_month = models.BooleanField(default=False)
     trial_date = models.DateField(null=True, blank=True)
-    payment_offset = models.IntegerField(default=0)
     # After a freeze the student's next month may not start before the day they came back (finance/charges.py)
     charge_resume_date = models.DateField(null=True, blank=True)
     left_at = models.DateTimeField(null=True, blank=True)

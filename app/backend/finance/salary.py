@@ -1,6 +1,6 @@
 """Salary setting rules shared by payroll summary and payout (D8)."""
 
-from django.db.models import F, Q
+from django.db.models import Q
 
 from finance.models import SalarySetting
 
@@ -12,26 +12,6 @@ def _period_overlap_q(start_date, end_date) -> Q:
     if start_date is not None:
         q &= Q(effective_to__isnull=True) | Q(effective_to__gte=start_date)
     return q
-
-
-def _by_seniority(qs):
-    # Precedence: the most recently started period wins; open start (NULL) is the oldest; then newest record.
-    return qs.order_by(F('effective_from').desc(nulls_last=True), '-id')
-
-
-def resolve_salary_setting(company, teacher, start_date, end_date) -> SalarySetting | None:
-    """The single salary setting that applies to `teacher` for the period [start_date, end_date]."""
-    period = _period_overlap_q(start_date, end_date)
-    setting = _by_seniority(SalarySetting.objects.filter(company=company, teacher=teacher).filter(period)).first()
-    if setting:
-        return setting
-
-    # Legacy settings saved only with a teacher name
-    name = teacher.display_name().strip().lower()
-    for candidate in _by_seniority(SalarySetting.objects.filter(company=company, teacher__isnull=True).filter(period)):
-        if candidate.teacher_name.strip().lower() == name:
-            return candidate
-    return None
 
 
 def find_overlapping_setting(company, teacher, course_id, group_id, effective_from, effective_to, exclude_pk=None):
@@ -52,19 +32,3 @@ def overlap_error(setting: SalarySetting) -> str:
     return f'У учителя уже есть ставка на пересекающийся период ({start} — {end}). Сначала закройте её датой окончания.'
 
 
-def students_in_groups_during(company, groups, start_date, end_date) -> int:
-    """
-    How many different students were in these groups during [start_date, end_date],
-    taken from the group history (GroupEnrollment), not from who studies today.
-    A student counts if their stay in the group overlaps the period. Students frozen right now
-    are left out of the current month (the history does not keep past freeze periods).
-    """
-    from django.utils import timezone
-    from crm.models import GroupEnrollment
-
-    qs = GroupEnrollment.objects.filter(
-        company=company, group__in=groups, joined_date__lte=end_date,
-    ).filter(Q(left_date__isnull=True) | Q(left_date__gt=start_date))
-    if start_date <= timezone.localdate() <= end_date:
-        qs = qs.exclude(left_date__isnull=True, status=GroupEnrollment.Status.FROZEN)
-    return qs.values('student_id').distinct().count()

@@ -153,6 +153,9 @@ class TeacherAttendanceRecord(models.Model):
     group = models.ForeignKey('crm.Group', on_delete=models.CASCADE, related_name='teacher_attendance_records')
     attend_date = models.DateField()
     status = models.IntegerField(choices=Status.choices, default=Status.PRESENT)
+    # The teacher's percent on the day the lesson was marked (owner, 2026-10-05): a later change of the
+    # percent never recounts a lesson already given. NULL = no percent was set yet (finance/payroll.py).
+    percent = models.PositiveSmallIntegerField(null=True, blank=True)
     note = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -166,6 +169,16 @@ class TeacherAttendanceRecord(models.Model):
         indexes = [
             models.Index(fields=['company', 'attend_date']),
         ]
+
+    def save(self, *args, **kwargs):
+        if self.percent is None and self.status in (self.Status.PRESENT, self.Status.LATE) and self.group_id:
+            from finance.payroll import percent_on
+
+            self.percent = percent_on(self.company, self.teacher, self.group, self.attend_date)
+            fields = kwargs.get('update_fields')
+            if fields is not None and self.percent is not None:
+                kwargs['update_fields'] = set(fields) | {'percent'}
+        super().save(*args, **kwargs)
 
     def __str__(self) -> str:
         return f'{self.teacher} — {self.attend_date}'

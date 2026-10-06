@@ -399,3 +399,84 @@ class ReturnTests(Base):
         self.assertEqual([l[0] for l in self.lines(aziz)], [date(2026, 6, 1), date(2026, 7, 1), TODAY])
         card = self.card(aziz)
         self.assertEqual((card['is_debtor'], card['debt_months'], card['debt_amount']), (True, 2, 1_000_000))
+
+
+class DiscountTests(Base):
+    """Stage 3: a discount lowers the month it is given for (never more than half), it is not money."""
+
+    def test_discount_lowers_the_month(self):
+        aziz = self.student(date(2026, 9, 17))
+        payment = self.pay(aziz, 400_000, discount_amount=100_000)
+        self.assertEqual(payment['months_covered'], 1)
+        line = self.card(aziz)['charges'][0]
+        self.assertEqual((line['price'], line['discount'], line['amount'], line['paid'], line['state']),
+                         (500_000, 100_000, 400_000, 400_000, 'paid'))
+
+    def test_not_more_than_half_of_the_price(self):
+        aziz = self.student(date(2026, 9, 17))
+        res = self.c.post('/v1/replenishments', {'student_id': aziz.id, 'amount': 1, 'discount_amount': 250_001},
+                          format='json')
+        self.assertEqual(res.status_code, 400)
+        self.assertIn('50%', res.json()['message'])
+        self.c.force_authenticate(self.admin)  # the administrator gives a discount freely inside the limit
+        self.pay(aziz, 250_000, discount_amount=250_000)
+        self.assertEqual(self.card(aziz)['charges'][0]['state'], 'paid')
+
+    def test_discount_is_spread_over_the_months_it_was_given_for(self):
+        aziz = self.student(date(2026, 8, 5))  # August, September and October have begun
+        payment = self.pay(aziz, 1_200_000, discount_amount=300_000, months_covered=3)
+        self.assertEqual(payment['months_covered'], 3)
+        self.assertEqual([(l[2], l[3]) for l in self.lines(aziz)], [(400_000, 400_000)] * 3)
+
+    def test_discount_goes_away_with_its_payment(self):
+        aziz = self.student(date(2026, 9, 17))
+        payment = self.pay(aziz, 400_000, discount_amount=100_000)
+        self.c.delete(f'/v1/replenishments/{payment["id"]}')
+        line = self.card(aziz)['charges'][0]
+        self.assertEqual((line['discount'], line['amount'], line['paid']), (0, 500_000, 0))
+
+    def test_money_is_not_lost_when_a_partly_paid_month_is_written_off(self):
+        aziz = self.student(date(2026, 9, 1))
+        self.pay(aziz, 300_000, date(2026, 9, 2))
+        self.c.patch(f'/v1/students/{aziz.id}', {'status': Student.Status.LEFT}, format='json')
+        reminder = Reminder.objects.get(student=aziz, kind=Reminder.KIND_UNPAID_LEAVE)
+        self.c.post(f'/v1/reminders/{reminder.id}/complete', {'write_off_reason': 'переехали'}, format='json')
+        self.assertEqual([l[3] for l in self.lines(aziz)], [300_000, 0])  # the 300 000 stay on September
+        row = next(r for r in self.c.get('/v1/reports/left-students').json()['data']['rows'] if r['id'] == aziz.id)
+        self.assertEqual((row['written_off_months'], row['written_off_amount']), (2, 700_000))
+
+
+class PreviewTests(Base):
+    def preview(self, s, **body):
+        res = self.c.post(f'/v1/students/{s.id}/payment-preview', body, format='json')
+        self.assertEqual(res.status_code, 200, res.content)
+        return res.json()['data']
+
+    def test_shows_what_the_sum_will_do_and_saves_nothing(self):
+        aziz = self.student(date(2026, 9, 1))  # owes September and October
+        data = self.preview(aziz, amount=800_000)
+        self.assertEqual((data['debt_before'], data['debt_after'], data['months_closed']), (1_000_000, 200_000, 1))
+        self.assertEqual([(c['period_start'], c['pays'], c['left_after']) for c in data['closes']],
+                         [('2026-09-01', 500_000, 0), ('2026-10-01', 300_000, 200_000)])
+        self.assertEqual(data['next_payment_date'], '2026-10-01')
+        self.assertFalse(Payment.objects.exists())
+        self.assertEqual([l[3] for l in self.lines(aziz)], [0, 0])
+        self.assertEqual(self.card(aziz)['wallet'], 0)
+
+    def test_months_ahead_are_shown_too(self):
+        aziz = self.student(date(2026, 9, 17))
+        data = self.preview(aziz, amount=1_000_000)
+        self.assertEqual([(c['period_start'], c['ahead']) for c in data['closes']],
+                         [('2026-09-17', False), ('2026-10-17', True)])
+        self.assertEqual(len(self.lines(aziz)), 1)  # the month ahead was not really written
+
+    def test_too_big_discount_is_reported_and_not_applied(self):
+        aziz = self.student(date(2026, 9, 17))
+        data = self.preview(aziz, amount=200_000, discount_amount=300_000)
+        self.assertIn('50%', data['discount_error'])
+        self.assertEqual(data['closes'][0]['amount'], 500_000)
+
+    def test_teacher_cannot_preview(self):
+        aziz = self.student(date(2026, 9, 17))
+        self.c.force_authenticate(self.tom)
+        self.assertEqual(self.c.post(f'/v1/students/{aziz.id}/payment-preview', {'amount': 1}, format='json').status_code, 403)

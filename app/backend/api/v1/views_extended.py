@@ -694,14 +694,19 @@ def _parse_money_date(raw, label: str):
 
 
 def _discount_error(discount: int, month_price: int, months: int) -> str | None:
-    """Owner (2026-09-28): a discount is a sum, given by hand, not more than the price of the months paid for."""
+    """Owner (2026-10-05): a discount is a sum, given freely, but never more than half the price of the months paid for."""
+    from finance.charges import MAX_DISCOUNT_PERCENT
+
     if discount <= 0:
         return None
     if not month_price or month_price <= 0:
         return 'Скидку можно дать, только когда у ученика есть цена курса (группа с ценой).'
-    limit = month_price * max(1, months)
+    limit = month_price * max(1, months) * MAX_DISCOUNT_PERCENT // 100
     if discount > limit:
-        return f'Скидка больше цены оплачиваемых месяцев ({_money_str(limit)} сум).'
+        return (
+            f'Скидка не может быть больше {MAX_DISCOUNT_PERCENT}% цены оплачиваемых месяцев: '
+            f'не больше {_money_str(limit)} сум.'
+        )
     return None
 
 
@@ -738,6 +743,9 @@ def _serialize_payment(payment: Payment) -> dict:
         'reverses_payment_id': payment.reverses_payment_id,
         'months_covered': getattr(payment, 'months_covered', 1) if getattr(payment, 'months_covered', None) is not None else 1,
         'refunded_months': getattr(payment, 'refunded_months', 0) or 0,
+        # Money given back from this payment, and over how many months its discount is spread
+        'refunded_amount': getattr(payment, 'refunded_amount', 0) or 0,
+        'discount_months': getattr(payment, 'discount_months', 1) or 1,
         # Копилка payment (months counted from money) vs months entered by hand
         'month_price': getattr(payment, 'month_price', None),
         'months_auto': getattr(payment, 'month_price', None) is not None,
@@ -813,8 +821,9 @@ def replenishments(request):
             gross_amount=amount + discount_amount,
             net_amount=amount,
             discount_amount=discount_amount,
+            discount_months=min(max(1, intended_months), 120),
             transaction_type=Payment.TransactionType.PAYMENT,
-            months_covered=0,  # filled in by the копилка
+            months_covered=0,  # how many month lines it closed: written by finance/charges.py
             payment_date=payment_date,
             method=method,
             teacher_name=teacher.display_name() if teacher else '',
@@ -1061,7 +1070,8 @@ def payment_detail(request, payment_id: int):
         if discount is None:
             return fail('Скидка — целое число (сумма), или оставьте поле пустым.')
         if discount != payment.discount_amount:
-            error = _discount_error(discount, payment.month_price or 0, payment.months_covered or 1)
+            price = (current_month_price(payment.student) if payment.student_id else 0) or payment.month_price or 0
+            error = _discount_error(discount, price, payment.discount_months or 1)
             if error:
                 return fail(error)
             payment.discount_amount = discount
@@ -1113,6 +1123,31 @@ def payment_detail(request, payment_id: int):
             sync_student_paid_this_month(payment.student)
 
     return ok(_serialize_payment(payment))
+
+
+@api_view(['POST'])
+def payment_preview(request, student_id: int):
+    """What the sum in the payment form will do: which months it closes and what is still owed. Saves nothing."""
+    from finance.charges import preview_payment
+
+    company = _company(request)
+    if company is None:
+        return fail('Company not found', status_code=404)
+    try:
+        student = Student.objects.select_related('group__course').get(pk=student_id, company=company)
+    except Student.DoesNotExist:
+        return fail('Ученик не найден.', status_code=404)
+    if not can_access_student(request.user, student):
+        return fail('Ученик не найден.', status_code=404)
+    money = _parse_money(request.data.get('amount'), allow_zero=True) or 0
+    discount = _parse_money(request.data.get('discount_amount') or 0, allow_zero=True) or 0
+    months = safe_int(request.data.get('months_covered'), default=1) or 1
+    day = parse_date_safe(request.data.get('payment_date')) or timezone.localdate()
+    error = _discount_error(discount, current_month_price(student), months)
+    data = preview_payment(student, money, 0 if error else discount, months, min(day, timezone.localdate()))
+    data['discount_error'] = error
+    data['month_price'] = current_month_price(student)
+    return ok(data)
 
 
 @api_view(['GET'])

@@ -30,6 +30,7 @@ ROUTE_RULES: list[tuple[tuple[str, ...], str, str | None]] = [
     (('POST',), r'^students/import$', P.PERM_STUDENTS_WRITE),
     (('GET',), r'^students/\d+$', P.PERM_STUDENTS_VIEW),
     (('GET',), r'^students/\d+/payments$', P.PERM_STUDENTS_VIEW),
+    (('POST',), r'^students/\d+/payment-preview$', P.PERM_PAYMENTS_WRITE),
     (('GET',), r'^students/\d+/payment-links$', P.PERM_STUDENTS_VIEW),
     (('POST',), r'^students/\d+/send-payment-link$', P.PERM_STUDENTS_WRITE),
     (('PATCH', 'POST'), r'^students/\d+$', P.PERM_STUDENTS_WRITE),

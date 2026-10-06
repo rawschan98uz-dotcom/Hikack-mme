@@ -17,6 +17,7 @@ urlpatterns = [
     path('students/import', views_import.student_import),
     path('students/<int:student_id>', views.student_detail),
     path('students/<int:student_id>/payments', views_extended.student_payments),
+    path('students/<int:student_id>/payment-preview', views_extended.payment_preview),
     path('students/<int:student_id>/payment-links', views_payments.student_payment_links),
     path('students/<int:student_id>/send-payment-link', views_payments.student_send_payment_link),
     path('students/<int:student_id>/photo', views.student_photo),

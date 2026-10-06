@@ -70,6 +70,9 @@ class Payment(models.Model):
         related_name='payments',
     )
     discount_amount = models.BigIntegerField(default=0)
+    # Over how many months the discount is spread ("3 months, 300 000 off" = 100 000 off each of them).
+    # The discount lowers the sum of the month lines this payment pays, never more than half of a month.
+    discount_months = models.PositiveSmallIntegerField(default=1)
     gross_amount = models.BigIntegerField(null=True, blank=True)
     net_amount = models.BigIntegerField(null=True, blank=True)
     teacher_name = models.CharField(max_length=255, blank=True)

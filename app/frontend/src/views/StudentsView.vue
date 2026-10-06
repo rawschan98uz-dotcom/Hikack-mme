@@ -4,7 +4,8 @@ import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 
 import client, { type ApiEnvelope } from '../api/client';
-import { formatSum, walletPreview } from '../utils/wallet';
+import { formatSum } from '../utils/wallet';
+import PaymentPreviewHint from '../components/PaymentPreviewHint.vue';
 import { useAuthStore } from '../stores/auth';
 import { PERM } from '../utils/rbac';
 import { downloadCsv } from '../utils/csvExport';
@@ -218,17 +219,13 @@ function openAcceptPaymentModal() {
   payForm.discount = '';
   payForm.payment_date = todayIso();
   const coursePrice = detailStudent.value.course_price || 0;
-  payForm.amount = coursePrice || 0;
+  // A debtor: the sum of the debt is offered first; otherwise one month
+  payForm.amount = detailStudent.value.debt_amount || coursePrice || 0;
   payForm.method = 'cash';
   payForm.comment = '';
   payError.value = '';
   showPayModal.value = true;
 }
-
-// Копилка: what the entered sum will actually do (months are counted from money when the price is known)
-const payPreview = computed(() =>
-  walletPreview(detailStudent.value?.course_price, detailStudent.value?.wallet, payForm.amount, Number(payForm.discount) || 0),
-);
 
 function onPayMonthsChange() {
   if (payForm.months_covered < 1) payForm.months_covered = 1;
@@ -1790,14 +1787,13 @@ onMounted(async () => {
             <p v-if="detailStudent?.course_price" class="mt-1 text-[11px] text-fb-secondary">
               Стоимость курса: {{ detailStudent.course_price.toLocaleString() }} UZS / мес.
             </p>
-            <p v-if="payPreview" class="mt-1 rounded-md bg-emerald-50 px-2 py-1 text-xs text-emerald-800">
-              Эта оплата закроет <strong>{{ payPreview.months }} мес.</strong><span v-if="payPreview.left">,
-              в копилке останется <strong>{{ formatSum(payPreview.left) }}</strong>
-              (до следующего месяца не хватит {{ formatSum(payPreview.missing) }})</span>.
-            </p>
-            <p v-else-if="detailStudent && !detailStudent.course_price" class="mt-1 text-[11px] text-amber-700">
-              У ученика нет цены курса — деньги лягут в копилку и засчитаются, когда ученика добавят в группу с ценой.
-            </p>
+            <PaymentPreviewHint
+              :student-id="detailStudent?.id"
+              :amount="payForm.amount"
+              :discount="Number(payForm.discount) || 0"
+              :months="payForm.months_covered"
+              :date="payForm.payment_date"
+            />
           </div>
 
           <div>

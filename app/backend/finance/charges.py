@@ -7,6 +7,8 @@ Student month lines — "строки" (owner, 2026-10-05). The way a paper ledg
   * A payment closes lines, the oldest unpaid one first (finance.PaymentAllocation). The September debt
     paid in December closes the September line and touches nothing else.
   * Money on top of every existing line pays the next months in advance, at the price of the payment day.
+  * A discount given with a payment lowers the sum of the months that payment pays (never more than half
+    of a month's price); it is not money, so the teacher's percent is counted from what was really paid.
   * A debt is simply the lines that are not paid in full; its sum is exact, each month at its own price.
   * A freeze pauses the running month: what was left of it continues from the day the student comes back.
 
@@ -35,6 +37,8 @@ MAX_NEW_LINES = 240  # 20 years of months: a guard against an endless loop, neve
 # Nobody pays for more than two years ahead. Money beyond that waits in the копилка — and a sum typed with
 # extra zeros (or a price typed without them) cannot write hundreds of "paid" months
 MAX_MONTHS_AHEAD = 24
+# Owner (2026-10-05): a discount is free, but never more than half of the month's price
+MAX_DISCOUNT_PERCENT = 50
 GONE = (Student.Status.LEFT, Student.Status.GRADUATED)
 
 
@@ -207,6 +211,11 @@ def _allocate(student: Student, today: date) -> None:
     can_prepay = student.status in Student.CURRENT_STATUSES
 
     paid = {line.id: 0 for line in lines}
+    # Discounts are facts of payments: every pass gives them to the lines again
+    discount = {line.id: 0 if line.status == OPEN else line.discount for line in lines}
+    # How much a line takes: its price (minus discounts, below); a written-off line keeps only the money
+    # that was already on it — the rest of it was forgiven
+    amount = {line.id: line.price if line.status == OPEN else line.paid_amount for line in lines}
     paid_at: dict[int, date] = {}
     closed_by = {p.id: 0 for p in payments}
     given_back = {}
@@ -217,13 +226,15 @@ def _allocate(student: Student, today: date) -> None:
     for payment in payments:
         back = min(refunded.get(payment.id) or 0, payment.amount or 0)
         given_back[payment.id] = back
-        # A discount entered with a payment counts as paid (owner, 2026-09-27)
-        value = max(0, (payment.amount or 0) + (payment.discount_amount or 0) - back)
+        value = max(0, (payment.amount or 0) - back)
         day = payment_day(payment)
+        # The discount of this payment: spread over the months it was given for, the oldest it pays first
+        off_left = max(0, payment.discount_amount or 0)
+        off_months = max(1, payment.discount_months or 1)
+        off_each = off_left // off_months
+        off_given: set[int] = set()
         while value > 0:
-            while index < len(lines) and (
-                lines[index].status != OPEN or paid[lines[index].id] >= lines[index].amount
-            ):
+            while index < len(lines) and paid[lines[index].id] >= amount[lines[index].id]:
                 index += 1
             if index == len(lines):
                 line = None
@@ -232,15 +243,24 @@ def _allocate(student: Student, today: date) -> None:
                 if line is None:
                     break
                 lines.append(line)
-                paid[line.id] = 0
+                paid[line.id], discount[line.id], amount[line.id] = 0, 0, line.price
                 if line.period_start > today:
                     ahead += 1
             line = lines[index]
-            part = min(value, line.amount - paid[line.id])
-            parts[(payment.id, line.id)] = parts.get((payment.id, line.id), 0) + part
-            paid[line.id] += part
-            value -= part
-            if paid[line.id] >= line.amount:
+            if line.status == OPEN and off_left > 0 and off_months > 0 and line.id not in off_given:
+                off_given.add(line.id)
+                room = line.price * MAX_DISCOUNT_PERCENT // 100 - discount[line.id]
+                give = max(0, min(off_each if off_months > 1 else off_left, room, amount[line.id] - paid[line.id]))
+                discount[line.id] += give
+                amount[line.id] -= give
+                off_left -= give
+                off_months -= 1
+            part = min(value, amount[line.id] - paid[line.id])
+            if part > 0:
+                parts[(payment.id, line.id)] = parts.get((payment.id, line.id), 0) + part
+                paid[line.id] += part
+                value -= part
+            if line.status == OPEN and paid[line.id] >= amount[line.id]:
                 paid_at[line.id] = day
                 closed_by[payment.id] += 1
         waiting += value
@@ -262,8 +282,15 @@ def _allocate(student: Student, today: date) -> None:
         for (payment_id, line_id), amount in parts.items() if line_id in kept and amount > 0
     ])
     for line in lines:
-        if line.paid_amount != paid[line.id] or line.paid_at != paid_at.get(line.id):
-            StudentCharge.objects.filter(pk=line.pk).update(paid_amount=paid[line.id], paid_at=paid_at.get(line.id))
+        if line.status != OPEN:
+            if line.paid_amount != paid[line.id]:
+                StudentCharge.objects.filter(pk=line.pk).update(paid_amount=paid[line.id])
+            continue
+        new = (paid[line.id], paid_at.get(line.id), discount[line.id], amount[line.id])
+        if (line.paid_amount, line.paid_at, line.discount, line.amount) != new:
+            StudentCharge.objects.filter(pk=line.pk).update(
+                paid_amount=new[0], paid_at=new[1], discount=new[2], amount=new[3],
+            )
     for payment in payments:
         if (
             payment.months_covered != closed_by[payment.id]
@@ -276,7 +303,7 @@ def _allocate(student: Student, today: date) -> None:
             )
     # "Копилка": money already brought towards a month that is not paid in full yet
     wallet = waiting + sum(
-        paid[line.id] for line in lines if line.status == OPEN and 0 < paid[line.id] < line.amount
+        paid[line.id] for line in lines if line.status == OPEN and 0 < paid[line.id] < amount[line.id]
     )
     if student.wallet_amount != wallet:
         Student.objects.filter(pk=student.pk).update(wallet_amount=wallet)
@@ -355,6 +382,64 @@ def write_off(student: Student, before: date) -> int:
     ids = [line.id for line in lines if line.paid_amount < line.amount]
     StudentCharge.objects.filter(pk__in=ids).update(status=WRITTEN_OFF)
     return len(ids)
+
+
+class _Undo(Exception):
+    pass
+
+
+def preview_payment(student: Student, money: int, discount: int = 0, months: int = 1, day: date | None = None) -> dict:
+    """
+    What a payment WOULD do, counted by the very same code that counts a real one: the payment is written,
+    the lines are recounted, the result is read — and everything is rolled back. Nothing is saved.
+    """
+    today = timezone.localdate()
+    refresh(student, today)
+
+    def owed(lines):
+        return sum(line.amount - line.paid_amount for line in lines if _unpaid(line) and line.period_start <= today)
+
+    before = student_lines(student)
+    result = {
+        'debt_before': owed(before), 'debt_after': owed(before), 'closes': [], 'months_closed': 0,
+        'waiting': 0, 'next_payment_date': schedule(student, before)['next_due'].isoformat(),
+    }
+    if money <= 0:
+        return result
+    had = {line.id: line.paid_amount for line in before}
+    try:
+        with transaction.atomic():
+            payment = Payment.objects.create(
+                company_id=student.company_id, student=student, student_name=student.full_name, amount=money,
+                discount_amount=max(0, discount), discount_months=max(1, months), payment_date=day or today,
+                transaction_type=Payment.TransactionType.PAYMENT, months_covered=0,
+            )  # the post_save signal spreads it over the lines
+            after = StudentCharge.objects.filter(student=student).order_by('seq')
+            taken = dict(PaymentAllocation.objects.filter(payment=payment).values_list('charge_id', 'amount'))
+            lines = list(after)
+            for line in lines:
+                if line.id not in taken:
+                    continue
+                result['closes'].append({
+                    'period_start': line.period_start.isoformat(),
+                    'period_end': line.period_end.isoformat(),
+                    'price': line.price,
+                    'discount': line.discount,
+                    'amount': line.amount,
+                    'paid_before': had.get(line.id, 0),
+                    'pays': taken[line.id],
+                    'left_after': max(0, line.amount - line.paid_amount),
+                    'ahead': line.period_start > today,
+                })
+            result['months_closed'] = Payment.objects.get(pk=payment.pk).months_covered
+            result['waiting'] = money - sum(taken.values())
+            result['debt_after'] = owed(lines)
+            result['next_payment_date'] = schedule(student, lines)['next_due'].isoformat()
+            raise _Undo
+    except _Undo:
+        pass
+    student.refresh_from_db(fields=['wallet_amount'])
+    return result
 
 
 def reprice_unpaid(course, old_price: int, new_price: int, valid_from: date | None, valid_until: date | None) -> tuple[int, int]:

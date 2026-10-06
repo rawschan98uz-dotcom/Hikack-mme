@@ -87,9 +87,10 @@ class DiscountTests(Base):
     def test_discount_not_more_than_months_paid_for(self):
         res = self.pay(self.ali, 1_000, discount_amount=9_600_000)
         self.assertEqual(res.status_code, 400)
-        self.assertIn('Скидка больше цены', res.json()['message'])
-        # paying for 2 months: up to 1 600 000 of discount
-        self.assertEqual(self.pay(self.ali, 100_000, discount_amount=1_500_000, months_covered=2).status_code, 201)
+        self.assertIn('50%', res.json()['message'])
+        # Owner (2026-10-05): not more than half. Paying for 2 months of 800 000: up to 800 000 of discount
+        self.assertEqual(self.pay(self.ali, 100_000, discount_amount=800_001, months_covered=2).status_code, 400)
+        self.assertEqual(self.pay(self.ali, 800_000, discount_amount=800_000, months_covered=2).status_code, 201)
 
     def test_discount_needs_course_price(self):
         self.ga.course = None

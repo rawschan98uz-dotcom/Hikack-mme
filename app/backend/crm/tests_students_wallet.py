@@ -75,7 +75,8 @@ class WalletTests(TestCase):
         self.assertEqual(row['next_payment_date'], '2026-09-01')
 
     def test_discount_counts_as_paid(self):
-        data = self.pay(600_000, discount_amount=200_000)
+        # The discount lowers the month it is given for: 800 000 − 200 000 = 600 000 closes it
+        data = self.pay(600_000, discount_amount=200_000, months_covered=1)
         self.assertEqual(data['months_covered'], 1)
         self.assertEqual(self.card()['wallet'], 0)
 

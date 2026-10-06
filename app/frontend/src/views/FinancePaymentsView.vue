@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 
 import client, { type ApiEnvelope } from '../api/client';
-import { formatSum, walletPreview } from '../utils/wallet';
+import PaymentPreviewHint from '../components/PaymentPreviewHint.vue';
 import { todayIso } from '../utils/dates';
 import { useAuthStore } from '../stores/auth';
 import { PERM } from '../utils/rbac';
@@ -29,6 +29,7 @@ interface PaymentRow {
   months_covered?: number;
   /** Months taken back by refunds of this payment. */
   refunded_months?: number;
+  refunded_amount?: number;
   /** true = months counted from the money (копилка), false = entered by hand. */
   months_auto?: boolean;
   /** Price of a month for копилка payments; 0 = money waiting in the копилка for a course price. */
@@ -52,6 +53,7 @@ interface StudentOption {
   group_teacher?: string;
   course_price?: number;
   wallet?: number;
+  debt_amount?: number;
 }
 
 type PageArray<T> = T[] & { has_more?: boolean; next_offset?: number | null };
@@ -182,20 +184,10 @@ function selectStudent(student: StudentOption) {
     form.teacher_name = student.group_teacher;
   }
   refillAmount();
+  // A debtor: the sum of the debt is offered first
+  if (!editingRow.value && !detailRow.value && student.debt_amount) form.amount = student.debt_amount;
   showStudentDropdown.value = false;
 }
-
-// Копилка preview for a new payment (editing an existing one is recounted by the server)
-const payPreview = computed(() =>
-  editingRow.value || detailRow.value
-    ? null
-    : walletPreview(
-        selectedStudent.value?.course_price,
-        selectedStudent.value?.wallet,
-        Number(form.amount) || 0,
-        Number(form.discount) || 0,
-      ),
-);
 
 function onMonthsChange() {
   if (form.months_covered < 1) form.months_covered = 1;
@@ -248,6 +240,7 @@ async function loadStudentsList() {
       group_teacher: s.group_teacher || '',
       course_price: s.course_price || 0,
       wallet: s.wallet || 0,
+      debt_amount: s.debt_amount || 0,
     }));
   } catch {
     studentsList.value = [];
@@ -540,11 +533,11 @@ watch(
                   {{ row.months_covered ?? 1 }} mo
                 </span>
                 <span
-                  v-if="row.refunded_months"
+                  v-if="row.refunded_amount"
                   class="ml-1 inline-flex items-center rounded-full bg-rose-50 px-2 py-0.5 text-xs font-medium text-rose-700"
-                  title="Столько месяцев этого платежа отменено возвратом"
+                  title="Столько денег этой оплаты возвращено; месяцы, которые она закрывала, пересчитаны"
                 >
-                  −{{ row.refunded_months }} возврат
+                  возврат {{ formatMoney(row.refunded_amount) }}
                 </span>
               </template>
             </td>
@@ -698,14 +691,14 @@ watch(
                 required
                 class="w-full rounded-lg border px-3 py-2 text-sm read-only:bg-fb-canvas focus:border-fb-blue focus:outline-none"
               />
-              <p v-if="payPreview" class="mt-1 rounded-md bg-emerald-50 px-2 py-1 text-xs text-emerald-800">
-                Эта оплата закроет <strong>{{ payPreview.months }} мес.</strong><span v-if="payPreview.left">,
-                в копилке останется <strong>{{ formatSum(payPreview.left) }}</strong>
-                (до следующего месяца не хватит {{ formatSum(payPreview.missing) }})</span>.
-              </p>
-              <p v-else-if="selectedStudent && !selectedStudent.course_price && !detailRow" class="mt-1 text-xs text-amber-700">
-                У ученика нет цены курса — деньги лягут в копилку и засчитаются, когда ученика добавят в группу с ценой.
-              </p>
+              <PaymentPreviewHint
+                v-if="!editingRow && !detailRow"
+                :student-id="selectedStudent?.id"
+                :amount="Number(form.amount) || 0"
+                :discount="Number(form.discount) || 0"
+                :months="form.months_covered"
+                :date="form.payment_date"
+              />
               <p v-if="detailRow && !isRefund(detailRow) && detailRow.refunded_total" class="mt-1 text-xs text-rose-700">
                 По этой оплате уже возвращено {{ formatMoney(detailRow.refunded_total) }} сум.
               </p>

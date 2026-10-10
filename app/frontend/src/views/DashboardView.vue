@@ -246,7 +246,7 @@ onMounted(() => loadDashboard());
 </script>
 
 <template>
-  <div class="dashboard-page -m-6 min-h-full bg-fb-card border border-fb-line">
+  <div class="dashboard-page -m-3 min-h-full border border-fb-line bg-fb-card sm:-m-4 lg:-m-6">
     <SkeletonBlock v-if="loading" variant="cards" :rows="6" class="p-6" />
 
     <template v-else>

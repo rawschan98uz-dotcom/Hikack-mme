@@ -142,13 +142,13 @@ onMounted(() => loadMonths());
       </p>
     </div>
 
-    <div class="overflow-hidden rounded-2xl border border-fb-line bg-fb-card shadow-sm">
+    <div class="table-cards-wrap overflow-hidden rounded-2xl border border-fb-line bg-fb-card shadow-sm">
       <SkeletonBlock v-if="loading" :rows="6" :cols="6" />
       <div v-else-if="error" class="p-12 text-center text-fb-danger">{{ error }}</div>
       <div v-else-if="!months.length" class="p-12 text-center text-fb-secondary">
         {{ t('months.empty') }}
       </div>
-      <table v-else class="w-full text-left text-sm">
+      <table v-else class="table-cards w-full text-left text-sm">
         <thead class="border-b border-fb-line bg-fb-canvas text-xs font-semibold uppercase tracking-wider text-fb-secondary">
           <tr>
             <th class="px-5 py-3">{{ t('common.month') }}</th>
@@ -169,22 +169,22 @@ onMounted(() => loadMonths());
             :class="page?.month === row.month ? 'bg-fb-hover/60' : ''"
             @click="openMonth(row.month)"
           >
-            <td class="px-5 py-3 font-semibold text-fb-text">{{ formatMonthTitle(row.month) }}</td>
-            <td class="px-5 py-3 text-right text-fb-secondary">{{ row.lines }}</td>
-            <td class="px-5 py-3 text-right">{{ money(row.charged) }}</td>
-            <td class="px-5 py-3 text-right text-emerald-700">{{ money(row.paid) }}</td>
-            <td class="px-5 py-3 text-right font-semibold" :class="row.left ? 'text-rose-700' : 'text-fb-secondary'">
+            <td class="cell-main px-5 py-3 font-semibold text-fb-text">{{ formatMonthTitle(row.month) }}</td>
+            <td :data-label="t('months.lines')" class="px-5 py-3 text-right text-fb-secondary">{{ row.lines }}</td>
+            <td :data-label="t('months.charged')" class="px-5 py-3 text-right">{{ money(row.charged) }}</td>
+            <td :data-label="t('months.paid')" class="px-5 py-3 text-right text-emerald-700">{{ money(row.paid) }}</td>
+            <td :data-label="t('months.tail')" class="px-5 py-3 text-right font-semibold" :class="row.left ? 'text-rose-700' : 'text-fb-secondary'">
               {{ money(row.left) }}
             </td>
-            <td class="px-5 py-3 text-right" :class="row.debtors ? 'text-rose-700' : 'text-fb-secondary'">{{ row.debtors }}</td>
-            <td class="px-5 py-3 text-right text-fb-secondary">{{ row.written_off ? money(row.written_off) : '—' }}</td>
+            <td :data-label="t('months.debtors')" class="px-5 py-3 text-right" :class="row.debtors ? 'text-rose-700' : 'text-fb-secondary'">{{ row.debtors }}</td>
+            <td :data-label="t('months.writtenOff')" class="px-5 py-3 text-right text-fb-secondary">{{ row.written_off ? money(row.written_off) : '—' }}</td>
             <td class="px-5 py-3 text-right text-xs font-medium text-fb-blue">{{ t('months.openPage') }} →</td>
           </tr>
         </tbody>
       </table>
     </div>
 
-    <div v-if="page || pageLoading" class="overflow-hidden rounded-2xl border border-fb-line bg-fb-card shadow-sm">
+    <div v-if="page || pageLoading" class="table-cards-wrap overflow-hidden rounded-2xl border border-fb-line bg-fb-card shadow-sm">
       <SkeletonBlock v-if="pageLoading && !page" :rows="8" :cols="6" />
       <template v-else-if="page">
         <div class="flex flex-wrap items-center justify-between gap-3 border-b border-fb-line px-5 py-4">
@@ -214,7 +214,7 @@ onMounted(() => loadMonths());
         <div v-if="!page.rows.length" class="p-10 text-center text-fb-secondary">
           {{ onlyUnpaid ? t('months.allPaid') : t('months.noLines') }}
         </div>
-        <table v-else class="w-full text-left text-sm">
+        <table v-else class="table-cards w-full text-left text-sm">
           <thead class="border-b border-fb-line bg-fb-canvas text-xs font-semibold uppercase tracking-wider text-fb-secondary">
             <tr>
               <th class="px-5 py-3">{{ t('months.student') }}</th>
@@ -228,20 +228,20 @@ onMounted(() => loadMonths());
           </thead>
           <tbody class="divide-y divide-fb-line">
             <tr v-for="row in page.rows" :key="row.id">
-              <td class="px-5 py-3">
+              <td class="cell-main px-5 py-3">
                 <button type="button" class="font-semibold text-fb-blue hover:underline" @click="router.push(studentRoute(row.student_id))">
                   {{ row.student }}
                 </button>
                 <div class="text-xs text-fb-secondary">{{ row.phone }} · {{ row.student_status_label }}</div>
               </td>
-              <td class="px-5 py-3 text-fb-secondary">{{ row.group || '—' }}</td>
-              <td class="whitespace-nowrap px-5 py-3 text-fb-secondary">{{ day(row.period_start) }} — {{ day(row.period_end) }}</td>
-              <td class="px-5 py-3 text-right">
+              <td :data-label="t('schedule.group')" class="px-5 py-3 text-fb-secondary">{{ row.group || '—' }}</td>
+              <td :data-label="t('months.hisMonth')" class="whitespace-nowrap px-5 py-3 text-fb-secondary">{{ day(row.period_start) }} — {{ day(row.period_end) }}</td>
+              <td :data-label="t('months.charged')" class="px-5 py-3 text-right">
                 {{ money(row.amount) }}
                 <div v-if="row.discount" class="text-[11px] text-fb-secondary">{{ t('payHint.discount', { amount: money(row.discount) }) }}</div>
               </td>
-              <td class="px-5 py-3 text-right text-emerald-700">{{ money(row.paid) }}</td>
-              <td class="px-5 py-3 text-right font-semibold" :class="row.left ? 'text-rose-700' : 'text-fb-secondary'">
+              <td :data-label="t('months.paid')" class="px-5 py-3 text-right text-emerald-700">{{ money(row.paid) }}</td>
+              <td :data-label="t('months.left')" class="px-5 py-3 text-right font-semibold" :class="row.left ? 'text-rose-700' : 'text-fb-secondary'">
                 {{ money(row.left) }}
               </td>
               <td class="px-5 py-3 text-right">

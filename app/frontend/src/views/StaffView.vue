@@ -262,7 +262,7 @@ onMounted(loadRows);
       </svg>
     </div>
 
-    <div class="overflow-hidden rounded-xl border border-fb-line bg-fb-card">
+    <div class="table-cards-wrap overflow-hidden rounded-xl border border-fb-line bg-fb-card">
       <SkeletonBlock v-if="loading" :rows="6" :cols="5" />
       <EmptyState
         v-else-if="!filteredRows.length"
@@ -274,7 +274,7 @@ onMounted(loadRows);
         @action="openCreate"
         @reset="searchQuery = ''"
       />
-      <table v-else class="w-full text-base">
+      <table v-else class="table-cards w-full text-base">
         <thead class="border-b bg-fb-canvas">
           <tr>
             <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('common.fullName') }}</th>
@@ -285,12 +285,12 @@ onMounted(loadRows);
         </thead>
         <tbody>
           <tr v-for="row in filteredRows" :key="row.id" class="cursor-pointer border-b hover:bg-fb-hover/40" @click="openDetail(row.id)">
-            <td class="px-5 py-4">{{ row.name }}</td>
-            <td class="px-5 py-4">{{ row.job_title }}</td>
-            <td class="px-5 py-4">
+            <td class="cell-main px-5 py-4">{{ row.name }}</td>
+            <td :data-label="t('profile.jobTitle')" class="px-5 py-4">{{ row.job_title }}</td>
+            <td :data-label="t('staff.role')" class="px-5 py-4">
               {{ staffRoleLabel(row.staff_role, row.staff_role_label) }}<span v-if="row.branch" class="text-fb-secondary"> · {{ row.branch }}</span>
             </td>
-            <td class="px-5 py-4">{{ row.phone }}</td>
+            <td :data-label="t('common.phone')" class="px-5 py-4">{{ row.phone }}</td>
           </tr>
         </tbody>
       </table>

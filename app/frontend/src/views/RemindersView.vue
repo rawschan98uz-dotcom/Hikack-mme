@@ -418,7 +418,7 @@ onMounted(async () => {
       </button>
     </div>
 
-    <div class="overflow-hidden rounded-xl border border-fb-line bg-fb-card">
+    <div class="table-cards-wrap overflow-hidden rounded-xl border border-fb-line bg-fb-card">
       <SkeletonBlock v-if="loading" :rows="6" :cols="5" />
       <EmptyState
         v-else-if="!rows.length"
@@ -428,7 +428,7 @@ onMounted(async () => {
         :action-label="canWriteReminders ? t('reminders.addTitle') : ''"
         @action="openCreatePanel"
       />
-      <table v-else class="w-full text-base">
+      <table v-else class="table-cards w-full text-base">
         <thead class="border-b border-fb-line bg-fb-canvas">
           <tr>
             <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('reminders.title') }}</th>
@@ -446,7 +446,7 @@ onMounted(async () => {
             class="cursor-pointer border-b border-fb-line hover:bg-fb-hover/40"
             @click="openReminder(row)"
           >
-            <td class="px-5 py-4 font-medium text-fb-text">
+            <td class="cell-main px-5 py-4 font-medium text-fb-text">
               {{ row.title }}
               <button
                 v-if="row.student_id"
@@ -457,14 +457,14 @@ onMounted(async () => {
                 {{ t('dashboard.openStudent') }}
               </button>
             </td>
-            <td class="px-5 py-4 whitespace-pre-line text-fb-secondary">{{ row.details || '—' }}</td>
-            <td class="px-5 py-4 text-fb-secondary">{{ row.due_date }}</td>
-            <td class="px-5 py-4">
+            <td :data-label="t('reminders.details')" class="px-5 py-4 whitespace-pre-line text-fb-secondary">{{ row.details || '—' }}</td>
+            <td :data-label="t('reminders.dueDate')" class="px-5 py-4 text-fb-secondary">{{ row.due_date }}</td>
+            <td :data-label="t('common.status')" class="px-5 py-4">
               <span class="rounded-full px-2 py-0.5 text-xs capitalize" :class="statusClass(row.status)">
                 {{ reminderStatusLabel(row.status, row.status_label) }}
               </span>
             </td>
-            <td class="px-5 py-4 text-fb-secondary">{{ row.assigned_to }}</td>
+            <td :data-label="t('reminders.assignedTo')" class="px-5 py-4 text-fb-secondary">{{ row.assigned_to }}</td>
             <td class="px-5 py-4 text-right">
               <button
                 v-if="canComplete(row)"

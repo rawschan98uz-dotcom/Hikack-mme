@@ -352,7 +352,7 @@ onMounted(async () => {
     <div v-if="errorMessage" class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-fb-danger">{{ errorMessage }}</div>
 
     <!-- Lessons -->
-    <div class="overflow-hidden rounded-xl border border-fb-line bg-fb-card shadow-sm">
+    <div class="table-cards-wrap overflow-hidden rounded-xl border border-fb-line bg-fb-card shadow-sm">
       <SkeletonBlock v-if="loading" :rows="8" :cols="6" />
       <EmptyState
         v-else-if="!rows.length"
@@ -364,7 +364,7 @@ onMounted(async () => {
       />
       <template v-else>
         <div class="overflow-x-auto">
-          <table class="w-full text-sm">
+          <table class="table-cards w-full text-sm">
             <thead class="border-b border-fb-line bg-fb-canvas text-xs uppercase tracking-wider font-semibold text-fb-secondary">
               <tr>
                 <th class="px-5 py-3 text-left">{{ t('common.date') }}</th>
@@ -377,24 +377,24 @@ onMounted(async () => {
             </thead>
             <tbody class="divide-y divide-fb-line">
               <tr v-for="row in pageRows" :key="rowKey(row)">
-                <td class="px-5 py-3 whitespace-nowrap">
+                <td :data-label="t('common.date')" class="px-5 py-3 whitespace-nowrap">
                   <div class="font-medium text-fb-text">{{ formatDate(row.date) }}</div>
                   <div v-if="row.start_time" class="text-xs text-fb-secondary">{{ row.start_time }}–{{ row.end_time }}</div>
                 </td>
-                <td class="px-4 py-3">
+                <td class="cell-main px-4 py-3">
                   <button type="button" class="font-medium text-fb-blue hover:underline" @click="router.push(groupRoute(row.group_id))">{{ row.group }}</button>
                   <div class="text-xs text-fb-secondary">{{ row.branch }}</div>
                 </td>
-                <td class="px-4 py-3">
+                <td :data-label="t('schedule.teacher')" class="px-4 py-3">
                   <button v-if="row.teacher_id" type="button" class="text-fb-text hover:text-fb-blue hover:underline" @click="router.push(teacherRoute(row.teacher_id))">{{ row.teacher }}</button>
                   <span v-else class="text-fb-secondary">— {{ t('teacherAtt.noTeacher') }}</span>
                 </td>
-                <td class="px-4 py-3">
+                <td :data-label="t('common.status')" class="px-4 py-3">
                   <span class="rounded-full px-2.5 py-0.5 text-xs font-medium" :class="statusClass(row.status)">{{ statusLabel(row) }}</span>
                   <div v-if="row.note" class="mt-1 text-xs text-fb-secondary">{{ row.note }}</div>
                 </td>
-                <td class="px-4 py-3 text-xs text-fb-secondary">{{ row.marked_at || '—' }}</td>
-                <td v-if="canWrite" class="px-5 py-3 text-right whitespace-nowrap">
+                <td :data-label="t('teacherAtt.markedAt')" class="px-4 py-3 text-xs text-fb-secondary">{{ row.marked_at || '—' }}</td>
+                <td v-if="canWrite" :data-label="t('teacherAtt.whoTaught')" class="px-5 py-3 text-right whitespace-nowrap">
                   <span v-if="row.locked" class="text-xs text-fb-secondary" :title="t('teacherAtt.lockedHint')">🔒 {{ t('teacherAtt.locked') }}</span>
                   <div v-else class="inline-flex items-center gap-1">
                     <select

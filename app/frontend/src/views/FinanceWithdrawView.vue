@@ -257,7 +257,7 @@ watch(
       :note="t('totals.recordsCount', { count: periodTotal.count })"
     />
 
-    <div class="overflow-hidden rounded-xl border border-fb-line bg-fb-card">
+    <div class="table-cards-wrap overflow-hidden rounded-xl border border-fb-line bg-fb-card">
       <SkeletonBlock v-if="loading" :rows="8" :cols="6" />
       <EmptyState
         v-else-if="!tableRows.length"
@@ -269,7 +269,7 @@ watch(
         @action="openCreate"
         @reset="resetAndReload"
       />
-      <table v-else class="w-full text-base">
+      <table v-else class="table-cards w-full text-base">
         <thead class="border-b bg-fb-canvas">
           <tr>
             <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('common.date') }}</th>
@@ -281,11 +281,11 @@ watch(
         </thead>
         <tbody>
           <tr v-for="row in tableRows" :key="row.id" class="cursor-pointer border-b hover:bg-fb-hover/40" @click="openDetail(row.id)">
-            <td class="px-5 py-4">{{ row.date }}</td>
-            <td class="px-5 py-4 font-medium">{{ row.name }}</td>
-            <td class="px-5 py-4 font-semibold text-fb-blue">{{ row.sum }}</td>
-            <td class="px-5 py-4">{{ row.comment }}</td>
-            <td class="px-5 py-4">{{ row.creator }}</td>
+            <td :data-label="t('common.date')" class="px-5 py-4">{{ row.date }}</td>
+            <td class="cell-main px-5 py-4 font-medium">{{ row.name }}</td>
+            <td :data-label="t('common.amount')" class="px-5 py-4 font-semibold text-fb-blue">{{ row.sum }}</td>
+            <td :data-label="t('common.comment')" class="px-5 py-4">{{ row.comment }}</td>
+            <td :data-label="t('finance.creator')" class="px-5 py-4">{{ row.creator }}</td>
           </tr>
         </tbody>
       </table>

@@ -868,7 +868,7 @@ onMounted(async () => {
       </div>
     </div>
 
-    <div class="overflow-hidden rounded-xl border border-fb-line bg-fb-card">
+    <div class="table-cards-wrap overflow-hidden rounded-xl border border-fb-line bg-fb-card">
       <SkeletonBlock v-if="loading" :rows="8" :cols="6" />
       <EmptyState
         v-else-if="!rows.length"
@@ -880,7 +880,7 @@ onMounted(async () => {
         @action="openPanel()"
         @reset="resetFilters"
       />
-      <table v-else class="w-full text-base">
+      <table v-else class="table-cards w-full text-base">
         <thead class="border-b border-fb-line bg-fb-canvas">
           <tr>
             <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('common.fullName') }}</th>
@@ -898,7 +898,7 @@ onMounted(async () => {
             class="cursor-pointer border-b border-fb-line hover:bg-fb-hover/40"
             @click="openPanel(row)"
           >
-            <td class="px-5 py-4 font-medium text-fb-text">
+            <td class="cell-main px-5 py-4 font-medium text-fb-text">
               <div>{{ row.full_name }}</div>
               <div class="mt-1 flex flex-wrap items-center gap-1.5 text-xs font-normal">
                 <span
@@ -933,23 +933,23 @@ onMounted(async () => {
                 </span>
               </div>
             </td>
-            <td class="px-5 py-4 text-fb-secondary">
+            <td :data-label="t('common.phone')" class="px-5 py-4 text-fb-secondary">
               <div>{{ row.phone }}</div>
               <div v-if="row.phone2" class="text-xs text-fb-icon flex items-center gap-1 mt-0.5">
                 <span v-if="row.phone2_owner" class="font-medium text-fb-secondary">({{ presetLabel(row.phone2_owner) }})</span>
                 <span>{{ row.phone2 }}</span>
               </div>
             </td>
-            <td class="px-5 py-4 text-fb-secondary max-w-[160px] truncate" :title="row.address">
+            <td :data-label="t('settings.address')" class="px-5 py-4 text-fb-secondary max-w-[160px] truncate" :title="row.address">
               {{ row.address || '—' }}
             </td>
-            <td class="px-5 py-4 text-fb-secondary max-w-[180px] truncate" :title="row.comment">
+            <td :data-label="t('common.comment')" class="px-5 py-4 text-fb-secondary max-w-[180px] truncate" :title="row.comment">
               {{ row.comment || '—' }}
             </td>
-            <td class="px-5 py-4 text-fb-secondary font-medium whitespace-nowrap">
+            <td :data-label="t('leads.trialDate')" class="px-5 py-4 text-fb-secondary font-medium whitespace-nowrap">
               {{ row.trial_date || '—' }}
             </td>
-            <td class="px-5 py-4 text-fb-secondary">
+            <td :data-label="t('common.status')" class="px-5 py-4 text-fb-secondary">
               <span
                 class="rounded-full px-2.5 py-1 text-xs font-medium"
                 :class="

@@ -336,7 +336,7 @@ watch(
     </div>
 
     <!-- Table or Empty State -->
-    <div class="overflow-hidden rounded-xl border border-fb-line bg-fb-card shadow-sm">
+    <div class="table-cards-wrap overflow-hidden rounded-xl border border-fb-line bg-fb-card shadow-sm">
       <SkeletonBlock v-if="loading" :rows="8" :cols="6" />
       
       <!-- Empty State -->
@@ -358,7 +358,7 @@ watch(
       </div>
 
       <template v-else>
-        <table class="w-full text-sm">
+        <table class="table-cards w-full text-sm">
           <thead class="border-b border-fb-line bg-fb-canvas text-xs uppercase tracking-wider font-semibold text-fb-secondary">
             <tr>
               <th class="px-5 py-3.5 text-left">{{ t('common.fullName') }}</th>
@@ -378,9 +378,9 @@ watch(
               class="cursor-pointer hover:bg-fb-hover/40 transition-colors"
               @click="openStudent(row.id)"
             >
-              <td class="px-5 py-3.5 font-medium text-fb-text">{{ row.full_name }}</td>
-              <td class="px-5 py-3.5 text-fb-secondary">{{ row.phone }}</td>
-              <td class="px-5 py-3.5">
+              <td class="cell-main px-5 py-3.5 font-medium text-fb-text">{{ row.full_name }}</td>
+              <td :data-label="t('common.phone')" class="px-5 py-3.5 text-fb-secondary">{{ row.phone }}</td>
+              <td :data-label="t('leftReport.categoryShort')" class="px-5 py-3.5">
                 <span
                   class="rounded-full px-2.5 py-0.5 text-xs font-medium"
                   :class="row.status === 7 ? 'bg-amber-50 text-amber-700 border border-amber-200' : 'bg-gray-100 text-gray-700 border border-gray-200'"
@@ -388,7 +388,7 @@ watch(
                   {{ studentStatusLabel(row.status, row.status_label) }}
                 </span>
               </td>
-              <td class="px-5 py-3.5">
+              <td :data-label="t('schedule.group')" class="px-5 py-3.5">
                 <button
                   v-if="row.group_id"
                   type="button"
@@ -399,8 +399,8 @@ watch(
                 </button>
                 <span v-else class="text-fb-secondary">{{ row.group }}</span>
               </td>
-              <td class="px-5 py-3.5 text-fb-secondary">{{ row.branch }}</td>
-              <td class="px-5 py-3.5">
+              <td :data-label="t('common.branch')" class="px-5 py-3.5 text-fb-secondary">{{ row.branch }}</td>
+              <td :data-label="t('leftReport.debtWhenLeft')" class="px-5 py-3.5">
                 <span v-if="row.debt_months" class="font-semibold text-rose-700">
                   {{ t('receipt.months', { count: row.debt_months }) }}<span v-if="row.debt_amount"> · ≈ {{ t('common.sumAmount', { amount: formatMoney(row.debt_amount) }) }}</span>
                 </span>
@@ -413,10 +413,10 @@ watch(
                 </span>
                 <span v-else class="text-fb-secondary">—</span>
               </td>
-              <td class="px-5 py-3.5 text-fb-secondary max-w-[240px] truncate" :title="row.comment">
+              <td :data-label="t('leftReport.reason')" class="px-5 py-3.5 text-fb-secondary max-w-[240px] truncate" :title="row.comment">
                 {{ row.comment || '—' }}
               </td>
-              <td class="px-5 py-3.5 font-medium text-fb-text">{{ row.left_at }}</td>
+              <td :data-label="t('leftReport.leftAt')" class="px-5 py-3.5 font-medium text-fb-text">{{ row.left_at }}</td>
             </tr>
           </tbody>
         </table>

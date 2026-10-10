@@ -1,5 +1,11 @@
-<script setup lang="ts">
+<script lang="ts">
 /** The HiJack LMS sign: an indigo tile with "HJ" and the name next to it. */
+// Each sign needs its own gradient id: a hidden copy (e.g. the wide-screen logo on a phone) would hide it
+let counter = 0;
+</script>
+
+<script setup lang="ts">
+const gradientId = `hj-logo-fill-${++counter}`;
 withDefaults(defineProps<{ size?: number; withText?: boolean; inverse?: boolean }>(), {
   size: 36,
   withText: true,
@@ -11,12 +17,12 @@ withDefaults(defineProps<{ size?: number; withText?: boolean; inverse?: boolean 
   <span class="inline-flex select-none items-center gap-2.5">
     <svg :width="size" :height="size" viewBox="0 0 40 40" aria-hidden="true" class="shrink-0">
       <defs>
-        <linearGradient id="hj-logo-fill" x1="0" y1="0" x2="1" y2="1">
+        <linearGradient :id="gradientId" x1="0" y1="0" x2="1" y2="1">
           <stop offset="0" stop-color="#6366F1" />
           <stop offset="1" stop-color="#4338CA" />
         </linearGradient>
       </defs>
-      <rect width="40" height="40" rx="11" :fill="inverse ? '#FFFFFF' : 'url(#hj-logo-fill)'" />
+      <rect width="40" height="40" rx="11" :fill="inverse ? '#FFFFFF' : `url(#${gradientId})`" />
       <path
         d="M11 11v18M11 20h9M20 11v18"
         :stroke="inverse ? '#4F46E5' : '#FFFFFF'"

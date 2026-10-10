@@ -64,4 +64,5 @@ export default defineMessages({
   'roles.marketer': { uz: 'Marketolog', ru: 'Маркетолог', en: 'Marketer' },
   'roles.teacher': { uz: 'Oʻqituvchi', ru: 'Учитель', en: 'Teacher' },
   'roles.student': { uz: 'Oʻquvchi', ru: 'Ученик', en: 'Student' },
+  'layout.menu': { uz: 'Menyu', ru: 'Меню', en: 'Menu' },
 });

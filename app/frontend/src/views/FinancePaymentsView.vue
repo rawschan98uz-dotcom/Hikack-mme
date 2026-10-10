@@ -533,7 +533,7 @@ watch(
       :note="t('totals.recordsCount', { count: periodTotals.count })"
     />
 
-    <div class="overflow-hidden rounded-xl border border-fb-line bg-fb-card">
+    <div class="table-cards-wrap overflow-hidden rounded-xl border border-fb-line bg-fb-card">
       <SkeletonBlock v-if="loading" :rows="8" :cols="6" />
       <EmptyState
         v-else-if="!rows.length"
@@ -545,7 +545,7 @@ watch(
         @action="openCreate"
         @reset="resetAndReload"
       />
-      <table v-else class="w-full text-base">
+      <table v-else class="table-cards w-full text-base">
         <thead class="border-b bg-fb-canvas">
           <tr>
             <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('common.date') }}</th>
@@ -567,16 +567,16 @@ watch(
             :class="isRefund(row) ? 'bg-rose-50/40' : ''"
             @click="openDetail(row.id)"
           >
-            <td class="px-5 py-4">{{ row.date }}</td>
-            <td class="px-5 py-4 font-medium">{{ row.name }}</td>
-            <td class="px-5 py-4 font-semibold" :class="isRefund(row) ? 'text-rose-700' : 'text-fb-blue'">
+            <td :data-label="t('common.date')" class="px-5 py-4">{{ row.date }}</td>
+            <td class="cell-main px-5 py-4 font-medium">{{ row.name }}</td>
+            <td :data-label="t('common.amount')" class="px-5 py-4 font-semibold" :class="isRefund(row) ? 'text-rose-700' : 'text-fb-blue'">
               <template v-if="isRefund(row)">−{{ formatMoney(row.sum) }}</template>
               <template v-else>{{ formatMoney(row.sum) }}</template>
               <span v-if="row.discount_amount" class="ml-1 block text-[11px] font-medium text-amber-700">
                 {{ t('payHint.discount', { amount: formatMoney(row.discount_amount) }) }}
               </span>
             </td>
-            <td class="px-5 py-4">
+            <td :data-label="t('common.period')" class="px-5 py-4">
               <span
                 v-if="isRefund(row)"
                 class="inline-flex items-center rounded-full bg-rose-100 px-2.5 py-0.5 text-xs font-semibold text-rose-700"
@@ -596,11 +596,11 @@ watch(
                 </span>
               </template>
             </td>
-            <td class="px-5 py-4">{{ payMethodLabel(row.method, row.method_pay) }}</td>
-            <td class="px-5 py-4">{{ row.teacher }}</td>
-            <td class="px-5 py-4">{{ row.comment || '—' }}</td>
-            <td class="px-5 py-4">{{ row.creator }}</td>
-            <td class="px-5 py-4 text-right" @click.stop>
+            <td :data-label="t('expenses.method')" class="px-5 py-4">{{ payMethodLabel(row.method, row.method_pay) }}</td>
+            <td :data-label="t('schedule.teacher')" class="px-5 py-4">{{ row.teacher }}</td>
+            <td :data-label="t('common.comment')" class="px-5 py-4">{{ row.comment || '—' }}</td>
+            <td :data-label="t('finance.creator')" class="px-5 py-4">{{ row.creator }}</td>
+            <td :data-label="t('payments.receipt')" class="px-5 py-4 text-right" @click.stop>
               <button
                 v-if="!isRefund(row)"
                 type="button"

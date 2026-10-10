@@ -303,7 +303,7 @@ onMounted(async () => {
       </div>
     </div>
 
-    <div class="overflow-hidden rounded-xl border border-fb-line bg-fb-card">
+    <div class="table-cards-wrap overflow-hidden rounded-xl border border-fb-line bg-fb-card">
       <SkeletonBlock v-if="loading" :rows="8" :cols="6" />
       <EmptyState
         v-else-if="!filteredRows.length"
@@ -313,7 +313,7 @@ onMounted(async () => {
         :hint="t('archive.emptyHint')"
         @reset="resetAndReload"
       />
-      <table v-else class="w-full text-sm">
+      <table v-else class="table-cards w-full text-sm">
         <thead class="border-b bg-fb-canvas">
           <tr>
             <th class="px-4 py-3 text-left">
@@ -333,13 +333,13 @@ onMounted(async () => {
             <td class="px-4 py-3">
               <input type="checkbox" :checked="selectedIds.includes(row.id)" @change="toggleRow(row.id)" />
             </td>
-            <td class="px-4 py-3">{{ row.name }}</td>
-            <td class="px-4 py-3">{{ row.phone }}</td>
-            <td class="px-4 py-3">{{ roleLabel(row.roles) }}</td>
-            <td class="px-4 py-3">{{ row.reason }}</td>
-            <td class="px-4 py-3">{{ row.comment }}</td>
-            <td class="px-4 py-3">{{ row.archived }}</td>
-            <td class="px-4 py-3">
+            <td class="cell-main px-4 py-3">{{ row.name }}</td>
+            <td :data-label="t('common.phone')" class="px-4 py-3">{{ row.phone }}</td>
+            <td :data-label="t('archive.roles')" class="px-4 py-3">{{ roleLabel(row.roles) }}</td>
+            <td :data-label="t('archive.reason')" class="px-4 py-3">{{ row.reason }}</td>
+            <td :data-label="t('common.comment')" class="px-4 py-3">{{ row.comment }}</td>
+            <td :data-label="t('archive.archived')" class="px-4 py-3">{{ row.archived }}</td>
+            <td :data-label="t('common.actions')" class="px-4 py-3">
               <div class="flex gap-2">
                 <button type="button" class="text-emerald-700 hover:underline" @click="restoreOne(row)">{{ t('common.restore') }}</button>
                 <button type="button" class="text-fb-danger hover:underline" @click="deleteOne(row)">{{ t('common.delete') }}</button>

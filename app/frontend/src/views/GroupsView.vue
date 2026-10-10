@@ -810,7 +810,7 @@ onMounted(async () => {
       </button>
     </div>
 
-    <div class="overflow-hidden rounded-xl border border-fb-line bg-fb-card">
+    <div class="table-cards-wrap overflow-hidden rounded-xl border border-fb-line bg-fb-card">
       <SkeletonBlock v-if="loading" :rows="8" :cols="8" />
       <EmptyState
         v-else-if="!tableRows.length"
@@ -823,7 +823,7 @@ onMounted(async () => {
         @reset="clearFilters"
       />
       <div v-else class="overflow-x-auto">
-        <table class="table-fb min-w-full">
+        <table class="table-cards table-fb min-w-full">
           <thead>
             <tr>
               <th v-for="column in activeColumns" :key="column.key" class="whitespace-nowrap">
@@ -849,9 +849,9 @@ onMounted(async () => {
               class="table-row-fb cursor-pointer"
               @click="openCard(row.id)"
             >
-              <td v-if="visibleColumns.name !== false" class="font-medium text-fb-text">{{ row.name }}</td>
-              <td v-if="visibleColumns.courseName !== false">{{ row.courseName }}</td>
-              <td v-if="visibleColumns.teacher !== false">
+              <td v-if="visibleColumns.name !== false" class="cell-main font-medium text-fb-text">{{ row.name }}</td>
+              <td v-if="visibleColumns.courseName !== false" :data-label="t('schedule.course')">{{ row.courseName }}</td>
+              <td v-if="visibleColumns.teacher !== false" :data-label="t('schedule.teacher')">
                 <button
                   v-if="row.teacher_id"
                   type="button"
@@ -862,12 +862,12 @@ onMounted(async () => {
                 </button>
                 <span v-else>{{ row.teacher }}</span>
               </td>
-              <td v-if="visibleColumns.daysText !== false">{{ row.daysText }}</td>
-              <td v-if="visibleColumns.trainingDates !== false">{{ row.trainingDates }}</td>
-              <td v-if="visibleColumns.weekOfStudy !== false">{{ row.weekOfStudy }}</td>
-              <td v-if="visibleColumns.room !== false">{{ row.room }}</td>
-              <td v-if="visibleColumns.tagsText !== false">{{ row.tagsText }}</td>
-              <td v-if="visibleColumns.students !== false">
+              <td v-if="visibleColumns.daysText !== false" :data-label="t('groups.days')">{{ row.daysText }}</td>
+              <td v-if="visibleColumns.trainingDates !== false" :data-label="t('groups.trainingDates')">{{ row.trainingDates }}</td>
+              <td v-if="visibleColumns.weekOfStudy !== false" :data-label="t('groups.weekOfStudy')">{{ row.weekOfStudy }}</td>
+              <td v-if="visibleColumns.room !== false" :data-label="t('groups.room')">{{ row.room }}</td>
+              <td v-if="visibleColumns.tagsText !== false" :data-label="t('nav.tags')">{{ row.tagsText }}</td>
+              <td v-if="visibleColumns.students !== false" :data-label="t('nav.students')">
                 <div>{{ row.students }}</div>
                 <span
                   v-if="row.debtorsCount"
@@ -876,7 +876,7 @@ onMounted(async () => {
                   {{ t('groups.debtorsBadge', { count: row.debtorsCount, amount: formatSum(row.debtTotal) }) }}
                 </span>
               </td>
-              <td v-if="visibleColumns.actions !== false" @click.stop>
+              <td v-if="visibleColumns.actions !== false" :data-label="t('common.actions')" @click.stop>
                 <div class="flex items-center gap-2">
                   <button
                     type="button"

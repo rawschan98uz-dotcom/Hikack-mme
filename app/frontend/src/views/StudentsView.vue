@@ -1132,7 +1132,7 @@ onMounted(async () => {
       </button>
     </div>
 
-    <div class="overflow-hidden rounded-xl border border-fb-line bg-fb-card">
+    <div class="table-cards-wrap overflow-hidden rounded-xl border border-fb-line bg-fb-card">
       <SkeletonBlock v-if="loading" :rows="8" :cols="7" />
       <EmptyState
         v-else-if="!tableRows.length"
@@ -1144,7 +1144,7 @@ onMounted(async () => {
         @action="openCreatePanel"
         @reset="resetFilters"
       />
-      <table v-else class="w-full text-base">
+      <table v-else class="table-cards w-full text-base">
         <thead class="border-b border-fb-line bg-fb-canvas">
           <tr>
             <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('months.student') }}</th>
@@ -1165,7 +1165,7 @@ onMounted(async () => {
             :class="canSeeMoney && row.isDebtor ? 'bg-red-50/70 hover:bg-red-100/70' : 'hover:bg-fb-hover/40'"
             @click="openCard(row.id)"
           >
-            <td class="px-5 py-4">
+            <td class="cell-main px-5 py-4">
               <div class="flex items-center gap-3">
                 <img
                   v-if="row.photo"
@@ -1189,14 +1189,14 @@ onMounted(async () => {
                 </div>
               </div>
             </td>
-            <td class="px-5 py-4 text-fb-secondary">
+            <td :data-label="t('common.phone')" class="px-5 py-4 text-fb-secondary">
               <div>{{ row.phone }}</div>
               <div v-if="row.phone2" class="text-xs text-fb-icon flex items-center gap-1 mt-0.5">
                 <span v-if="row.phone2_owner" class="font-medium text-fb-secondary">({{ presetLabel(row.phone2_owner) }})</span>
                 <span>{{ row.phone2 }}</span>
               </div>
             </td>
-            <td class="px-5 py-4 text-fb-secondary">
+            <td :data-label="t('common.status')" class="px-5 py-4 text-fb-secondary">
               <span
                 class="inline-block rounded-full px-2.5 py-0.5 text-xs font-medium"
                 :class="statusBadgeClass(row.status)"
@@ -1204,8 +1204,8 @@ onMounted(async () => {
                 {{ row.statusText }}
               </span>
             </td>
-            <td class="px-5 py-4 text-fb-secondary">{{ row.school }}</td>
-            <td class="px-5 py-4 text-fb-secondary">
+            <td :data-label="t('import.school')" class="px-5 py-4 text-fb-secondary">{{ row.school }}</td>
+            <td :data-label="t('schedule.group')" class="px-5 py-4 text-fb-secondary">
               <button
                 v-if="row.group_id"
                 type="button"
@@ -1216,9 +1216,9 @@ onMounted(async () => {
               </button>
               <span v-else>{{ row.group }}</span>
             </td>
-            <td class="px-5 py-4 text-fb-secondary">{{ row.branch }}</td>
-            <td class="px-5 py-4 text-fb-secondary">{{ row.trialDate }}</td>
-            <td v-if="canSeeMoney" class="px-5 py-4 text-fb-secondary">
+            <td :data-label="t('common.branch')" class="px-5 py-4 text-fb-secondary">{{ row.branch }}</td>
+            <td :data-label="t('students.startDate')" class="px-5 py-4 text-fb-secondary">{{ row.trialDate }}</td>
+            <td v-if="canSeeMoney" :data-label="t('students.paymentColumn')" class="px-5 py-4 text-fb-secondary">
               <div v-if="row.isDebtor" class="flex flex-col items-start gap-1">
                 <span class="inline-flex items-center whitespace-nowrap rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-semibold text-red-700">
                   {{ row.debtAmount ? t('students.debtBadge', { months: row.debtMonths || 1, amount: formatSum(row.debtAmount) }) : t('students.debtBadgeNoSum') }}

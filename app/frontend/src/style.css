@@ -230,7 +230,7 @@ main h1 {
   /* Big cards (student, teacher, group, lead, staff): the whole screen to the right of the left menu
      column (128px wide), so everything is seen at once without scrolling a narrow strip */
   .drawer-wide-shell {
-    @apply fixed inset-y-0 right-0 left-[128px] z-50 flex;
+    @apply fixed inset-y-0 right-0 left-0 z-50 flex lg:left-[128px];
   }
 
   /* One fact at a glance on a big card: a small caption and a large value */
@@ -361,3 +361,88 @@ main h1 {
     background-color: var(--fb-hover);
   }
 }
+
+/*
+ * Phones and tablets: a list table turns into cards — one card per row, each value with its column name.
+ * The table gets class "table-cards", its box "table-cards-wrap", each cell data-label="column";
+ * the main cell (the name) gets "cell-main" and becomes the card's title.
+ */
+/* Wide screens: a table wider than the window scrolls sideways instead of losing its last columns */
+@media (min-width: 1024px) {
+  .table-cards-wrap {
+    overflow-x: auto !important;
+  }
+}
+
+@media (max-width: 1023px) {
+  .table-cards-wrap {
+    border-width: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    overflow: visible !important;
+  }
+
+  .table-cards thead {
+    display: none;
+  }
+
+  .table-cards,
+  .table-cards tbody,
+  .table-cards td {
+    display: block;
+    width: 100%;
+  }
+
+  /* The main cell (the name) is the card's title even when it is not the first column */
+  .table-cards tr {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    margin-bottom: 10px;
+    border: 1px solid var(--fb-line) !important;
+    border-radius: 12px;
+    padding: 6px 0;
+  }
+
+  /* White by default; a row's own colour (a debtor's pink) still wins */
+  :where(.table-cards) tr {
+    background-color: var(--fb-card);
+  }
+
+  .table-cards td {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    border: 0 !important;
+    padding: 5px 14px !important;
+    text-align: right;
+    font-size: 14px;
+  }
+
+  .table-cards td[data-label]::before {
+    content: attr(data-label);
+    flex-shrink: 0;
+    max-width: 45%;
+    text-align: left;
+    font-weight: 500;
+    color: var(--fb-text-secondary);
+  }
+
+  .table-cards td.cell-main {
+    order: -1;
+    display: block;
+    text-align: left;
+    font-size: 16px;
+    font-weight: 600;
+  }
+
+  .table-cards td.cell-main::before {
+    content: none;
+  }
+
+  .table-cards td > * {
+    min-width: 0;
+  }
+}
+

@@ -802,7 +802,7 @@ onMounted(async () => {
     </div>
 
     <!-- Groups Table Card -->
-    <div v-if="activeTab === 'day'" class="overflow-hidden rounded-xl border border-fb-line bg-fb-card shadow-sm">
+    <div v-if="activeTab === 'day'" class="table-cards-wrap overflow-hidden rounded-xl border border-fb-line bg-fb-card shadow-sm">
       <!-- Loading State -->
       <SkeletonBlock v-if="loadingGroups" :rows="6" :cols="7" />
 
@@ -828,7 +828,7 @@ onMounted(async () => {
       <!-- Table of Groups -->
       <template v-else>
         <div class="overflow-x-auto">
-          <table class="w-full text-sm text-left">
+          <table class="table-cards w-full text-sm text-left">
             <thead class="border-b border-fb-line bg-fb-canvas text-xs uppercase tracking-wider font-semibold text-fb-secondary">
               <tr>
                 <th class="px-5 py-3.5">{{ t('schedule.group') }}</th>
@@ -849,7 +849,7 @@ onMounted(async () => {
                 @click="openGroupRoster(group)"
               >
                 <!-- Group Name (Clickable) -->
-                <td class="px-5 py-3.5 font-medium">
+                <td class="cell-main px-5 py-3.5 font-medium">
                   <div class="flex items-center gap-2">
                     <span class="text-indigo-600 hover:underline font-semibold text-sm group-hover:text-indigo-700">
                       {{ group.name }}
@@ -867,7 +867,7 @@ onMounted(async () => {
                 </td>
 
                 <!-- Course -->
-                <td class="px-5 py-3.5 text-fb-secondary">
+                <td :data-label="t('schedule.course')" class="px-5 py-3.5 text-fb-secondary">
                   <span v-if="group.course" class="font-medium text-fb-text">
                     {{ group.course.name }}
                   </span>
@@ -875,7 +875,7 @@ onMounted(async () => {
                 </td>
 
                 <!-- Teacher -->
-                <td v-if="!isTeacher" class="px-5 py-3.5 text-fb-secondary">
+                <td v-if="!isTeacher" :data-label="t('schedule.teacher')" class="px-5 py-3.5 text-fb-secondary">
                   <span v-if="group.teacher" class="font-medium text-fb-text">
                     {{ group.teacher }}
                   </span>
@@ -883,12 +883,12 @@ onMounted(async () => {
                 </td>
 
                 <!-- Branch -->
-                <td v-if="!isTeacher" class="px-5 py-3.5 text-fb-secondary">
+                <td v-if="!isTeacher" :data-label="t('common.branch')" class="px-5 py-3.5 text-fb-secondary">
                   {{ group.branch }}
                 </td>
 
                 <!-- Days & Time -->
-                <td class="px-5 py-3.5 text-fb-secondary">
+                <td :data-label="t('attendance.daysTime')" class="px-5 py-3.5 text-fb-secondary">
                   <div class="text-xs">
                     <span class="font-medium text-fb-text">{{ groupDaysLabel(group.days, group.days_label) }}</span>
                     <span v-if="group.lesson_start_time" class="block text-[11px] text-fb-secondary">
@@ -898,14 +898,14 @@ onMounted(async () => {
                 </td>
 
                 <!-- Students Count -->
-                <td class="px-5 py-3.5 text-center">
+                <td :data-label="t('nav.students')" class="px-5 py-3.5 text-center">
                   <span class="inline-flex items-center justify-center rounded-full bg-indigo-50 px-2.5 py-0.5 text-xs font-semibold text-indigo-700 border border-indigo-200">
                     {{ group.students_count }}
                   </span>
                 </td>
 
                 <!-- Marked or not on the chosen date -->
-                <td v-if="!isTeacher" class="px-5 py-3.5 text-center">
+                <td v-if="!isTeacher" :data-label="t('attendance.onDate', { date: selectedDate.split('-').reverse().join('.') })" class="px-5 py-3.5 text-center">
                   <span v-if="!dayStatus[group.id]" class="text-xs text-fb-secondary">—</span>
                   <span v-else-if="!dayStatus[group.id].has_lesson" class="text-xs text-fb-secondary">{{ t('attendance.noLesson') }}</span>
                   <span
@@ -916,7 +916,7 @@ onMounted(async () => {
                 </td>
 
                 <!-- Action Button -->
-                <td class="px-5 py-3.5 text-right whitespace-nowrap" @click.stop>
+                <td :data-label="t('misc.action')" class="px-5 py-3.5 text-right whitespace-nowrap" @click.stop>
                   <button
                     type="button"
                     class="mr-1.5 inline-flex items-center rounded-lg border border-fb-line px-2.5 py-1.5 text-xs font-medium text-fb-secondary hover:border-fb-blue hover:text-fb-blue"

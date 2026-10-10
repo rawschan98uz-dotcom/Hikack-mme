@@ -146,6 +146,32 @@ function onSelectGroup(groupId: number) {
   box-shadow: -8px 0 24px rgb(0 0 0 / 0.08);
 }
 
+/* Phones and tablets: a round button in the corner (a tab on the edge would cover the lists),
+   the schedule takes the whole width under the header */
+@media (max-width: 1023px) {
+  .schedule-fab {
+    top: auto;
+    right: 16px;
+    bottom: 16px;
+    height: 48px;
+    width: 48px;
+    translate: none;
+    border-right: 1px solid var(--fb-line);
+    border-radius: 9999px;
+    box-shadow: 0 4px 14px rgb(0 0 0 / 0.15);
+  }
+
+  .schedule-backdrop {
+    inset: 60px 0 0 0;
+  }
+
+  .schedule-drawer {
+    top: 60px;
+    right: 0;
+    left: 0;
+  }
+}
+
 .schedule-drawer-enter-active,
 .schedule-drawer-leave-active {
   transition: transform 0.25s ease;

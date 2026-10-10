@@ -203,7 +203,7 @@ onMounted(async () => {
       </button>
     </div>
 
-    <div class="overflow-hidden rounded-xl border border-fb-line bg-fb-card">
+    <div class="table-cards-wrap overflow-hidden rounded-xl border border-fb-line bg-fb-card">
       <SkeletonBlock v-if="loading" :rows="4" :cols="3" />
       <EmptyState
         v-else-if="!filteredRows.length"
@@ -213,7 +213,7 @@ onMounted(async () => {
         :action-label="activeTab === 'upcoming' ? t('holidays.addTitle') : ''"
         @action="openCreate"
       />
-      <table v-else class="w-full text-base">
+      <table v-else class="table-cards w-full text-base">
         <thead class="border-b bg-fb-canvas">
           <tr>
             <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('common.name') }}</th>
@@ -224,10 +224,10 @@ onMounted(async () => {
         </thead>
         <tbody>
           <tr v-for="row in filteredRows" :key="row.id" class="cursor-pointer border-b hover:bg-fb-hover/40" @click="openDetail(row.id)">
-            <td class="px-5 py-4">{{ row.name }}</td>
-            <td class="px-5 py-4">{{ row.date }}</td>
-            <td class="px-5 py-4">{{ row.branch }}</td>
-            <td class="px-5 py-4">{{ row.affects_payment ? t('common.yes') : t('common.no') }}</td>
+            <td class="cell-main px-5 py-4">{{ row.name }}</td>
+            <td :data-label="t('common.date')" class="px-5 py-4">{{ row.date }}</td>
+            <td :data-label="t('common.branch')" class="px-5 py-4">{{ row.branch }}</td>
+            <td :data-label="t('holidays.affectsPayment')" class="px-5 py-4">{{ row.affects_payment ? t('common.yes') : t('common.no') }}</td>
           </tr>
         </tbody>
       </table>

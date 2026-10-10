@@ -38,6 +38,8 @@ const appGridRoot = ref<HTMLElement | null>(null);
 const userMenuRoot = ref<HTMLElement | null>(null);
 const localeMenuRoot = ref<HTMLElement | null>(null);
 const showSearch = ref(false);
+/** Phone / narrow screen: the menu slides in from the left */
+const showMobileNav = ref(false);
 const showLocaleMenu = ref(false);
 const showThemeMenu = ref(false);
 const themeMenuRoot = ref<HTMLElement | null>(null);
@@ -93,6 +95,7 @@ watch(
     showUserMenu.value = false;
     showLocaleMenu.value = false;
     showThemeMenu.value = false;
+    showMobileNav.value = false;
   },
   { immediate: true },
 );
@@ -249,8 +252,8 @@ function logout() {
 
 <template>
   <div class="app-shell fixed inset-0 flex overflow-hidden bg-fb-canvas">
-    <!-- Left navigation: primary + flyout scroll independently from main content -->
-    <div class="flex h-full shrink-0">
+    <!-- Left navigation: primary + flyout scroll independently from main content (wide screens) -->
+    <div class="hidden h-full shrink-0 lg:flex">
     <!-- Primary icon sidebar -->
     <aside class="z-20 flex h-full w-[128px] shrink-0 flex-col overflow-hidden border-r border-fb-line bg-fb-card">
       <nav class="sidebar-scroll min-h-0 flex-1 overflow-y-auto overscroll-y-contain py-4">
@@ -312,19 +315,82 @@ function logout() {
     </aside>
     </div>
 
+    <!-- Phone / narrow screen menu -->
+    <Transition name="mobile-nav">
+      <div v-if="showMobileNav" class="fixed inset-0 z-[90] flex lg:hidden" role="dialog" aria-modal="true" :aria-label="t('layout.menu')">
+        <div class="absolute inset-0 bg-black/40" @click="showMobileNav = false" />
+        <nav class="mobile-nav-panel relative flex h-full w-[min(86vw,320px)] flex-col overflow-y-auto bg-fb-card shadow-xl">
+          <div class="flex items-center justify-between border-b border-fb-line px-4 py-3">
+            <AppLogo :size="32" />
+            <button type="button" class="icon-btn-fb" :aria-label="t('common.close')" @click="showMobileNav = false">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+                <path d="M6 6l12 12M18 6L6 18" />
+              </svg>
+            </button>
+          </div>
+          <div class="flex-1 py-2">
+            <template v-for="section in visibleNav" :key="section.id">
+              <button
+                v-if="!section.children?.length"
+                type="button"
+                class="flex w-full items-center gap-3 px-4 py-3 text-left text-[16px]"
+                :class="isPrimaryActive(section.id) ? 'bg-fb-hover font-semibold text-fb-blue' : 'text-fb-text hover:bg-fb-canvas'"
+                @click="onPrimaryClick(section); showMobileNav = false"
+              >
+                <NavIcon :name="section.icon" :size="24" />
+                <span>{{ t(section.label) }}</span>
+              </button>
+              <div v-else class="py-1">
+                <div class="flex items-center gap-3 px-4 pb-1 pt-3 text-[13px] font-semibold uppercase tracking-wide text-fb-icon">
+                  <NavIcon :name="section.icon" :size="18" />
+                  <span>{{ t(section.label) }}</span>
+                </div>
+                <template v-for="(child, idx) in section.children" :key="`${section.id}-${idx}`">
+                  <div v-if="child.type === 'header'" class="px-12 pb-1 pt-2 text-[12px] font-semibold uppercase text-fb-icon">
+                    {{ t(child.label) }}
+                  </div>
+                  <RouterLink
+                    v-else
+                    :to="child.to"
+                    class="flex items-center gap-3 py-2.5 pl-12 pr-4 text-[15px]"
+                    @click="showMobileNav = false"
+                    :class="isChildActive(child.to) ? 'bg-fb-hover font-semibold text-fb-blue' : 'text-fb-secondary hover:bg-fb-canvas hover:text-fb-text'"
+                  >
+                    <span>{{ t(child.label) }}</span>
+                  </RouterLink>
+                </template>
+              </div>
+            </template>
+          </div>
+          <div class="border-t border-fb-line px-4 py-3 text-[12px] text-fb-icon">v{{ APP_VERSION }}</div>
+        </nav>
+      </div>
+    </Transition>
+
     <!-- Main column -->
     <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
       <!-- Top header -->
-      <header class="relative z-30 h-[72px] overflow-visible border-b border-fb-line bg-fb-card px-6 flex items-center gap-5 shrink-0">
+      <header class="relative z-30 flex h-[60px] shrink-0 items-center gap-2 overflow-visible border-b border-fb-line bg-fb-card px-3 sm:gap-3 sm:px-4 lg:h-[72px] lg:gap-5 lg:px-6">
+        <button
+          type="button"
+          class="icon-btn-fb -ml-1 lg:hidden"
+          :aria-label="t('layout.menu')"
+          @click="showMobileNav = true"
+        >
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+            <path d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
+        </button>
         <!-- Logo + quick add -->
-        <div class="flex items-center gap-4 shrink-0">
+        <div class="flex shrink-0 items-center gap-2 sm:gap-4">
           <button
             type="button"
             class="rounded-lg hover:opacity-90"
             aria-label="HiJack LMS"
             @click="goDashboard"
           >
-            <AppLogo :size="36" />
+            <AppLogo :size="36" class="hidden sm:inline-flex" />
+            <AppLogo :size="32" :with-text="false" class="sm:hidden" />
           </button>
           <QuickAddMenu
             ref="quickAddRoot"
@@ -335,7 +401,7 @@ function logout() {
         </div>
 
         <!-- Search -->
-        <div class="mx-auto w-full max-w-[640px] flex-1">
+        <div class="mx-auto hidden w-full max-w-[640px] flex-1 lg:block">
           <button
             type="button"
             class="relative flex h-12 w-full items-center rounded-full border border-fb-line bg-fb-canvas pl-12 pr-4 text-left text-[16px] text-fb-icon hover:border-fb-blue/40 focus:border-fb-blue/40 focus:outline-none focus:ring-2 focus:ring-fb-blue/10"
@@ -363,12 +429,25 @@ function logout() {
           </button>
         </div>
 
+        <div class="flex-1 lg:hidden" />
+
         <!-- Actions -->
-        <div class="flex shrink-0 items-center gap-1 text-fb-icon">
+        <div class="flex shrink-0 items-center gap-0.5 text-fb-icon sm:gap-1">
+          <button
+            type="button"
+            class="icon-btn-fb lg:hidden"
+            :aria-label="t('search.title')"
+            @click="showSearch = true"
+          >
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <circle cx="11" cy="11" r="7" />
+              <path d="M20 20l-4-4" />
+            </svg>
+          </button>
           <div ref="localeMenuRoot" class="relative">
             <button
               type="button"
-              class="min-w-[52px] rounded-full border border-fb-line px-3 py-1.5 text-[15px] font-normal lowercase text-fb-secondary hover:border-fb-line hover:text-fb-blue"
+              class="min-w-[44px] rounded-full border border-fb-line px-2.5 py-1.5 text-[15px] font-normal lowercase text-fb-secondary hover:border-fb-line hover:text-fb-blue sm:min-w-[52px] sm:px-3"
               :title="t('layout.language')"
               @click.stop="toggleLocaleMenu"
             >
@@ -428,7 +507,7 @@ function logout() {
             </div>
           </div>
 
-          <div ref="appGridRoot" class="relative">
+          <div ref="appGridRoot" class="relative hidden lg:block">
             <button
               type="button"
               class="icon-btn-fb"
@@ -460,7 +539,7 @@ function logout() {
 
           <button
             type="button"
-            class="icon-btn-fb"
+            class="icon-btn-fb hidden lg:block"
             :title="t('layout.fullscreen')"
             @click="toggleFullscreen"
           >
@@ -489,14 +568,14 @@ function logout() {
             </span>
           </button>
 
-          <div ref="userMenuRoot" class="relative ml-2">
+          <div ref="userMenuRoot" class="relative ml-1 sm:ml-2">
             <button
               type="button"
               class="flex items-center gap-2.5 rounded-lg py-1 pl-1 pr-2 hover:bg-fb-canvas"
               @click.stop="toggleUserMenu"
             >
               <span
-                class="flex h-10 w-10 items-center justify-center rounded-full bg-fb-blue text-[17px] font-semibold text-white"
+                class="flex h-9 w-9 items-center justify-center rounded-full bg-fb-blue text-[16px] font-semibold text-white sm:h-10 sm:w-10 sm:text-[17px]"
               >
                 {{ userInitial }}
               </span>
@@ -538,7 +617,7 @@ function logout() {
       </header>
 
       <main class="main-scroll min-h-0 flex-1 overflow-y-auto overscroll-y-contain bg-fb-canvas">
-        <div class="p-6">
+        <div class="p-3 pb-20 sm:p-4 sm:pb-20 lg:p-6">
           <RouterView />
         </div>
       </main>
@@ -553,6 +632,25 @@ function logout() {
 </template>
 
 <style scoped>
+@media (prefers-reduced-motion: no-preference) {
+  .mobile-nav-enter-active,
+  .mobile-nav-leave-active {
+    transition: opacity var(--fb-motion-normal) var(--fb-ease);
+  }
+  .mobile-nav-enter-active .mobile-nav-panel,
+  .mobile-nav-leave-active .mobile-nav-panel {
+    transition: transform var(--fb-motion-normal) var(--fb-ease);
+  }
+  .mobile-nav-enter-from,
+  .mobile-nav-leave-to {
+    opacity: 0;
+  }
+  .mobile-nav-enter-from .mobile-nav-panel,
+  .mobile-nav-leave-to .mobile-nav-panel {
+    transform: translateX(-100%);
+  }
+}
+
 .nav-sidebar-item {
   color: var(--fb-text-secondary);
   transition: color 0.2s ease;

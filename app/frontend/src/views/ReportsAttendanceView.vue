@@ -4,8 +4,8 @@ import { computed, onMounted, reactive, ref, watch } from 'vue';
 import client, { type ApiEnvelope } from '../api/client';
 import { useAuthStore } from '../stores/auth';
 import { downloadCsv } from '../utils/csvExport';
-import { currentMonthIso } from '../utils/dates';
-import { intlLocale, t, type MessageKey } from '../i18n';
+import { currentMonthIso, weekdayShort } from '../utils/dates';
+import { t, type MessageKey } from '../i18n';
 import { attendanceLabel, groupDaysLabel, serverLabel as serverStatusLabel, studentStatusLabel } from '../i18n/labels';
 import { toast } from '../ui/feedback';
 import { apiErrorMessage } from '../utils/apiError';
@@ -266,7 +266,7 @@ function markTitle(mark: number | undefined) {
 
 function dayLabel(iso: string) {
   const [y, m, d] = iso.split('-').map(Number);
-  const weekday = new Date(y, m - 1, d).toLocaleDateString(intlLocale(), { weekday: 'short' });
+  const weekday = weekdayShort(new Date(y, m - 1, d));
   return { day: String(d).padStart(2, '0'), weekday };
 }
 

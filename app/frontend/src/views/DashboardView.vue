@@ -11,9 +11,10 @@ import type { ScheduleRow } from '../types/schedule';
 import { groupRoute, studentRoute } from '../utils/crossLinks';
 import { onCardsReturn } from '../utils/cardStack';
 import { canAccessRoute, PERM } from '../utils/rbac';
-import { intlLocale, t, type MessageKey } from '../i18n';
+import { t, type MessageKey } from '../i18n';
 import { confirmDialog, toast } from '../ui/feedback';
 import { apiErrorMessage } from '../utils/apiError';
+import { formatMonthYear } from '../utils/dates';
 
 interface DashboardStats {
   active_leads: number;
@@ -116,7 +117,7 @@ function chartLabel(label: string) {
   const match = /^([A-Z][a-z]{2}) (\d{4})$/.exec(label);
   const month = match ? CHART_MONTHS.indexOf(match[1]) : -1;
   if (!match || month < 0) return label;
-  return new Date(Number(match[2]), month, 1).toLocaleDateString(intlLocale(), { month: 'short', year: 'numeric' });
+  return formatMonthYear(new Date(Number(match[2]), month, 1), true);
 }
 
 async function loadDashboard(quiet = false) {

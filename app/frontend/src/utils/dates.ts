@@ -4,7 +4,7 @@
  * Tashkent computer it is always one day earlier.
  */
 
-import { intlLocale } from '../i18n';
+import { t, type MessageKey } from '../i18n';
 
 const TASHKENT = 'Asia/Tashkent';
 
@@ -31,10 +31,26 @@ export function dateToIso(d: Date): string {
   return `${d.getFullYear()}-${month}-${day}`;
 }
 
-/** "2026-09" → "Сентябрь 2026" / "Sentabr, 2026" / "September 2026" in the interface language. */
+/** Month name in the interface language: monthName(8) → "Сентябрь" / "Sentabr" / "September". */
+export function monthName(monthIndex: number, short = false): string {
+  return t(`${short ? 'monthShort' : 'month'}.${monthIndex + 1}` as MessageKey);
+}
+
+/** "Сентябрь 2026" / "Sentabr 2026" / "September 2026" (short: "Сен 2026"). */
+export function formatMonthYear(date: Date, short = false): string {
+  return `${monthName(date.getMonth(), short)} ${date.getFullYear()}`;
+}
+
+const WEEKDAY_KEYS = ['weekday.sun', 'weekday.mon', 'weekday.tue', 'weekday.wed', 'weekday.thu', 'weekday.fri', 'weekday.sat'] as const;
+
+/** Short weekday name in the interface language: "Пн" / "Du" / "Mon". */
+export function weekdayShort(date: Date): string {
+  return t(WEEKDAY_KEYS[date.getDay()]);
+}
+
+/** "2026-09" → "Сентябрь 2026" / "Sentabr 2026" / "September 2026" in the interface language. */
 export function formatMonthTitle(yearMonth: string): string {
   const [year, month] = yearMonth.split('-').map(Number);
   if (!year || !month) return yearMonth;
-  const text = new Date(year, month - 1, 1).toLocaleDateString(intlLocale(), { month: 'long', year: 'numeric' });
-  return text.charAt(0).toUpperCase() + text.slice(1);
+  return formatMonthYear(new Date(year, month - 1, 1));
 }

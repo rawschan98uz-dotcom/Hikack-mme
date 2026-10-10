@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 
-import { intlLocale, t } from '../i18n';
+import { t } from '../i18n';
+import { formatMonthYear } from '../utils/dates';
 
 const props = withDefaults(
   defineProps<{
@@ -24,7 +25,7 @@ const viewDate = ref(new Date());
 const weekdayKeys = ['weekday.sun', 'weekday.mon', 'weekday.tue', 'weekday.wed', 'weekday.thu', 'weekday.fri', 'weekday.sat'] as const;
 
 const monthLabel = computed(() =>
-  viewDate.value.toLocaleDateString(intlLocale(), { month: 'long', year: 'numeric' }),
+  formatMonthYear(viewDate.value),
 );
 
 const calendarCells = computed(() => {

@@ -11,9 +11,9 @@ import client, { type ApiEnvelope } from '../api/client';
 import { useAuthStore } from '../stores/auth';
 import { downloadCsv } from '../utils/csvExport';
 import { groupRoute, teacherRoute } from '../utils/crossLinks';
-import { currentMonthIso, todayIso } from '../utils/dates';
+import { currentMonthIso, todayIso, weekdayShort } from '../utils/dates';
 import { PERM } from '../utils/rbac';
-import { intlLocale, t, type MessageKey } from '../i18n';
+import { t, type MessageKey } from '../i18n';
 import { confirmDialog, toast } from '../ui/feedback';
 import { apiErrorMessage } from '../utils/apiError';
 
@@ -124,7 +124,7 @@ function statusClass(status: number | null) {
 
 function formatDate(iso: string) {
   const [y, m, d] = iso.split('-');
-  const weekday = new Date(Number(y), Number(m) - 1, Number(d)).toLocaleDateString(intlLocale(), { weekday: 'short' });
+  const weekday = weekdayShort(new Date(Number(y), Number(m) - 1, Number(d)));
   return `${d}.${m}.${y}, ${weekday}`;
 }
 

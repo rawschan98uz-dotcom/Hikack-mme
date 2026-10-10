@@ -64,7 +64,6 @@ export default defineMessages({
   'salaries.waitingHint': { uz: 'Qarzdorlar toʻlaganda toʻlovga qoʻshiladi', ru: 'Добавится к выплате, когда должники заплатят', en: 'Becomes payable when debtors pay' },
   'salaries.leftToPay': { uz: 'Toʻlash qoldi', ru: 'Осталось выплатить', en: 'Left to pay' },
   'salaries.leftToPayHint': { uz: 'Har bir kishiga qolgan qarzlar yigʻindisi', ru: 'Сумма долгов каждому человеку', en: 'Sum owed to each person' },
-  'salaries.counting': { uz: 'Hisoblanmoqda…', ru: 'Считаю…', en: 'Calculating…' },
   'salaries.noData': { uz: 'Bu oy uchun maʼlumot yoʻq', ru: 'Нет данных за этот месяц', en: 'No data for this month' },
   'salaries.who': { uz: 'Kim', ru: 'Кто', en: 'Who' },
   'salaries.inclAdjustments': { uz: 'shu jumladan tuzatishlar', ru: 'в т.ч. поправки', en: 'incl. corrections' },

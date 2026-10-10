@@ -1,5 +1,6 @@
 ﻿<script setup lang="ts">
 import { onMounted, ref } from 'vue';
+import SkeletonBlock from '../components/SkeletonBlock.vue';
 
 import client, { type ApiEnvelope } from '../api/client';
 import { t } from '../i18n';
@@ -46,7 +47,7 @@ onMounted(load);
 <template>
   <div class="space-y-6">
     <h1 class="text-xl font-semibold text-fb-text">{{ t('settings.gradeTitle') }}</h1>
-    <div v-if="loading" class="text-sm text-fb-secondary">{{ t('common.loading') }}</div>
+    <SkeletonBlock v-if="loading" variant="lines" :rows="4" />
     <form v-else class="max-w-2xl space-y-4 rounded-xl border border-fb-line bg-fb-card p-6" @submit.prevent="save">
       <div>
         <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('settings.passScore') }}</label>

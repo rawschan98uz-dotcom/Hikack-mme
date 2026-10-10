@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
+import SkeletonBlock from '../components/SkeletonBlock.vue';
+import EmptyState from '../components/EmptyState.vue';
 
 import client, { type ApiEnvelope } from '../api/client';
 import ImportCsvModal from '../components/ImportCsvModal.vue';
@@ -261,10 +263,17 @@ onMounted(loadRows);
     </div>
 
     <div class="overflow-hidden rounded-xl border border-fb-line bg-fb-card">
-      <div v-if="loading" class="p-8 text-center text-fb-secondary">{{ t('common.loading') }}</div>
-      <div v-else-if="!filteredRows.length" class="p-8 text-center text-fb-icon">
-        {{ rows.length ? t('common.nothingFound') : t('staff.empty') }}
-      </div>
+      <SkeletonBlock v-if="loading" :rows="6" :cols="5" />
+      <EmptyState
+        v-else-if="!filteredRows.length"
+        icon="staff"
+        :filtered="Boolean(searchQuery.trim())"
+        :title="t('staff.emptyTitle')"
+        :hint="t('staff.emptyHint')"
+        :action-label="t('staff.addTitle')"
+        @action="openCreate"
+        @reset="searchQuery = ''"
+      />
       <table v-else class="w-full text-base">
         <thead class="border-b bg-fb-canvas">
           <tr>
@@ -293,7 +302,7 @@ onMounted(loadRows);
           <h2 class="text-lg font-semibold">{{ panelTitle }}</h2>
           <button type="button" :aria-label="t('common.close')" @click="closePanel">✕</button>
         </div>
-        <div v-if="panelLoading" class="p-6 text-fb-secondary">{{ t('common.loading') }}</div>
+        <SkeletonBlock v-if="panelLoading" variant="lines" :rows="6" class="p-6" />
         <form v-else class="flex flex-1 flex-col overflow-hidden" @submit.prevent="submitForm">
           <div class="grid flex-1 content-start gap-5 overflow-y-auto p-6 md:grid-cols-2 xl:grid-cols-3">
             <div>

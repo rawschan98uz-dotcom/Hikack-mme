@@ -1,4 +1,6 @@
 ﻿<script setup lang="ts" generic="T extends Record<string, unknown>">
+import EmptyState from './EmptyState.vue';
+import SkeletonBlock from './SkeletonBlock.vue';
 import { t } from '../i18n';
 
 defineProps<{
@@ -11,10 +13,8 @@ defineProps<{
 
 <template>
   <div class="bg-fb-card rounded-xl border border-fb-line overflow-hidden">
-    <div v-if="loading" class="p-8 text-center text-fb-secondary">{{ t('common.loading') }}</div>
-    <div v-else-if="!rows.length" class="p-8 text-center text-fb-icon">
-      {{ emptyText ?? t('common.noData') }}
-    </div>
+    <SkeletonBlock v-if="loading" :rows="5" />
+    <EmptyState v-else-if="!rows.length" compact :title="emptyText ?? t('common.noData')" />
     <table v-else class="w-full text-base">
       <thead class="bg-fb-canvas border-b border-fb-line">
         <tr>

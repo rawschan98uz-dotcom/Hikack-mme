@@ -1,5 +1,7 @@
 ﻿<script setup lang="ts">
 import { onMounted, reactive, ref, watch } from 'vue';
+import SkeletonBlock from '../components/SkeletonBlock.vue';
+import EmptyState from '../components/EmptyState.vue';
 import { useRoute, useRouter } from 'vue-router';
 
 import client, { type ApiEnvelope } from '../api/client';
@@ -317,13 +319,15 @@ async function saveCourse() {
       </button>
     </div>
 
-    <div v-if="loading" class="py-16 text-center text-fb-secondary text-[16px]">{{ t('common.loading') }}</div>
-    <div
+    <SkeletonBlock v-if="loading" variant="cards" :rows="6" />
+    <EmptyState
       v-else-if="!rows.length"
-      class="py-16 text-center text-fb-icon text-[16px]"
-    >
-      {{ t('courses.empty') }}
-    </div>
+      icon="courses"
+      :title="t('courses.emptyTitle')"
+      :hint="t('courses.emptyHint')"
+      :action-label="t('courses.addFirst')"
+      @action="openPanel"
+    />
     <div v-else class="mx-auto w-[90%]">
       <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
         <article
@@ -374,7 +378,7 @@ async function saveCourse() {
         </div>
 
         <form class="flex-1 overflow-y-auto px-6 py-6 space-y-5" @submit.prevent="saveCourse">
-          <div v-if="panelLoading" class="text-fb-secondary">{{ t('common.loading') }}</div>
+          <SkeletonBlock v-if="panelLoading" variant="lines" :rows="6" />
           <template v-else>
           <div>
             <label class="block text-[15px] font-medium text-fb-secondary mb-2">{{ t('common.name') }}</label>

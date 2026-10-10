@@ -5,6 +5,7 @@
  * paid in December disappears from the September page — and is December's income in the P&L.
  */
 import { onMounted, ref } from 'vue';
+import SkeletonBlock from '../components/SkeletonBlock.vue';
 import { useRouter } from 'vue-router';
 
 import client, { type ApiEnvelope } from '../api/client';
@@ -141,7 +142,7 @@ onMounted(() => loadMonths());
     </div>
 
     <div class="overflow-hidden rounded-2xl border border-fb-line bg-fb-card shadow-sm">
-      <div v-if="loading" class="p-12 text-center text-fb-secondary">{{ t('common.loading') }}</div>
+      <SkeletonBlock v-if="loading" :rows="6" :cols="6" />
       <div v-else-if="error" class="p-12 text-center text-fb-danger">{{ error }}</div>
       <div v-else-if="!months.length" class="p-12 text-center text-fb-secondary">
         {{ t('months.empty') }}
@@ -183,7 +184,7 @@ onMounted(() => loadMonths());
     </div>
 
     <div v-if="page || pageLoading" class="overflow-hidden rounded-2xl border border-fb-line bg-fb-card shadow-sm">
-      <div v-if="pageLoading && !page" class="p-12 text-center text-fb-secondary">{{ t('common.loading') }}</div>
+      <SkeletonBlock v-if="pageLoading && !page" :rows="8" :cols="6" />
       <template v-else-if="page">
         <div class="flex flex-wrap items-center justify-between gap-3 border-b border-fb-line px-5 py-4">
           <div>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { todayIso } from '../utils/dates';
+import { formatMonthTitle, todayIso, weekdayShort } from '../utils/dates';
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 
@@ -12,6 +12,8 @@ import { downloadCsv } from '../utils/csvExport';
 import ImportCsvModal from '../components/ImportCsvModal.vue';
 import ReceiptModal, { type ReceiptPayment } from '../components/ReceiptModal.vue';
 import PaymentLinkModal, { type StudentPaymentLinkTarget } from '../components/PaymentLinkModal.vue';
+import EmptyState from '../components/EmptyState.vue';
+import SkeletonBlock from '../components/SkeletonBlock.vue';
 import {
   groupRoute,
   hasCreateFlag,
@@ -19,8 +21,9 @@ import {
   studentRoute,
 } from '../utils/crossLinks';
 import { onCardsReturn, pathWithoutCards } from '../utils/cardStack';
+import { forgetQuery } from '../utils/rememberedFilters';
 import { t, type MessageKey } from '../i18n';
-import { payMethodLabel, studentStatusLabel } from '../i18n/labels';
+import { attendanceLabel, groupDaysLabel, payMethodLabel, studentStatusLabel } from '../i18n/labels';
 import { PHONE_OWNER_BUTTONS, PHONE_OWNERS, presetLabel } from '../i18n/presets';
 import { toast } from '../ui/feedback';
 import { apiErrorMessage } from '../utils/apiError';
@@ -125,7 +128,7 @@ const STATUS_OPTIONS = [
 ] as const;
 
 // Card mode: the page shows only this student's card, on top of another page (see utils/cardStack)
-const props = defineProps<{ cardId?: number; cardEdit?: boolean; cardLevel?: number }>();
+const props = defineProps<{ cardId?: number; cardEdit?: boolean; cardPay?: boolean; cardLevel?: number }>();
 const emit = defineEmits<{ close: [] }>();
 const isCard = props.cardId != null;
 
@@ -460,6 +463,7 @@ const filteredStudents = computed(() => {
   });
 });
 
+const today = todayIso();
 const tableRows = computed(() =>
   filteredStudents.value.map((row) => ({
     id: row.id,
@@ -478,9 +482,12 @@ const tableRows = computed(() =>
     branch: row.branch,
     trialDate: row.trial_date ? formatAddedDate(row.trial_date) : '—',
     nextPaymentDate: row.next_payment_date ? formatAddedDate(row.next_payment_date) : '—',
+    // not a debtor: paid up to the next payment day; that day is today — pay today
+    paysToday: !row.is_debtor && row.next_payment_date === today,
     isDebtor: Boolean(row.is_debtor),
     overdueDays: row.overdue_days || 0,
     debtAmount: row.debt_amount || 0,
+    debtMonths: row.debt_months || 0,
     isFrozen: row.status === 2,
   })),
 );
@@ -562,6 +569,9 @@ async function openDetailPanel(studentId: number) {
     ]);
     detailStudent.value = data.data;
     fillForm(data.data);
+    detailTab.value = 'overview';
+    journal.value = null;
+    journalStudentId = null;
   } finally {
     panelLoading.value = false;
   }
@@ -570,6 +580,112 @@ async function openDetailPanel(studentId: number) {
 function startEdit() {
   if (!detailStudent.value) return;
   editingStudent.value = detailStudent.value;
+}
+
+// ---- Card tabs: overview, attendance, the group's schedule (one request for the last two)
+type DetailTab = 'overview' | 'attendance' | 'schedule';
+const DETAIL_TABS: Array<{ id: DetailTab; label: MessageKey }> = [
+  { id: 'overview', label: 'students.tabOverview' },
+  { id: 'attendance', label: 'students.tabAttendance' },
+  { id: 'schedule', label: 'students.tabSchedule' },
+];
+
+interface JournalRecord {
+  id: number;
+  date: string;
+  group_id: number;
+  group: string;
+  status: number;
+  note: string;
+}
+
+interface JournalGroup {
+  id: number;
+  name: string;
+  days: number;
+  days_label: string;
+  weekdays: number[];
+  branch: string;
+  course: { name: string | null };
+  teacher: string | null;
+  room: string | null;
+  lesson_start_time: string | null;
+  lesson_end_time: string | null;
+  group_start_date: string | null;
+  group_end_date: string | null;
+  week_of_study: number | null;
+  students_count: number;
+}
+
+interface StudentJournal {
+  summary: { total: number; present: number; late: number; absent: number };
+  records: JournalRecord[];
+  group: JournalGroup | null;
+}
+
+/** The server sends at most this many marks (api/v1/views_student_card.py). */
+const JOURNAL_LIMIT = 200;
+const ATTENDANCE_CLASS: Record<number, string> = {
+  1: 'bg-emerald-100 text-emerald-700',
+  2: 'bg-amber-100 text-amber-800',
+  0: 'bg-red-100 text-red-700',
+};
+// 0 = Monday … 6 = Sunday, as the server counts weekdays
+const WEEKDAY_KEYS: MessageKey[] = ['weekday.mon', 'weekday.tue', 'weekday.wed', 'weekday.thu', 'weekday.fri', 'weekday.sat', 'weekday.sun'];
+
+const detailTab = ref<DetailTab>('overview');
+const journal = ref<StudentJournal | null>(null);
+const journalLoading = ref(false);
+const journalError = ref('');
+let journalStudentId: number | null = null;
+
+async function loadJournal(force = false) {
+  const id = detailStudent.value?.id;
+  if (!id || (!force && journalStudentId === id && journal.value)) return;
+  journalLoading.value = !journal.value || journalStudentId !== id;
+  journalError.value = '';
+  try {
+    const { data } = await client.get<ApiEnvelope<StudentJournal>>(`/students/${id}/attendance`);
+    if (detailStudent.value?.id !== id) return;
+    journal.value = data.data;
+    journalStudentId = id;
+  } catch (error: unknown) {
+    journalError.value = apiErrorMessage(error, t('students.journalFailed'));
+  } finally {
+    journalLoading.value = false;
+  }
+}
+
+watch(detailTab, (tab) => {
+  if (tab !== 'overview') void loadJournal();
+});
+
+/** Marks grouped by month, newest first: "October 2026 — 12 lessons". */
+const journalMonths = computed(() => {
+  const months: Array<{ month: string; title: string; records: JournalRecord[] }> = [];
+  for (const record of journal.value?.records ?? []) {
+    const month = record.date.slice(0, 7);
+    let last = months[months.length - 1];
+    if (!last || last.month !== month) {
+      last = { month, title: formatMonthTitle(month), records: [] };
+      months.push(last);
+    }
+    last.records.push(record);
+  }
+  return months;
+});
+
+const journalManyGroups = computed(() => new Set((journal.value?.records ?? []).map((r) => r.group_id)).size > 1);
+
+const attendancePercent = computed(() => {
+  const s = journal.value?.summary;
+  if (!s?.total) return null;
+  return Math.round(((s.present + s.late) * 100) / s.total);
+});
+
+function journalDay(iso: string) {
+  const [y, m, d] = iso.split('-').map(Number);
+  return `${String(d).padStart(2, '0')}.${String(m).padStart(2, '0')}, ${weekdayShort(new Date(y, m - 1, d))}`;
 }
 
 /** The same card again, without the "Loading…" blink: after a return from a card above. */
@@ -584,6 +700,7 @@ async function refreshDetail() {
   if (detailStudent.value?.id !== id || editingStudent.value) return;
   detailStudent.value = data.data;
   fillForm(data.data);
+  if (detailTab.value !== 'overview') void loadJournal(true);
 }
 
 function openCard(studentId: number) {
@@ -808,6 +925,23 @@ function goGroupFromTable(groupId: number) {
   router.push(groupRoute(groupId));
 }
 
+const isDebtorsPage = computed(() => route.path.includes('debtors'));
+/** Something narrows the list (the debtors page itself is not a filter). */
+const isFiltered = computed(() =>
+  Boolean(filters.q.trim() || filters.branch_id || filters.group_id || (filters.status && !isDebtorsPage.value)),
+);
+
+function resetFilters() {
+  const basePath = isDebtorsPage.value ? '/students/debtors' : '/students';
+  filters.branch_id = '';
+  filters.group_id = '';
+  filters.q = '';
+  if (!isDebtorsPage.value) filters.status = '';
+  // the remembered filters go too, or the menu would bring them back
+  forgetQuery(basePath);
+  router.push({ path: basePath });
+}
+
 function applyFilters() {
   const query: Record<string, string> = {};
   if (filters.branch_id) query.branch_id = filters.branch_id;
@@ -847,6 +981,14 @@ watch(
   },
 );
 
+// The card is already open and "+ Pay" was chosen for it again in the quick search
+watch(
+  () => props.cardPay,
+  (pay) => {
+    if (pay && detailStudent.value && canAcceptPayment.value && !showPayModal.value) openAcceptPaymentModal();
+  },
+);
+
 let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 watch(
   () => filters.q,
@@ -866,6 +1008,8 @@ onMounted(async () => {
     await Promise.all([loadOptions(), openDetailPanel(props.cardId as number)]);
     // straight into the edit form (e.g. from a reminder "put the student into a group")
     if (props.cardEdit && canWriteStudents.value) startEdit();
+    // from the quick search "+ Pay": the payment window is up at once
+    else if (props.cardPay && canAcceptPayment.value) openAcceptPaymentModal();
     return;
   }
   syncFiltersFromRoute();
@@ -978,13 +1122,28 @@ onMounted(async () => {
       >
         {{ t('common.apply') }}
       </button>
+      <button
+        v-if="isFiltered"
+        type="button"
+        class="rounded-lg px-3 py-2 text-sm text-fb-secondary hover:text-fb-danger"
+        @click="resetFilters"
+      >
+        ✕ {{ t('empty.resetFilters') }}
+      </button>
     </div>
 
     <div class="overflow-hidden rounded-xl border border-fb-line bg-fb-card">
-      <div v-if="loading" class="p-8 text-center text-fb-secondary">{{ t('common.loading') }}</div>
-      <div v-else-if="!tableRows.length" class="p-8 text-center text-fb-icon">
-        {{ rows.length ? t('common.nothingFound') : t('students.empty') }}
-      </div>
+      <SkeletonBlock v-if="loading" :rows="8" :cols="7" />
+      <EmptyState
+        v-else-if="!tableRows.length"
+        :icon="isDebtorsPage ? 'debtors' : 'students'"
+        :filtered="isFiltered"
+        :title="isDebtorsPage ? t('students.noDebtors') : t('students.emptyTitle')"
+        :hint="isDebtorsPage ? t('students.noDebtorsHint') : t('students.emptyHint')"
+        :action-label="!isDebtorsPage && canWriteStudents ? t('students.addFirst') : ''"
+        @action="openCreatePanel"
+        @reset="resetFilters"
+      />
       <table v-else class="w-full text-base">
         <thead class="border-b border-fb-line bg-fb-canvas">
           <tr>
@@ -995,7 +1154,7 @@ onMounted(async () => {
             <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('schedule.group') }}</th>
             <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('common.branch') }}</th>
             <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('students.startDate') }}</th>
-            <th v-if="canSeeMoney" class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('students.nextPayment') }}</th>
+            <th v-if="canSeeMoney" class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('students.paymentColumn') }}</th>
           </tr>
         </thead>
         <tbody>
@@ -1061,11 +1220,11 @@ onMounted(async () => {
             <td class="px-5 py-4 text-fb-secondary">{{ row.trialDate }}</td>
             <td v-if="canSeeMoney" class="px-5 py-4 text-fb-secondary">
               <div v-if="row.isDebtor" class="flex flex-col items-start gap-1">
-                <span class="inline-flex items-center rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-semibold text-red-700">
-                  {{ t('students.overdueDays', { count: row.overdueDays }) }}
+                <span class="inline-flex items-center whitespace-nowrap rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-semibold text-red-700">
+                  {{ row.debtAmount ? t('students.debtBadge', { months: row.debtMonths || 1, amount: formatSum(row.debtAmount) }) : t('students.debtBadgeNoSum') }}
                 </span>
-                <span v-if="row.debtAmount" class="text-xs font-semibold text-red-700">
-                  {{ t('students.debtAmount', { amount: formatSum(row.debtAmount) }) }}
+                <span class="text-xs font-medium text-red-600">
+                  {{ t('students.overdueDays', { count: row.overdueDays }) }} · {{ row.nextPaymentDate }}
                 </span>
                 <span
                   v-if="row.isFrozen"
@@ -1074,11 +1233,19 @@ onMounted(async () => {
                 >
                   {{ t('students.frozen') }}
                 </span>
-                <span class="text-xs font-medium text-red-600">{{ row.nextPaymentDate }}</span>
               </div>
-              <div v-else-if="row.nextPaymentDate !== '—'" class="flex items-center gap-1.5">
-                <span class="text-sm font-medium text-fb-text">{{ row.nextPaymentDate }}</span>
-              </div>
+              <span
+                v-else-if="row.paysToday"
+                class="inline-flex items-center whitespace-nowrap rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-semibold text-amber-800"
+              >
+                {{ t('students.payToday') }}
+              </span>
+              <span
+                v-else-if="row.nextPaymentDate !== '—'"
+                class="inline-flex items-center whitespace-nowrap rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-semibold text-emerald-700"
+              >
+                {{ t('students.paidUntil', { date: row.nextPaymentDate }) }}
+              </span>
               <span v-else class="text-fb-secondary">—</span>
             </td>
           </tr>
@@ -1094,7 +1261,7 @@ onMounted(async () => {
           <button type="button" class="text-fb-icon hover:text-fb-secondary" :aria-label="t('common.close')" @click="closePanel">✕</button>
         </div>
 
-        <div v-if="panelLoading" class="flex-1 p-6 text-fb-secondary">{{ t('common.loading') }}</div>
+        <SkeletonBlock v-if="panelLoading" variant="detail" class="flex-1 overflow-hidden" />
 
         <form v-else class="flex flex-1 flex-col overflow-hidden" @submit.prevent="submitStudent">
           <div v-if="isReadOnly && detailStudent" class="flex-1 overflow-y-auto p-6">
@@ -1215,7 +1382,22 @@ onMounted(async () => {
               </div>
             </div>
 
-            <div class="mt-6 grid items-start gap-6" :class="canSeeMoney ? 'xl:grid-cols-3' : ''">
+            <div class="mt-6 flex gap-1 border-b border-fb-line" role="tablist">
+              <button
+                v-for="tab in DETAIL_TABS"
+                :key="tab.id"
+                type="button"
+                role="tab"
+                :aria-selected="detailTab === tab.id"
+                class="-mb-px border-b-2 px-4 py-2.5 text-sm font-medium transition-colors"
+                :class="detailTab === tab.id ? 'border-fb-blue text-fb-blue' : 'border-transparent text-fb-secondary hover:text-fb-text'"
+                @click="detailTab = tab.id"
+              >
+                {{ t(tab.label) }}
+              </button>
+            </div>
+
+            <div v-if="detailTab === 'overview'" class="mt-5 grid items-start gap-6" :class="canSeeMoney ? 'xl:grid-cols-3' : ''">
             <div>
             <div class="mb-2 text-base font-semibold text-fb-text">{{ t('students.info') }}</div>
             <dl class="space-y-3 text-sm">
@@ -1350,9 +1532,7 @@ onMounted(async () => {
                 </div>
               </div>
 
-              <div v-if="paymentsLoading" class="py-6 text-center text-xs text-fb-secondary">
-                {{ t('common.loading') }}
-              </div>
+              <SkeletonBlock v-if="paymentsLoading" variant="lines" :rows="4" class="mt-3" />
               <div v-else-if="!studentPayments.length" class="py-6 text-center text-xs text-fb-secondary">
                 {{ t('students.noPayments') }}
               </div>
@@ -1399,6 +1579,136 @@ onMounted(async () => {
                 </div>
               </div>
             </div>
+            </div>
+
+            <!-- Attendance: every mark of the student, by month -->
+            <div v-else-if="detailTab === 'attendance'" class="mt-5">
+              <SkeletonBlock v-if="journalLoading" variant="lines" :rows="8" />
+              <p v-else-if="journalError" class="py-8 text-center text-sm text-fb-danger">{{ journalError }}</p>
+              <template v-else-if="journal">
+                <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+                  <div class="fact-tile-fb">
+                    <div class="fact-label">{{ t('students.lessonsTotal') }}</div>
+                    <div class="fact-value">{{ journal.summary.total }}</div>
+                  </div>
+                  <div class="fact-tile-fb">
+                    <div class="fact-label">{{ t('teacherAtt.present') }}</div>
+                    <div class="fact-value !text-emerald-700">{{ journal.summary.present }}</div>
+                  </div>
+                  <div class="fact-tile-fb">
+                    <div class="fact-label">{{ t('teacherAtt.late') }}</div>
+                    <div class="fact-value !text-amber-700">{{ journal.summary.late }}</div>
+                  </div>
+                  <div class="fact-tile-fb" :class="journal.summary.absent ? '!border-red-200 !bg-red-50' : ''">
+                    <div class="fact-label">{{ t('teacherAtt.absent') }}</div>
+                    <div class="fact-value" :class="journal.summary.absent ? '!text-red-700' : ''">{{ journal.summary.absent }}</div>
+                  </div>
+                  <div class="fact-tile-fb">
+                    <div class="fact-label">{{ t('students.attendanceRate') }}</div>
+                    <div class="fact-value">{{ attendancePercent === null ? '—' : `${attendancePercent}%` }}</div>
+                    <div class="text-xs text-fb-secondary">{{ t('students.attendanceRateHint') }}</div>
+                  </div>
+                </div>
+
+                <EmptyState
+                  v-if="!journal.records.length"
+                  compact
+                  icon="attendance"
+                  :title="t('students.noAttendance')"
+                  :hint="t('students.noAttendanceHint')"
+                />
+                <div v-else class="mt-5 grid gap-4 lg:grid-cols-2 2xl:grid-cols-3">
+                  <section v-for="month in journalMonths" :key="month.month" class="rounded-xl border border-fb-line bg-fb-canvas p-4 text-sm">
+                    <div class="flex items-center justify-between border-b border-fb-line pb-2">
+                      <span class="font-semibold text-fb-text">{{ month.title }}</span>
+                      <span class="text-xs text-fb-secondary">{{ t('students.lessonsTotal') }}: {{ month.records.length }}</span>
+                    </div>
+                    <ul class="mt-2 space-y-1.5">
+                      <li v-for="record in month.records" :key="record.id" class="flex items-start justify-between gap-3">
+                        <div class="min-w-0">
+                          <span class="text-fb-text">{{ journalDay(record.date) }}</span>
+                          <span v-if="journalManyGroups" class="ml-2 text-xs text-fb-secondary">{{ record.group }}</span>
+                          <div v-if="record.note" class="text-xs italic text-fb-secondary">{{ record.note }}</div>
+                        </div>
+                        <span class="shrink-0 rounded-full px-2 py-0.5 text-xs font-medium" :class="ATTENDANCE_CLASS[record.status] ?? 'bg-slate-100 text-slate-600'">
+                          {{ attendanceLabel(record.status) }}
+                        </span>
+                      </li>
+                    </ul>
+                  </section>
+                </div>
+                <p v-if="journal.records.length >= JOURNAL_LIMIT" class="mt-3 text-xs text-fb-secondary">
+                  {{ t('students.attendanceLimit', { count: JOURNAL_LIMIT }) }}
+                </p>
+              </template>
+            </div>
+
+            <!-- The current group's schedule -->
+            <div v-else class="mt-5">
+              <SkeletonBlock v-if="journalLoading" variant="lines" :rows="5" />
+              <p v-else-if="journalError" class="py-8 text-center text-sm text-fb-danger">{{ journalError }}</p>
+              <EmptyState
+                v-else-if="journal && !journal.group"
+                compact
+                icon="groups"
+                :title="t('students.noGroup')"
+                :hint="t('students.noGroupHint')"
+                :action-label="canWriteStudents ? t('students.putInGroup') : ''"
+                @action="startEdit"
+              />
+              <div v-else-if="journal?.group" class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                <div class="fact-tile-fb">
+                  <div class="fact-label">{{ t('schedule.group') }}</div>
+                  <div class="fact-value">
+                    <button type="button" class="text-left text-fb-blue hover:underline" :title="t('students.openGroup')" @click="goGroup(detailStudent)">
+                      {{ journal.group.name }}
+                    </button>
+                  </div>
+                  <div class="text-xs text-fb-secondary">{{ journal.group.course.name || '—' }} · {{ journal.group.branch }}</div>
+                </div>
+                <div class="fact-tile-fb">
+                  <div class="fact-label">{{ t('groups.days') }}</div>
+                  <div class="fact-value">{{ groupDaysLabel(journal.group.days, journal.group.days_label) }}</div>
+                  <div class="mt-1 flex flex-wrap gap-1">
+                    <span
+                      v-for="(key, day) in WEEKDAY_KEYS"
+                      :key="key"
+                      class="rounded px-1.5 py-0.5 text-[11px] font-medium"
+                      :class="journal.group.weekdays.includes(day) ? 'bg-fb-blue text-white' : 'bg-fb-canvas text-fb-icon'"
+                    >
+                      {{ t(key) }}
+                    </span>
+                  </div>
+                </div>
+                <div class="fact-tile-fb">
+                  <div class="fact-label">{{ t('students.lessonTime') }}</div>
+                  <div class="fact-value">
+                    {{ journal.group.lesson_start_time && journal.group.lesson_end_time ? `${journal.group.lesson_start_time} – ${journal.group.lesson_end_time}` : '—' }}
+                  </div>
+                </div>
+                <div class="fact-tile-fb">
+                  <div class="fact-label">{{ t('schedule.teacher') }}</div>
+                  <div class="fact-value">{{ journal.group.teacher || '—' }}</div>
+                </div>
+                <div class="fact-tile-fb">
+                  <div class="fact-label">{{ t('groups.room') }}</div>
+                  <div class="fact-value">{{ journal.group.room || '—' }}</div>
+                </div>
+                <div class="fact-tile-fb">
+                  <div class="fact-label">{{ t('students.groupPeriod') }}</div>
+                  <div class="fact-value">
+                    {{ journal.group.group_start_date ? formatAddedDate(journal.group.group_start_date) : '—' }}
+                    — {{ journal.group.group_end_date ? formatAddedDate(journal.group.group_end_date) : '…' }}
+                  </div>
+                  <div class="text-xs text-fb-secondary">
+                    <template v-if="journal.group.week_of_study">{{ t('groups.week', { n: journal.group.week_of_study }) }} · </template>{{ t('students.groupPeriodHint') }}
+                  </div>
+                </div>
+                <div class="fact-tile-fb">
+                  <div class="fact-label">{{ t('students.groupmates') }}</div>
+                  <div class="fact-value">{{ journal.group.students_count }}</div>
+                </div>
+              </div>
             </div>
           </div>
 

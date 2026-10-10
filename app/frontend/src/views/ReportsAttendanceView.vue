@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue';
+import SkeletonBlock from '../components/SkeletonBlock.vue';
 
 import client, { type ApiEnvelope } from '../api/client';
 import { useAuthStore } from '../stores/auth';
@@ -603,7 +604,7 @@ onMounted(() => {
       <div v-if="!summaryGroupId" class="rounded-xl border border-fb-line bg-fb-card p-10 text-center text-sm text-fb-secondary">
         {{ t('attendance.chooseGroupHint') }}
       </div>
-      <div v-else-if="summaryLoading" class="p-10 text-center text-fb-secondary">{{ t('common.loading') }}</div>
+      <SkeletonBlock v-else-if="summaryLoading" :rows="8" :cols="8" />
       <div v-else-if="summaryData" class="overflow-hidden rounded-xl border border-fb-line bg-fb-card shadow-sm">
         <div class="border-b border-fb-line px-5 py-3 text-sm">
           <strong class="text-fb-text">{{ summaryData.group.name }}</strong>
@@ -789,10 +790,7 @@ onMounted(() => {
     <!-- Groups Table Card -->
     <div v-if="activeTab === 'day'" class="overflow-hidden rounded-xl border border-fb-line bg-fb-card shadow-sm">
       <!-- Loading State -->
-      <div v-if="loadingGroups" class="p-16 text-center text-fb-secondary">
-        <div class="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-fb-blue border-r-transparent mb-3" />
-        <p class="text-sm font-medium text-fb-text">{{ t('common.loading') }}</p>
-      </div>
+      <SkeletonBlock v-if="loadingGroups" :rows="6" :cols="7" />
 
       <!-- Empty State -->
       <div v-else-if="!filteredGroups.length" class="flex flex-col items-center justify-center p-14 text-center">
@@ -1065,10 +1063,7 @@ onMounted(() => {
         <!-- Modal Body: Student List -->
         <div class="flex-1 overflow-y-auto px-6 py-3">
           <!-- Loading Students -->
-          <div v-if="loadingStudents" class="py-16 text-center text-fb-secondary">
-            <div class="inline-block h-7 w-7 animate-spin rounded-full border-4 border-solid border-fb-blue border-r-transparent mb-2" />
-            <p class="text-sm font-medium">{{ t('common.loading') }}</p>
-          </div>
+          <SkeletonBlock v-if="loadingStudents" :rows="8" :cols="3" />
 
           <!-- Empty Students State -->
           <div v-else-if="!groupStudents.length" class="py-12 text-center text-fb-secondary">

@@ -4,6 +4,7 @@ import { computed, ref } from 'vue';
 import client, { type ApiEnvelope } from '../api/client';
 import { t } from '../i18n';
 import { hasPermission } from '../utils/rbac';
+import { clearRememberedFilters } from '../utils/rememberedFilters';
 
 export interface Company {
   id: number;
@@ -91,6 +92,7 @@ export const useAuthStore = defineStore('auth', () => {
     user.value = null;
     token.value = null;
     localStorage.removeItem('access_token');
+    clearRememberedFilters();
   }
 
   function syncTokenFromStorage() {

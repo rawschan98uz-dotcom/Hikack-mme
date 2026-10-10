@@ -4,6 +4,7 @@ import { useAuthStore } from '../stores/auth';
 import { filterNavSections, primaryNav } from '../config/navigation';
 import { canAccessRoute, isHiddenForTeacher } from '../utils/rbac';
 import { CARD_PATHS, isCardLink, parseCards, queryWithCards, resolveCardLink } from '../utils/cardStack';
+import { rememberQuery, rememberedQueryFor } from '../utils/rememberedFilters';
 import AppLayout from '../layouts/AppLayout.vue';
 import ActivityLogsView from '../views/ActivityLogsView.vue';
 import ArchiveView from '../views/ArchiveView.vue';
@@ -153,7 +154,14 @@ router.beforeEach(async (to, from) => {
   if (allowedCards.length !== cards.length) {
     return { path: to.path, query: queryWithCards(to.query, allowedCards) };
   }
+  // A list opened from the menu (no filters in the address) gets back the filters it had
+  const remembered = rememberedQueryFor(to);
+  if (remembered) return remembered;
   return true;
+});
+
+router.afterEach((to) => {
+  rememberQuery(to);
 });
 
 export default router;

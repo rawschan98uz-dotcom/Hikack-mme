@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
+import SkeletonBlock from '../components/SkeletonBlock.vue';
+import EmptyState from '../components/EmptyState.vue';
 import { useRoute, useRouter } from 'vue-router';
 
 import client, { type ApiEnvelope } from '../api/client';
@@ -492,9 +494,17 @@ onCardsReturn(props.cardLevel ?? -1, () => {
     </div>
 
     <!-- Teacher list -->
-    <div v-if="loading" class="text-fb-secondary text-[16px] py-8">{{ t('common.loading') }}</div>
-    <div v-else-if="!filteredTeachers.length" class="rounded-xl border border-fb-line bg-fb-card p-10 text-center text-fb-icon text-[16px]">
-      {{ teachers.length ? t('common.nothingFound') : t('teachers.empty') }}
+    <SkeletonBlock v-if="loading" variant="cards" :rows="4" />
+    <div v-else-if="!filteredTeachers.length" class="rounded-xl border border-fb-line bg-fb-card">
+      <EmptyState
+        icon="teachers"
+        :filtered="Boolean(searchQuery.trim())"
+        :title="t('teachers.emptyTitle')"
+        :hint="t('teachers.emptyHint')"
+        :action-label="canCreateTeacher ? t('teachers.addFirst') : ''"
+        @action="openModal()"
+        @reset="searchQuery = ''"
+      />
     </div>
     <div v-else class="grid grid-cols-1 md:grid-cols-2 gap-4">
       <div
@@ -724,7 +734,7 @@ onCardsReturn(props.cardLevel ?? -1, () => {
           </button>
         </div>
 
-        <div v-if="profileLoading" class="p-8 text-center text-fb-secondary">{{ t('common.loading') }}</div>
+        <SkeletonBlock v-if="profileLoading" variant="detail" />
         <div v-else-if="profileTeacher" class="flex-1 overflow-y-auto px-8 py-6">
           <div class="flex flex-wrap items-start justify-between gap-6">
             <div>

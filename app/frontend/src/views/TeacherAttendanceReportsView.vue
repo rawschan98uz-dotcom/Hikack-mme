@@ -8,6 +8,9 @@ import { computed, onMounted, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
 
 import client, { type ApiEnvelope } from '../api/client';
+import { useRememberedFilters } from '../utils/rememberedFilters';
+import SkeletonBlock from '../components/SkeletonBlock.vue';
+import EmptyState from '../components/EmptyState.vue';
 import { useAuthStore } from '../stores/auth';
 import { downloadCsv } from '../utils/csvExport';
 import { groupRoute, teacherRoute } from '../utils/crossLinks';
@@ -98,6 +101,8 @@ const filters = reactive({
   teacher_id: '',
   status: '',
 });
+// Leave the page and come back: the filters are still set
+const { isFiltered: teacherAttFiltered } = useRememberedFilters('teacher-attendance', filters, { ignore: ['month'] });
 
 const filterGroups = computed(() =>
   filters.branch_id ? groups.value.filter((g) => String(g.branch_id) === filters.branch_id) : groups.value,
@@ -348,8 +353,15 @@ onMounted(async () => {
 
     <!-- Lessons -->
     <div class="overflow-hidden rounded-xl border border-fb-line bg-fb-card shadow-sm">
-      <div v-if="loading" class="p-12 text-center text-fb-secondary">{{ t('common.loading') }}</div>
-      <div v-else-if="!rows.length" class="p-12 text-center text-sm text-fb-secondary">{{ t('teacherAtt.empty') }}</div>
+      <SkeletonBlock v-if="loading" :rows="8" :cols="6" />
+      <EmptyState
+        v-else-if="!rows.length"
+        icon="attendance"
+        :filtered="teacherAttFiltered"
+        :title="t('teacherAtt.empty')"
+        :hint="t('teacherAtt.emptyHint')"
+        @reset="resetFilters"
+      />
       <template v-else>
         <div class="overflow-x-auto">
           <table class="w-full text-sm">

@@ -2,6 +2,9 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 
 import client, { type ApiEnvelope } from '../api/client';
+import { useRememberedFilters } from '../utils/rememberedFilters';
+import EmptyState from '../components/EmptyState.vue';
+import SkeletonBlock from '../components/SkeletonBlock.vue';
 import PaymentPreviewHint from '../components/PaymentPreviewHint.vue';
 import { todayIso } from '../utils/dates';
 import { useAuthStore } from '../stores/auth';
@@ -140,6 +143,14 @@ function openPaymentLink(studentOrRow?: StudentOption | PaymentRow | null) {
 }
 
 const filters = reactive({ date_from: '', date_to: '', method: '', q: '' });
+
+// Leave the page and come back: the filters are still set
+const { isFiltered, reset: resetFilters } = useRememberedFilters('payments', filters);
+
+function resetAndReload() {
+  resetFilters();
+  void loadRows();
+}
 const form = reactive({
   student_id: null as number | null,
   student_name: '',
@@ -501,11 +512,23 @@ watch(
         <input v-model="filters.q" type="search" class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm" @keydown.enter="loadRows" />
       </div>
       <button type="button" class="rounded-lg border border-fb-line px-4 py-2 text-sm" @click="loadRows">{{ t('common.apply') }}</button>
+      <button v-if="isFiltered" type="button" class="rounded-lg px-3 py-2 text-sm text-fb-secondary hover:text-fb-danger" @click="resetAndReload">
+        ✕ {{ t('empty.resetFilters') }}
+      </button>
     </div>
 
     <div class="overflow-hidden rounded-xl border border-fb-line bg-fb-card">
-      <div v-if="loading" class="p-8 text-center text-fb-secondary">{{ t('common.loading') }}</div>
-      <div v-else-if="!rows.length" class="p-8 text-center text-fb-icon">{{ t('payments.empty') }}</div>
+      <SkeletonBlock v-if="loading" :rows="8" :cols="6" />
+      <EmptyState
+        v-else-if="!rows.length"
+        icon="coins"
+        :filtered="isFiltered"
+        :title="t('payments.emptyTitle')"
+        :hint="t('payments.emptyHint')"
+        :action-label="canWriteFinance ? t('payments.addTitle') : ''"
+        @action="openCreate"
+        @reset="resetAndReload"
+      />
       <table v-else class="w-full text-base">
         <thead class="border-b bg-fb-canvas">
           <tr>
@@ -595,7 +618,7 @@ watch(
           <h2 class="text-lg font-semibold">{{ panelTitle }}</h2>
           <button type="button" :aria-label="t('common.close')" @click="closePanel">✕</button>
         </div>
-        <div v-if="panelLoading" class="p-6 text-fb-secondary">{{ t('common.loading') }}</div>
+        <SkeletonBlock v-if="panelLoading" variant="lines" :rows="6" class="p-6" />
         <form v-else class="flex flex-1 flex-col overflow-hidden" @submit.prevent="submitForm">
           <div class="flex-1 space-y-4 overflow-y-auto p-6">
             <p v-if="isRefund(detailRow)" class="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-800">

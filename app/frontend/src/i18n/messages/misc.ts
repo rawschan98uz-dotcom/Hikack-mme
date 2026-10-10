@@ -276,7 +276,6 @@ export default defineMessages({
   'courses.nameRequired': { uz: 'Kurs nomini kiriting', ru: 'Введите название курса', en: 'Enter the course name' },
   'courses.codeInvalid': { uz: 'Toʻgʻri kurs kodini kiriting ({hint})', ru: 'Введите правильный код курса ({hint})', en: 'Enter a valid course code ({hint})' },
   'courses.created': { uz: 'Kurs yaratildi', ru: 'Курс создан', en: 'Course created' },
-  'courses.empty': { uz: 'Hozircha kurslar yoʻq. Qoʻshish uchun «Yangi qoʻshish» tugmasini bosing.', ru: 'Курсов пока нет. Нажмите «Добавить», чтобы создать.', en: 'No courses yet. Click “Add new” to add one.' },
   'courses.fromDate': { uz: '{date} dan', ru: 'с {date}', en: 'from {date}' },
   'courses.fromStart': { uz: 'boshidan', ru: 'с начала', en: 'from the start' },
   'courses.editTitle': { uz: 'Kursni tahrirlash', ru: 'Изменить курс', en: 'Edit course' },
@@ -318,5 +317,45 @@ export default defineMessages({
     uz: 'Qarz toʻlanmagan: yopish, oʻzgartirish yoki oʻchirish mumkin emas. Oʻquvchi kartochkasida toʻlovni qabul qiling.',
     ru: 'Долг не оплачен: закрыть, изменить или удалить нельзя. Примите оплату в карточке ученика.',
     en: "The debt is not paid: it cannot be closed, changed or deleted. Take the payment in the student's card.",
+  },
+  'archive.emptyTitle': { uz: 'Arxiv boʻsh', ru: 'Архив пуст', en: 'The archive is empty' },
+  'archive.emptyHint': {
+    uz: 'Oʻchirilgan xodimlar va oʻqituvchilar shu yerga tushadi — ularni qaytarish mumkin.',
+    ru: 'Сюда попадают удалённые сотрудники и учителя — их можно вернуть.',
+    en: 'Removed staff and teachers land here — they can be restored.',
+  },
+  'courses.emptyTitle': { uz: 'Hozircha kurslar yoʻq', ru: 'Пока нет курсов', en: 'No courses yet' },
+  'courses.emptyHint': {
+    uz: 'Kurs yarating va narxini kiriting — guruhlar va oʻquvchi oylari shu narxdan hisoblanadi.',
+    ru: 'Создайте курс и укажите цену — по ней считаются группы и месяцы учеников.',
+    en: 'Create a course and set its price — groups and student months are counted from it.',
+  },
+  'courses.addFirst': { uz: 'Birinchi kursni yaratish', ru: 'Создать первый курс', en: 'Create the first course' },
+  'rooms.emptyTitle': { uz: 'Hozircha xonalar yoʻq', ru: 'Пока нет кабинетов', en: 'No rooms yet' },
+  'rooms.emptyHint': {
+    uz: 'Xonalarni qoʻshing — dastur bitta xonada ikki guruh bir vaqtda boʻlmasligini kuzatadi.',
+    ru: 'Добавьте кабинеты — программа будет следить, чтобы две группы не попали в один кабинет одновременно.',
+    en: 'Add rooms — the program makes sure two groups never get the same room at the same time.',
+  },
+  'holidays.emptyUpcoming': { uz: 'Oldinda dam olish kunlari yoʻq', ru: 'Впереди выходных нет', en: 'No upcoming holidays' },
+  'holidays.emptyHint': {
+    uz: 'Bayramlarni oldindan kiriting — bu kunlarda filial guruhlarida dars boʻlmaydi.',
+    ru: 'Внесите праздники заранее — в эти дни у групп филиала уроков не будет.',
+    en: 'Enter holidays in advance — the branch groups have no lessons on those days.',
+  },
+  'reminders.emptyHint': {
+    uz: 'Qoʻngʻiroq yoki ishni unutmaslik uchun eslatma yarating.',
+    ru: 'Создайте напоминание, чтобы не забыть звонок или дело.',
+    en: 'Create a reminder so a call or a task is not forgotten.',
+  },
+  'tags.emptyHint': {
+    uz: 'Teglar bilan guruhlarni belgilang — masalan, «Yozgi», «Online».',
+    ru: 'Тегами можно помечать группы — например, «Летняя», «Онлайн».',
+    en: 'Use tags to mark groups — e.g. “Summer”, “Online”.',
+  },
+  'forms.emptyHint': {
+    uz: 'Sayt uchun ariza shaklini yarating.',
+    ru: 'Создайте форму заявки для сайта.',
+    en: 'Create a request form for your website.',
   },
 });

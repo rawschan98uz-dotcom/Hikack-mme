@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
+import SkeletonBlock from '../components/SkeletonBlock.vue';
 
 import client, { type ApiEnvelope } from '../api/client';
 import { t, type MessageKey } from '../i18n';
@@ -96,7 +97,7 @@ onMounted(load);
   <div class="space-y-4">
     <h1 class="text-xl font-semibold text-fb-text">{{ t('nav.settings') }}</h1>
 
-    <div v-if="loading" class="text-fb-secondary">{{ t('common.loading') }}</div>
+    <SkeletonBlock v-if="loading" variant="lines" :rows="6" />
 
     <template v-else-if="settings">
       <div class="flex flex-wrap gap-2 border-b border-fb-line pb-2">

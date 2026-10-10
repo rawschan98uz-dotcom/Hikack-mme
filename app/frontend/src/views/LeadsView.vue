@@ -6,7 +6,7 @@ import client, { type ApiEnvelope } from '../api/client';
 import { useAuthStore } from '../stores/auth';
 import { PERM } from '../utils/rbac';
 import { downloadCsv } from '../utils/csvExport';
-import { hasCreateFlag, routeWithoutCreate } from '../utils/crossLinks';
+import { hasCreateFlag, parseOpenId, routeWithoutCreate, routeWithoutOpen } from '../utils/crossLinks';
 import { t, type MessageKey } from '../i18n';
 import { leadStageLabel } from '../i18n/labels';
 import {
@@ -20,6 +20,8 @@ import {
   type Preset,
 } from '../i18n/presets';
 import { toast } from '../ui/feedback';
+import EmptyState from '../components/EmptyState.vue';
+import SkeletonBlock from '../components/SkeletonBlock.vue';
 import { apiErrorMessage } from '../utils/apiError';
 
 interface LeadRow {
@@ -619,6 +621,15 @@ async function handleConvert() {
   }
 }
 
+/** Search, course or level narrow the list (the stage tabs are sections, not filters). */
+const isFiltered = computed(() => Boolean(filters.q.trim() || filters.course_id || filters.level));
+
+function resetFilters() {
+  filters.q = '';
+  filters.course_id = '';
+  filters.level = '';
+}
+
 function setStageFilter(stage: string) {
   filters.archived = '0';
   filters.stage = stage;
@@ -668,6 +679,30 @@ function maybeCreateFromRoute() {
   router.replace(routeWithoutCreate(route));
 }
 
+async function openLeadById(id: number) {
+  try {
+    const { data } = await client.get<ApiEnvelope<LeadRow>>(`/leads/${id}`);
+    openPanel(data.data);
+  } catch (error: unknown) {
+    toast.error(apiErrorMessage(error, t('leads.notFound')));
+  }
+}
+
+/** "/leads?open=5" (from the quick search) while the list is open: that lead's form on top of it. */
+function maybeOpenFromRoute() {
+  const id = parseOpenId(route.query);
+  if (id == null) return;
+  router.replace(routeWithoutOpen(route));
+  void openLeadById(id);
+}
+
+watch(
+  () => route.query.open,
+  () => {
+    maybeOpenFromRoute();
+  },
+);
+
 watch(
   () => route.query.create,
   () => {
@@ -710,9 +745,12 @@ watch(
 );
 
 onMounted(async () => {
+  // read before the filters rewrite the address
+  const openId = parseOpenId(route.query);
   applyRouteQuery();
   await Promise.all([loadLeads(), loadBranchAndGroupOptions()]);
   maybeCreateFromRoute();
+  if (openId != null) void openLeadById(openId);
 });
 </script>
 
@@ -831,10 +869,17 @@ onMounted(async () => {
     </div>
 
     <div class="overflow-hidden rounded-xl border border-fb-line bg-fb-card">
-      <div v-if="loading" class="p-8 text-center text-fb-secondary">{{ t('common.loading') }}</div>
-      <div v-else-if="!rows.length" class="p-8 text-center text-fb-icon">
-        {{ t('leads.empty') }}
-      </div>
+      <SkeletonBlock v-if="loading" :rows="8" :cols="6" />
+      <EmptyState
+        v-else-if="!rows.length"
+        icon="leads"
+        :filtered="isFiltered"
+        :title="filters.archived === '1' ? t('leads.archiveEmpty') : t('leads.emptyTitle')"
+        :hint="filters.archived === '1' ? '' : t('leads.emptyHint')"
+        :action-label="filters.archived === '1' ? '' : t('leads.addTitle')"
+        @action="openPanel()"
+        @reset="resetFilters"
+      />
       <table v-else class="w-full text-base">
         <thead class="border-b border-fb-line bg-fb-canvas">
           <tr>

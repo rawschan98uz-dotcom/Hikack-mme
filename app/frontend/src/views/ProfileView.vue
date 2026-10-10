@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
+import SkeletonBlock from '../components/SkeletonBlock.vue';
 
 import { locale, localeOptions, t, tMaybe } from '../i18n';
 import { useAuthStore } from '../stores/auth';
@@ -101,8 +102,8 @@ onMounted(async () => {
       </div>
     </div>
 
-    <div v-if="loading" class="rounded-xl border border-fb-line bg-fb-card p-10 text-center text-fb-secondary">
-      {{ t('common.loading') }}
+    <div v-if="loading" class="rounded-xl border border-fb-line bg-fb-card">
+      <SkeletonBlock variant="detail" :rows="3" />
     </div>
 
     <div v-else-if="profile" class="relative rounded-xl border border-fb-line bg-fb-card px-8 py-10 shadow-sm">

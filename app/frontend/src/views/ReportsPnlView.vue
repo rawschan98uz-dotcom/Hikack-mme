@@ -3,6 +3,8 @@ import { dateToIso } from '../utils/dates';
 import { onMounted, reactive, ref } from 'vue';
 
 import client, { type ApiEnvelope } from '../api/client';
+import { useRememberedFilters } from '../utils/rememberedFilters';
+import SkeletonBlock from '../components/SkeletonBlock.vue';
 import { downloadCsv } from '../utils/csvExport';
 import { t, type MessageKey } from '../i18n';
 import { payMethodLabel } from '../i18n/labels';
@@ -55,6 +57,8 @@ const filters = reactive({
   date_from: '',
   date_to: '',
 });
+// Leave the page and come back: the filters are still set
+useRememberedFilters('pnl', filters);
 
 function money(value: number) {
   return Math.round(value).toLocaleString('ru-RU');
@@ -158,7 +162,9 @@ function exportCsv() {
 }
 
 onMounted(() => {
-  setPreset('this_month');
+  // the period chosen last time; a ready-made period is recounted from today's date
+  if (filters.preset === 'custom') void loadPnl();
+  else setPreset(filters.preset);
 });
 </script>
 
@@ -252,9 +258,7 @@ onMounted(() => {
       </p>
     </div>
 
-    <div v-if="loading" class="p-12 text-center text-fb-secondary">
-      {{ t('common.loading') }}
-    </div>
+    <SkeletonBlock v-if="loading" variant="cards" :rows="6" />
 
     <template v-else-if="pnl">
       <!-- KPI Cards -->

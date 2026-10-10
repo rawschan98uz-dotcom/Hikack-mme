@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { currentMonthIso, formatMonthTitle } from '../utils/dates';
 import { computed, onMounted, reactive, ref } from 'vue';
+import SkeletonBlock from '../components/SkeletonBlock.vue';
 
 import client, { type ApiEnvelope } from '../api/client';
 import { useAuthStore } from '../stores/auth';
@@ -612,7 +613,7 @@ onMounted(async () => {
       </div>
 
       <div class="overflow-hidden rounded-2xl border border-fb-line bg-fb-card shadow-sm">
-        <div v-if="payrollLoading" class="p-12 text-center text-fb-secondary">{{ t('salaries.counting') }}</div>
+        <SkeletonBlock v-if="payrollLoading" :rows="5" :cols="6" />
         <div v-else-if="payrollError" class="p-12 text-center text-fb-danger">{{ payrollError }}</div>
         <div v-else-if="!payrollRows.length" class="p-12 text-center text-fb-secondary">{{ t('salaries.noData') }}</div>
         <table v-else class="w-full text-left text-sm">
@@ -765,7 +766,7 @@ onMounted(async () => {
 
     <!-- ================= Rates ================= -->
     <div v-else class="overflow-hidden rounded-2xl border border-fb-line bg-fb-card shadow-sm">
-      <div v-if="ratesLoading" class="p-12 text-center text-fb-secondary">{{ t('common.loading') }}</div>
+      <SkeletonBlock v-if="ratesLoading" :rows="5" :cols="5" />
       <div v-else-if="!rates.length" class="p-12 text-center text-fb-secondary">
         {{ t('salaries.noRates') }}
       </div>

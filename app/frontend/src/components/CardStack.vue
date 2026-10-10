@@ -48,6 +48,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
       :card-id="layer.card.id"
       :card-edit="layer.card.edit"
       :card-level="layer.index"
+      v-bind="layer.card.kind === 'student' ? { cardPay: layer.card.pay } : {}"
       @close="closeTop"
     />
   </div>

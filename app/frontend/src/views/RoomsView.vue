@@ -1,5 +1,7 @@
 ﻿<script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
+import SkeletonBlock from '../components/SkeletonBlock.vue';
+import EmptyState from '../components/EmptyState.vue';
 
 import client, { type ApiEnvelope } from '../api/client';
 import { t } from '../i18n';
@@ -168,7 +170,15 @@ onMounted(async () => {
     </div>
 
     <div class="overflow-hidden rounded-xl border border-fb-line bg-fb-card">
-      <div v-if="loading" class="p-8 text-center text-fb-secondary">{{ t('common.loading') }}</div>
+      <SkeletonBlock v-if="loading" :rows="4" :cols="3" />
+      <EmptyState
+        v-else-if="!rows.length"
+        icon="rooms"
+        :title="t('rooms.emptyTitle')"
+        :hint="t('rooms.emptyHint')"
+        :action-label="t('rooms.addTitle')"
+        @action="openCreate"
+      />
       <table v-else class="w-full text-base">
         <thead class="border-b bg-fb-canvas">
           <tr>
@@ -194,7 +204,7 @@ onMounted(async () => {
           <h2 class="text-lg font-semibold">{{ panelTitle }}</h2>
           <button type="button" :aria-label="t('common.close')" @click="closePanel">✕</button>
         </div>
-        <div v-if="panelLoading" class="p-6 text-fb-secondary">{{ t('common.loading') }}</div>
+        <SkeletonBlock v-if="panelLoading" variant="lines" :rows="5" class="p-6" />
         <form v-else class="flex flex-1 flex-col overflow-hidden" @submit.prevent="submitForm">
           <div class="flex-1 space-y-4 overflow-y-auto p-6">
             <div>

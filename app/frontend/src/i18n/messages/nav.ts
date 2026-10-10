@@ -43,7 +43,6 @@ export default defineMessages({
 
   'layout.addStudent': { uz: 'Oʻquvchi qoʻshish', ru: 'Добавить ученика', en: 'Add student' },
   'layout.payStudent': { uz: 'Toʻlov qabul qilish', ru: 'Принять оплату', en: 'Take a payment' },
-  'layout.searchPlaceholder': { uz: 'Oʻquvchini qidirish', ru: 'Поиск ученика', en: 'Search students' },
   'layout.language': { uz: 'Til', ru: 'Язык', en: 'Language' },
   'layout.modules': { uz: 'Boʻlimlar', ru: 'Разделы', en: 'Sections' },
   'layout.fullscreen': { uz: 'Toʻliq ekran', ru: 'Во весь экран', en: 'Full screen' },

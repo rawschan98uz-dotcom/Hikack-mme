@@ -4,6 +4,8 @@ import { onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 
 import client, { type ApiEnvelope } from '../api/client';
+import { useRememberedFilters } from '../utils/rememberedFilters';
+import SkeletonBlock from '../components/SkeletonBlock.vue';
 import { downloadCsv } from '../utils/csvExport';
 import { groupRoute, studentRoute } from '../utils/crossLinks';
 import { onCardsReturn } from '../utils/cardStack';
@@ -89,6 +91,8 @@ const filters = reactive({
   q: '',
   with_debt: false,
 });
+// Leave the page and come back: the filters are still set
+useRememberedFilters('left-students', filters);
 
 function formatMoney(value: number) {
   return value.toLocaleString('ru-RU');
@@ -332,7 +336,7 @@ watch(
 
     <!-- Table or Empty State -->
     <div class="overflow-hidden rounded-xl border border-fb-line bg-fb-card shadow-sm">
-      <div v-if="loading" class="p-12 text-center text-fb-secondary">{{ t('common.loading') }}</div>
+      <SkeletonBlock v-if="loading" :rows="8" :cols="6" />
       
       <!-- Empty State -->
       <div v-else-if="!rows.length" class="flex flex-col items-center justify-center p-12 text-center">

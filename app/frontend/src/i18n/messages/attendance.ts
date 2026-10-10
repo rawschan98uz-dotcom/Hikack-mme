@@ -87,4 +87,9 @@ export default defineMessages({
   'attendance.noteHint': { uz: 'Davomatga izoh', ru: 'Заметка к посещаемости', en: 'Attendance note' },
   'attendance.saveDate': { uz: 'Saqlash sanasi', ru: 'Дата сохранения', en: 'Saving for' },
   'attendance.saveGroup': { uz: 'Guruh davomatini saqlash', ru: 'Сохранить посещаемость группы', en: 'Save group attendance' },
+  'teacherAtt.emptyHint': {
+    uz: 'Oʻqituvchi darsni boshlaganda yoki administrator belgilaganda bu yerda paydo boʻladi.',
+    ru: 'Уроки появятся здесь, когда учитель отметится на уроке или администратор отметит его.',
+    en: 'Lessons appear here once the teacher checks in or an administrator marks them.',
+  },
 });

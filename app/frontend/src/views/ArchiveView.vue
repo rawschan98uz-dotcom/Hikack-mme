@@ -2,6 +2,9 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 
 import client, { type ApiEnvelope } from '../api/client';
+import { useRememberedFilters } from '../utils/rememberedFilters';
+import EmptyState from '../components/EmptyState.vue';
+import SkeletonBlock from '../components/SkeletonBlock.vue';
 import { t, tMaybe } from '../i18n';
 import { confirmDialog, toast } from '../ui/feedback';
 import { apiErrorMessage } from '../utils/apiError';
@@ -52,6 +55,14 @@ const filters = reactive({
   date_from: '',
   date_to: '',
 });
+
+// Leave the page and come back: the filters are still set
+const { isFiltered, reset: resetFilters } = useRememberedFilters('archive', filters);
+
+function resetAndReload() {
+  resetFilters();
+  void loadRows();
+}
 
 const filteredRows = computed(() => {
   const q = filters.q.trim().toLowerCase();
@@ -259,6 +270,9 @@ onMounted(async () => {
           <input v-model="filters.date_to" type="date" class="rounded-lg border px-3 py-2 text-sm" />
         </div>
         <button type="button" class="rounded-lg border px-4 py-2 text-sm" @click="loadRows">{{ t('common.apply') }}</button>
+        <button v-if="isFiltered" type="button" class="rounded-lg px-3 py-2 text-sm text-fb-secondary hover:text-fb-danger" @click="resetAndReload">
+          ✕ {{ t('empty.resetFilters') }}
+        </button>
       </div>
 
       <div class="flex flex-wrap gap-2">
@@ -290,10 +304,15 @@ onMounted(async () => {
     </div>
 
     <div class="overflow-hidden rounded-xl border border-fb-line bg-fb-card">
-      <div v-if="loading" class="p-8 text-center text-fb-secondary">{{ t('common.loading') }}</div>
-      <div v-else-if="!filteredRows.length" class="p-8 text-center text-fb-icon">
-        {{ rows.length ? t('common.nothingFound') : t('common.noData') }}
-      </div>
+      <SkeletonBlock v-if="loading" :rows="8" :cols="6" />
+      <EmptyState
+        v-else-if="!filteredRows.length"
+        icon="archive"
+        :filtered="isFiltered"
+        :title="t('archive.emptyTitle')"
+        :hint="t('archive.emptyHint')"
+        @reset="resetAndReload"
+      />
       <table v-else class="w-full text-sm">
         <thead class="border-b bg-fb-canvas">
           <tr>

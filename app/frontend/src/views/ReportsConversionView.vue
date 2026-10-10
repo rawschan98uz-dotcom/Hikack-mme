@@ -8,6 +8,8 @@ import { todayIso } from '../utils/dates';
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 
 import client, { type ApiEnvelope } from '../api/client';
+import { useRememberedFilters } from '../utils/rememberedFilters';
+import SkeletonBlock from '../components/SkeletonBlock.vue';
 import { downloadCsv } from '../utils/csvExport';
 import { t, type MessageKey } from '../i18n';
 import { leadStageLabel } from '../i18n/labels';
@@ -88,6 +90,8 @@ const filters = reactive({
   q: '',
   is_active: '',
 });
+// Leave the page and come back: the filters are still set
+useRememberedFilters('conversion', filters);
 
 function pct(part: number, whole: number) {
   return whole > 0 ? Math.round((part / whole) * 100) : 0;
@@ -301,7 +305,7 @@ watch(
       </button>
     </div>
 
-    <div v-if="loading && !data" class="p-12 text-center text-fb-secondary">{{ t('common.loading') }}</div>
+    <SkeletonBlock v-if="loading && !data" variant="cards" :rows="3" />
     <template v-else-if="data">
       <!-- Funnel: what happened to every lead of the period -->
       <div class="rounded-xl border border-fb-line bg-fb-card p-5 shadow-sm">

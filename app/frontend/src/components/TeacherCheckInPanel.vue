@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue';
+import SkeletonBlock from './SkeletonBlock.vue';
 
 import client, { type ApiEnvelope } from '../api/client';
 import { t } from '../i18n';
@@ -75,7 +76,7 @@ onMounted(loadToday);
       <span class="text-xs text-fb-secondary">{{ t('checkin.lateRule') }}</span>
     </div>
 
-    <div v-if="loading" class="py-3 text-sm text-fb-secondary">{{ t('common.loading') }}</div>
+    <SkeletonBlock v-if="loading" variant="lines" :rows="2" />
     <div v-else-if="!lessons.length" class="py-3 text-sm text-fb-secondary">{{ t('checkin.noLessons') }}</div>
     <ul v-else class="divide-y divide-fb-line">
       <li v-for="lesson in lessons" :key="lesson.group_id" class="flex flex-wrap items-center justify-between gap-3 py-3">

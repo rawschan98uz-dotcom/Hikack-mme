@@ -7,6 +7,7 @@ import { APP_VERSION } from '../version';
 import QuickAddMenu, { type QuickAddMenuItem } from '../components/QuickAddMenu.vue';
 import ScheduleDrawer from '../components/ScheduleDrawer.vue';
 import CardStack from '../components/CardStack.vue';
+import GlobalSearch from '../components/GlobalSearch.vue';
 import { firstFlyoutLink, filterNavSections, flyoutSectionForPath, navForRole, primaryNav, sectionForPath } from '../config/navigation';
 import { useAuthStore } from '../stores/auth';
 import { useLocaleStore, type LocaleCode } from '../stores/locale';
@@ -35,7 +36,7 @@ const quickAddRoot = ref<InstanceType<typeof QuickAddMenu> | null>(null);
 const appGridRoot = ref<HTMLElement | null>(null);
 const userMenuRoot = ref<HTMLElement | null>(null);
 const localeMenuRoot = ref<HTMLElement | null>(null);
-const searchText = ref('');
+const showSearch = ref(false);
 const showLocaleMenu = ref(false);
 const showScheduleFab = computed(() => auth.can(PERM.GROUPS_VIEW));
 
@@ -88,14 +89,6 @@ watch(
     showAppGrid.value = false;
     showUserMenu.value = false;
     showLocaleMenu.value = false;
-  },
-  { immediate: true },
-);
-
-watch(
-  () => route.query.q,
-  (q) => {
-    searchText.value = typeof q === 'string' ? q : '';
   },
   { immediate: true },
 );
@@ -207,12 +200,6 @@ function onAppGrid(path: string) {
 
 function onQuickAdd(item: QuickAddItem) {
   router.push(item.query ? { path: item.path, query: item.query } : item.path);
-}
-
-function submitSearch() {
-  const q = searchText.value.trim();
-  if (!q) return;
-  router.push({ path: '/students', query: { q } });
 }
 
 function goReminders() {
@@ -327,7 +314,13 @@ function logout() {
 
         <!-- Search -->
         <div class="mx-auto w-full max-w-[640px] flex-1">
-          <form class="relative" @submit.prevent="submitSearch">
+          <button
+            type="button"
+            class="relative flex h-12 w-full items-center rounded-full border border-fb-line bg-fb-canvas pl-12 pr-4 text-left text-[16px] text-fb-icon hover:border-fb-blue/40 focus:border-fb-blue/40 focus:outline-none focus:ring-2 focus:ring-fb-blue/10"
+            :aria-label="t('search.title')"
+            aria-keyshortcuts="Control+K"
+            @click="showSearch = true"
+          >
             <svg
               class="pointer-events-none absolute left-5 top-1/2 -translate-y-1/2 text-fb-icon"
               width="20"
@@ -340,13 +333,12 @@ function logout() {
               <circle cx="11" cy="11" r="7" />
               <path d="M20 20l-4-4" />
             </svg>
-            <input
-              v-model="searchText"
-              type="search"
-              :placeholder="t('layout.searchPlaceholder')"
-              class="h-12 w-full rounded-full border border-fb-line bg-fb-canvas pl-12 pr-5 text-[16px] text-fb-text placeholder:text-fb-icon focus:border-fb-blue/40 focus:outline-none focus:ring-2 focus:ring-fb-blue/10"
-            />
-          </form>
+            <span class="min-w-0 flex-1 truncate">{{ t('search.trigger') }}</span>
+            <span class="ml-3 hidden shrink-0 items-center gap-1 text-[12px] sm:flex" aria-hidden="true">
+              <kbd class="rounded border border-fb-line bg-fb-card px-1.5 font-sans leading-5 text-fb-secondary">Ctrl</kbd>
+              <kbd class="rounded border border-fb-line bg-fb-card px-1.5 font-sans leading-5 text-fb-secondary">K</kbd>
+            </span>
+          </button>
         </div>
 
         <!-- Actions -->
@@ -499,6 +491,7 @@ function logout() {
 
     <!-- Teacher / group / student cards opened on top of the current page -->
     <CardStack />
+    <GlobalSearch v-model:open="showSearch" />
   </div>
 </template>
 

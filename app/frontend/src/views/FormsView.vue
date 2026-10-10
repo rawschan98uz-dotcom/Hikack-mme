@@ -1,5 +1,7 @@
 ﻿<script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue';
+import SkeletonBlock from '../components/SkeletonBlock.vue';
+import EmptyState from '../components/EmptyState.vue';
 
 import client, { type ApiEnvelope } from '../api/client';
 import { t } from '../i18n';
@@ -122,7 +124,15 @@ onMounted(loadRows);
     </div>
 
     <div class="overflow-hidden rounded-xl border border-fb-line bg-fb-card shadow-sm">
-      <div v-if="loading" class="p-10 text-center text-fb-secondary">{{ t('common.loading') }}</div>
+      <SkeletonBlock v-if="loading" :rows="4" :cols="4" />
+      <EmptyState
+        v-else-if="!rows.length"
+        icon="puzzle"
+        :title="t('forms.empty')"
+        :hint="t('forms.emptyHint')"
+        :action-label="t('forms.addTitle')"
+        @action="openCreate"
+      />
       <table v-else class="w-full text-[15px]">
         <thead class="border-b border-fb-line">
           <tr class="text-left text-fb-secondary">
@@ -133,9 +143,6 @@ onMounted(loadRows);
           </tr>
         </thead>
         <tbody>
-          <tr v-if="!rows.length">
-            <td colspan="4" class="px-6 py-10 text-center text-fb-icon">{{ t('forms.empty') }}</td>
-          </tr>
           <tr v-for="row in rows" :key="row.id" class="border-b border-fb-line last:border-0">
             <td class="px-6 py-4 text-fb-secondary">{{ row.id }}</td>
             <td class="px-6 py-4 text-fb-text">{{ row.name }}</td>

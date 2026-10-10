@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { watch } from 'vue';
+import SkeletonBlock from './SkeletonBlock.vue';
 
 import { useSchedule } from '../composables/useSchedule';
 import { t } from '../i18n';
@@ -55,9 +56,7 @@ function onSelectGroup(groupId: number) {
       {{ t('schedule.title') }}
     </h4>
 
-    <div v-if="loading" class="py-12 text-center text-[15px] text-fb-icon">
-      {{ t('common.loading') }}
-    </div>
+    <SkeletonBlock v-if="loading" variant="lines" :rows="5" class="py-4" />
 
     <template v-else>
       <div class="px-4 pb-3">

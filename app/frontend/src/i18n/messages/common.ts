@@ -63,7 +63,6 @@ export default defineMessages({
   'common.active': { uz: 'Faol', ru: 'Активный', en: 'Active' },
   'common.inactive': { uz: 'Nofaol', ru: 'Неактивный', en: 'Inactive' },
   'common.noData': { uz: 'Maʼlumot yoʻq', ru: 'Нет данных', en: 'No data' },
-  'common.nothingFound': { uz: 'Hech narsa topilmadi', ru: 'Ничего не найдено', en: 'Nothing found' },
   'common.open': { uz: 'Ochish', ru: 'Открыть', en: 'Open' },
   'common.view': { uz: 'Koʻrish', ru: 'Просмотр', en: 'View' },
   'common.details': { uz: 'Batafsil', ru: 'Подробнее', en: 'Details' },
@@ -164,4 +163,32 @@ export default defineMessages({
   'monthShort.10': { uz: 'Okt', ru: 'Окт', en: 'Oct' },
   'monthShort.11': { uz: 'Noy', ru: 'Ноя', en: 'Nov' },
   'monthShort.12': { uz: 'Dek', ru: 'Дек', en: 'Dec' },
+  // Quick search (Ctrl+K)
+  'search.title': { uz: 'Tezkor qidiruv', ru: 'Быстрый поиск', en: 'Quick search' },
+  'search.placeholder': {
+    uz: 'Ism, familiya, telefon yoki guruh nomi…',
+    ru: 'Имя, фамилия, телефон или название группы…',
+    en: 'Name, surname, phone or group name…',
+  },
+  'search.trigger': { uz: 'Qidirish: oʻquvchi, lid, guruh', ru: 'Поиск: ученик, лид, группа', en: 'Search: student, lead, group' },
+  'search.hint': {
+    uz: 'Kamida 2 ta harf yoki raqam kiriting — oʻquvchilar, lidlar va guruhlar birdaniga topiladi.',
+    ru: 'Введите хотя бы 2 буквы или цифры — найдутся ученики, лиды и группы сразу.',
+    en: 'Type at least 2 letters or digits — students, leads and groups are found at once.',
+  },
+  'search.nothing': { uz: '«{q}» boʻyicha hech narsa topilmadi', ru: 'По запросу «{q}» ничего не найдено', en: 'Nothing found for “{q}”' },
+  'search.failed': { uz: 'Qidirib boʻlmadi. Internetni tekshirib, qayta urinib koʻring.', ru: 'Не удалось выполнить поиск. Проверьте связь и попробуйте ещё раз.', en: 'Search failed. Check the connection and try again.' },
+  'search.allStudents': { uz: '«{q}» boʻyicha barcha oʻquvchilar', ru: 'Все ученики по запросу «{q}»', en: 'All students matching “{q}”' },
+  'search.archived': { uz: 'Arxivda', ru: 'В архиве', en: 'Archived' },
+  'search.keysMove': { uz: 'tanlash', ru: 'выбрать', en: 'move' },
+  'search.keysOpen': { uz: 'ochish', ru: 'открыть', en: 'open' },
+  'search.keysToggle': { uz: 'qidiruvni ochish/yopish', ru: 'открыть/закрыть поиск', en: 'open/close search' },
+  // Empty lists
+  'empty.filteredTitle': { uz: 'Hech narsa topilmadi', ru: 'Ничего не найдено', en: 'Nothing found' },
+  'empty.filteredHint': {
+    uz: 'Filtrlar yoki qidiruvni oʻzgartirib koʻring.',
+    ru: 'Попробуйте изменить фильтры или поиск.',
+    en: 'Try changing the filters or the search.',
+  },
+  'empty.resetFilters': { uz: 'Filtrlarni tozalash', ru: 'Сбросить фильтры', en: 'Reset filters' },
 });

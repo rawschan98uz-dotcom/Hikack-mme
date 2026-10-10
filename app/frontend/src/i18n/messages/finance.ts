@@ -50,7 +50,6 @@ export default defineMessages({
   'withdraw.deleteConfirm': { uz: '{amount} soʻmlik pul yechish oʻchirilsinmi?', ru: 'Удалить снятие на {amount} сум?', en: 'Delete the {amount} UZS withdrawal?' },
   'withdraw.deleteHint': { uz: '{name}, {date}. Bu amalni qaytarib boʻlmaydi.', ru: '{name}, {date}. Это действие нельзя отменить.', en: '{name}, {date}. This cannot be undone.' },
   'withdraw.deleteFailed': { uz: 'Pul yechishni oʻchirib boʻlmadi', ru: 'Не удалось удалить снятие', en: 'Failed to delete the withdrawal' },
-  'withdraw.empty': { uz: 'Pul yechishlar yoʻq', ru: 'Снятий нет', en: 'No withdrawals' },
   'withdraw.who': { uz: 'Kim oldi', ru: 'Кто взял', en: 'Taken by' },
   'withdraw.date': { uz: 'Yechish sanasi', ru: 'Дата снятия', en: 'Withdrawal date' },
 
@@ -117,7 +116,6 @@ export default defineMessages({
   'expenses.deleteFailed': { uz: 'Xarajatni oʻchirib boʻlmadi', ru: 'Не удалось удалить расход', en: 'Failed to delete the expense' },
   'expenses.manageCategories': { uz: 'Toifalarni boshqarish', ru: 'Категории расходов', en: 'Manage categories' },
   'expenses.category': { uz: 'Toifa', ru: 'Категория', en: 'Category' },
-  'expenses.empty': { uz: 'Xarajatlar yoʻq', ru: 'Расходов нет', en: 'No expenses' },
   'expenses.payee': { uz: 'Kimga toʻlandi', ru: 'Получатель', en: 'Payee' },
   'expenses.method': { uz: 'Usul', ru: 'Способ', en: 'Method' },
   'expenses.date': { uz: 'Xarajat sanasi', ru: 'Дата расхода', en: 'Expense date' },
@@ -153,7 +151,6 @@ export default defineMessages({
   'payments.refundReasonRequired': { uz: 'Qaytarish sababini koʻrsating.', ru: 'Укажите причину возврата.', en: 'Enter the reason for the refund.' },
   'payments.refunded': { uz: 'Qaytarildi: {amount} soʻm', ru: 'Возврат оформлен: {amount} сум', en: 'Refunded: {amount} UZS' },
   'payments.refundFailed': { uz: 'Qaytarishni amalga oshirib boʻlmadi', ru: 'Не удалось сделать возврат', en: 'The refund failed' },
-  'payments.empty': { uz: 'Toʻlovlar yoʻq', ru: 'Оплат нет', en: 'No payments' },
   'payments.receipt': { uz: 'Chek', ru: 'Чек', en: 'Receipt' },
   'payments.refundedHint': { uz: 'Bu toʻlovdan shuncha pul qaytarilgan; u yopgan oylar qayta hisoblangan', ru: 'Столько денег этой оплаты возвращено; месяцы, которые она закрывала, пересчитаны', en: 'This much of the payment was refunded; the months it covered were recalculated' },
   'payments.refundedShort': { uz: 'qaytarildi {amount}', ru: 'возврат {amount}', en: 'refunded {amount}' },
@@ -181,4 +178,23 @@ export default defineMessages({
   'payments.refundUpTo': { uz: '{amount} soʻmgacha qaytarish mumkin.', ru: 'Можно вернуть до {amount} сум.', en: 'You can refund up to {amount} UZS.' },
   'payments.refundReasonPlaceholder': { uz: 'Masalan: oʻquvchi ketdi, foydalanilmagan oyni qaytaramiz', ru: 'Например: ученик ушёл, возвращаем неиспользованный месяц', en: 'E.g. the student left, refunding the unused month' },
   'payments.refundButton': { uz: 'Qaytarish', ru: 'Вернуть', en: 'Refund' },
+  // Empty lists
+  'payments.emptyTitle': { uz: 'Hozircha toʻlovlar yoʻq', ru: 'Пока нет оплат', en: 'No payments yet' },
+  'payments.emptyHint': {
+    uz: 'Qabul qilingan toʻlovlar shu yerda koʻrinadi. Toʻlovni oʻquvchi kartasidan ham qabul qilish mumkin.',
+    ru: 'Принятые оплаты появятся здесь. Оплату можно принять и из карточки ученика.',
+    en: 'Payments you take appear here. You can also take a payment from the student card.',
+  },
+  'expenses.emptyTitle': { uz: 'Hozircha xarajatlar yoʻq', ru: 'Пока нет расходов', en: 'No expenses yet' },
+  'expenses.emptyHint': {
+    uz: 'Ijara, xaridlar va boshqa xarajatlarni yozing — shunda foyda hisoboti aniq boʻladi.',
+    ru: 'Записывайте аренду, покупки и другие траты — тогда отчёт о прибыли будет точным.',
+    en: 'Record rent, purchases and other costs — then the profit report is accurate.',
+  },
+  'withdraw.emptyTitle': { uz: 'Hozircha pul yechilmagan', ru: 'Снятий пока не было', en: 'No withdrawals yet' },
+  'withdraw.emptyHint': {
+    uz: 'Bu yerda egasi kassadan olgan pullar yoziladi.',
+    ru: 'Здесь записываются деньги, которые владелец забрал из кассы.',
+    en: 'Money the owner takes out of the till is recorded here.',
+  },
 });

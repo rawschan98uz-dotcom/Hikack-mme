@@ -4,6 +4,9 @@ import { computed, onMounted, reactive, ref , watch} from 'vue';
 import { useRouter } from 'vue-router';
 
 import client, { type ApiEnvelope } from '../api/client';
+import { useRememberedFilters } from '../utils/rememberedFilters';
+import SkeletonBlock from '../components/SkeletonBlock.vue';
+import EmptyState from '../components/EmptyState.vue';
 import { useAuthStore } from '../stores/auth';
 import { groupRoute, studentRoute, teacherRoute } from '../utils/crossLinks';
 import { downloadCsv } from '../utils/csvExport';
@@ -185,6 +188,8 @@ const filters = reactive({
   status: '', // '' | 'passed' | 'failed' | 'top10'
   q: '',
 });
+// Leave the page and come back: the filters are still set
+const { isFiltered: ratingFiltered } = useRememberedFilters('rating', filters);
 
 const form = reactive({
   student_id: '' as number | '',
@@ -942,11 +947,9 @@ watch(
 
     <!-- TAB 1: Students Table -->
     <div v-if="activeTab === 'table'" class="overflow-hidden rounded-2xl border border-fb-line bg-fb-card shadow-sm">
-      <div v-if="loading" class="p-12 text-center text-fb-secondary">
-        <div class="inline-block h-6 w-6 animate-spin rounded-full border-2 border-fb-blue border-t-transparent" />
-        <p class="mt-2 text-sm">{{ t('common.loading') }}</p>
-      </div>
+      <SkeletonBlock v-if="loading" :rows="8" :cols="6" />
 
+      <EmptyState v-else-if="!rows.length && ratingFiltered" filtered title="" @reset="resetFilters" />
       <div v-else-if="!rows.length" class="p-12 text-center text-fb-secondary">
         <p class="text-4xl">📋</p>
         <p class="mt-2 text-base font-semibold text-fb-text">{{ t('rating.emptyTitle') }}</p>
@@ -1055,10 +1058,7 @@ watch(
 
     <!-- TAB 2: Group Leaderboard -->
     <div v-else-if="activeTab === 'groups'" class="overflow-hidden rounded-2xl border border-fb-line bg-fb-card shadow-sm">
-      <div v-if="groupsLoading" class="p-12 text-center text-fb-secondary">
-        <div class="inline-block h-6 w-6 animate-spin rounded-full border-2 border-fb-blue border-t-transparent" />
-        <p class="mt-2 text-sm">{{ t('common.loading') }}</p>
-      </div>
+      <SkeletonBlock v-if="groupsLoading" :rows="6" :cols="5" />
 
       <div v-else-if="!groupScores.length" class="p-12 text-center text-fb-secondary">
         <p class="text-4xl">👥</p>
@@ -1228,7 +1228,7 @@ watch(
           <button type="button" class="text-fb-secondary hover:text-fb-text" :aria-label="t('common.close')" @click="closePanel">✕</button>
         </div>
 
-        <div v-if="panelLoading" class="flex-1 p-6 text-fb-secondary">{{ t('common.loading') }}</div>
+        <SkeletonBlock v-if="panelLoading" variant="lines" :rows="6" class="flex-1 p-6" />
 
         <form v-else class="flex flex-1 flex-col overflow-hidden" @submit.prevent="submitScore">
           <div class="flex-1 space-y-4 overflow-y-auto p-6">
@@ -1446,10 +1446,7 @@ watch(
         </div>
 
         <div class="flex-1 overflow-y-auto p-6">
-          <div v-if="bulkLoading" class="py-12 text-center text-fb-secondary">
-            <div class="inline-block h-6 w-6 animate-spin rounded-full border-2 border-fb-blue border-t-transparent" />
-            <p class="mt-2 text-sm">{{ t('common.loading') }}</p>
-          </div>
+          <SkeletonBlock v-if="bulkLoading" :rows="8" :cols="3" />
 
           <div v-else-if="!bulkStudents.length" class="py-12 text-center text-fb-secondary">
             <p class="text-3xl">👥</p>

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
+import SkeletonBlock from '../components/SkeletonBlock.vue';
 
 import client, { type ApiEnvelope } from '../api/client';
 import { t, type MessageKey } from '../i18n';
@@ -188,7 +189,7 @@ onMounted(load);
         </div>
       </div>
 
-      <div v-if="loading" class="py-10 text-center text-sm text-fb-secondary">{{ t('common.loading') }}</div>
+      <SkeletonBlock v-if="loading" variant="lines" :rows="5" />
       <template v-else>
         <div class="grid grid-cols-2 gap-2 sm:grid-cols-3">
           <div v-for="tile in tiles" :key="tile.label" class="rounded-lg bg-fb-canvas px-3 py-2">

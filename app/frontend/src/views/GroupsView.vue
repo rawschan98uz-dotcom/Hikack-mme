@@ -17,6 +17,10 @@ import {
   studentsByGroup,
   teacherRoute,
 } from '../utils/crossLinks';
+import { formatSum } from '../utils/wallet';
+import { useRememberedFilters } from '../utils/rememberedFilters';
+import EmptyState from '../components/EmptyState.vue';
+import SkeletonBlock from '../components/SkeletonBlock.vue';
 import { onCardsReturn, pathWithoutCards } from '../utils/cardStack';
 import { t, type MessageKey } from '../i18n';
 import { groupDaysLabel, serverLabel } from '../i18n/labels';
@@ -210,6 +214,8 @@ const filters = reactive({
   branch_id: '' as number | '',
   q: '',
 });
+// Leave the page and come back: the filters are still set
+useRememberedFilters('groups', filters);
 
 const form = reactive({
   name: '',
@@ -295,6 +301,8 @@ const tableRows = computed(() => {
     room: row.room ?? '—',
     tagsText: row.tags.length ? row.tags.map((tag) => tag.name).join(', ') : '—',
     students: row.students_count,
+    debtorsCount: row.debtors_count ?? 0,
+    debtTotal: row.debt_total ?? 0,
     statusText: serverLabel(row.status_label),
   }));
 
@@ -349,12 +357,11 @@ function toggleSort(key: SortKey) {
   sortDir.value = 'asc';
 }
 
+/** A link with its own filters ("groups of this teacher") wins over the remembered ones. */
 function syncFiltersFromRoute() {
-  filters.branch_id = route.query.branch_id ? Number(route.query.branch_id) : '';
-  if (route.query.teacher_id) {
-    filters.teacher_ids = [Number(route.query.teacher_id)];
-  }
-  filters.q = String(route.query.q ?? '');
+  if (route.query.branch_id) filters.branch_id = Number(route.query.branch_id);
+  if (route.query.teacher_id) filters.teacher_ids = [Number(route.query.teacher_id)];
+  if (route.query.q) filters.q = String(route.query.q);
 }
 
 function resetForm() {
@@ -403,7 +410,6 @@ function clearFilters() {
   filters.end_date = '';
   filters.branch_id = '';
   filters.q = '';
-  void loadGroups();
 }
 
 function openCreatePanel() {
@@ -683,7 +689,7 @@ onMounted(async () => {
     <div class="flex flex-wrap items-center justify-between gap-3">
       <div class="flex flex-wrap items-baseline gap-3">
         <h1>{{ t('nav.groups') }}</h1>
-        <span class="text-sm text-fb-secondary">{{ t('archive.quantity', { count: quantity }) }}</span>
+        <span v-if="!loading" class="text-sm text-fb-secondary">{{ t('archive.quantity', { count: quantity }) }}</span>
       </div>
       <button v-if="canWriteGroups" type="button" class="btn-fb-primary uppercase tracking-wide" @click="openCreatePanel">
         {{ t('common.addNew') }}
@@ -805,8 +811,17 @@ onMounted(async () => {
     </div>
 
     <div class="overflow-hidden rounded-xl border border-fb-line bg-fb-card">
-      <div v-if="loading" class="p-8 text-center text-fb-secondary">{{ t('common.loading') }}</div>
-      <div v-else-if="!tableRows.length" class="p-8 text-center text-fb-icon">{{ t('groups.empty') }}</div>
+      <SkeletonBlock v-if="loading" :rows="8" :cols="8" />
+      <EmptyState
+        v-else-if="!tableRows.length"
+        icon="groups"
+        :filtered="hasActiveFilters"
+        :title="t('groups.emptyTitle')"
+        :hint="t('groups.emptyHint')"
+        :action-label="canWriteGroups ? t('groups.createFirst') : ''"
+        @action="openCreatePanel"
+        @reset="clearFilters"
+      />
       <div v-else class="overflow-x-auto">
         <table class="table-fb min-w-full">
           <thead>
@@ -852,7 +867,15 @@ onMounted(async () => {
               <td v-if="visibleColumns.weekOfStudy !== false">{{ row.weekOfStudy }}</td>
               <td v-if="visibleColumns.room !== false">{{ row.room }}</td>
               <td v-if="visibleColumns.tagsText !== false">{{ row.tagsText }}</td>
-              <td v-if="visibleColumns.students !== false">{{ row.students }}</td>
+              <td v-if="visibleColumns.students !== false">
+                <div>{{ row.students }}</div>
+                <span
+                  v-if="row.debtorsCount"
+                  class="mt-1 inline-block whitespace-nowrap rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-semibold text-red-700"
+                >
+                  {{ t('groups.debtorsBadge', { count: row.debtorsCount, amount: formatSum(row.debtTotal) }) }}
+                </span>
+              </td>
               <td v-if="visibleColumns.actions !== false" @click.stop>
                 <div class="flex items-center gap-2">
                   <button
@@ -885,7 +908,7 @@ onMounted(async () => {
           <button type="button" class="text-fb-icon hover:text-fb-secondary" :aria-label="t('common.close')" @click="closePanel">✕</button>
         </div>
 
-        <div v-if="panelLoading" class="flex-1 p-6 text-fb-secondary">{{ t('common.loading') }}</div>
+        <SkeletonBlock v-if="panelLoading" variant="detail" class="flex-1 overflow-hidden" />
 
         <form v-else class="flex flex-1 flex-col overflow-hidden" @submit.prevent="submitGroup">
           <div class="flex-1 overflow-y-auto p-6">

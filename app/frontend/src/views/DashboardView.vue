@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
+import SkeletonBlock from '../components/SkeletonBlock.vue';
 import { useRouter, type RouteLocationRaw } from 'vue-router';
 
 import client, { type ApiEnvelope } from '../api/client';
@@ -245,9 +246,7 @@ onMounted(() => loadDashboard());
 
 <template>
   <div class="dashboard-page -m-6 min-h-full bg-fb-card border border-fb-line">
-    <div v-if="loading" class="py-16 text-center text-[15px] text-fb-icon">
-      {{ t('common.loading') }}
-    </div>
+    <SkeletonBlock v-if="loading" variant="cards" :rows="6" class="p-6" />
 
     <template v-else>
       <TeacherCheckInPanel v-if="auth.role === 'teacher'" />

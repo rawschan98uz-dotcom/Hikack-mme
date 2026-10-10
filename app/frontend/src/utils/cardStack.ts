@@ -23,6 +23,8 @@ export interface CardRef {
   id: number;
   /** Open straight in the edit form (e.g. a reminder "put the student into a group"). */
   edit: boolean;
+  /** A student card opened with the payment window already up (quick search "+ Pay"). */
+  pay?: boolean;
 }
 
 /** The section each card belongs to: its view permission decides who may open the card. */
@@ -32,7 +34,7 @@ export const CARD_PATHS: Record<CardKind, string> = {
   student: '/students',
 };
 
-const CARD_PATTERN = /^(teacher|group|student)-(\d+)(-edit)?$/;
+const CARD_PATTERN = /^(teacher|group|student)-(\d+)(-edit|-pay)?$/;
 
 export function parseCards(query: LocationQuery): CardRef[] {
   const raw = Array.isArray(query.cards) ? query.cards[0] : query.cards;
@@ -41,14 +43,14 @@ export function parseCards(query: LocationQuery): CardRef[] {
   for (const part of String(raw).split(',')) {
     const match = CARD_PATTERN.exec(part);
     if (match) {
-      cards.push({ kind: match[1] as CardKind, id: Number(match[2]), edit: Boolean(match[3]) });
+      cards.push({ kind: match[1] as CardKind, id: Number(match[2]), edit: match[3] === '-edit', pay: match[3] === '-pay' });
     }
   }
   return cards;
 }
 
 function serializeCards(cards: CardRef[]): string {
-  return cards.map((card) => `${card.kind}-${card.id}${card.edit ? '-edit' : ''}`).join(',');
+  return cards.map((card) => `${card.kind}-${card.id}${card.edit ? '-edit' : card.pay ? '-pay' : ''}`).join(',');
 }
 
 export function queryWithCards(query: LocationQuery, cards: CardRef[]): LocationQuery {
@@ -70,7 +72,7 @@ function cardFromLink(to: RouteLocationNormalized): CardRef | null {
   const path = to.path.replace(/\/list$/, '');
   const kind = (Object.keys(CARD_PATHS) as CardKind[]).find((key) => CARD_PATHS[key] === path);
   if (!kind) return null;
-  return { kind, id, edit: to.query.edit === '1' };
+  return { kind, id, edit: to.query.edit === '1', pay: kind === 'student' && to.query.pay === '1' };
 }
 
 /** Is this a link to a card ("/students?open=5")? */
@@ -93,6 +95,7 @@ export function resolveCardLink(to: RouteLocationNormalized, from: RouteLocation
   const query: LocationQuery = { ...host.query };
   delete query.open;
   delete query.edit;
+  delete query.pay;
 
   const top = stack[stack.length - 1];
   const below = stack[stack.length - 2];

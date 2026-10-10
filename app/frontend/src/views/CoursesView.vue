@@ -6,6 +6,9 @@ import client, { type ApiEnvelope } from '../api/client';
 import { useAuthStore } from '../stores/auth';
 import { hasCreateFlag, routeWithoutCreate } from '../utils/crossLinks';
 import { todayIso } from '../utils/dates';
+import { t } from '../i18n';
+import { confirmDialog, toast } from '../ui/feedback';
+import { apiErrorMessage } from '../utils/apiError';
 import CourseLevelBadge from '../components/CourseLevelBadge.vue';
 import {
   buildCourseCardDisplay,
@@ -53,7 +56,6 @@ interface CourseRow {
   cardTitle: string;
   badgeLabel: string;
   watermarkLabel: string;
-  priceText: string;
 }
 
 const route = useRoute();
@@ -85,7 +87,7 @@ const form = reactive({
 });
 
 function formatPrice(value: number) {
-  return `${value.toLocaleString('en-US').replace(/,/g, ' ')} UZS`;
+  return t('common.sumAmount', { amount: value.toLocaleString('en-US').replace(/,/g, ' ') });
 }
 
 function formatDay(iso: string) {
@@ -108,7 +110,6 @@ function enrichCourse(course: CourseData): CourseRow {
     cardTitle: display.cardTitle,
     badgeLabel: display.badgeLabel,
     watermarkLabel: display.watermarkLabel,
-    priceText: formatPrice(course.price),
   };
 }
 
@@ -163,8 +164,9 @@ async function savePriceEdit() {
     );
     priceEdit.id = 0;
     await applyCourse(data.data);
-  } catch (err: any) {
-    priceEdit.error = err?.response?.data?.message || 'Не удалось исправить цену';
+    toast.success(t('courses.priceFixed'));
+  } catch (err: unknown) {
+    priceEdit.error = apiErrorMessage(err, t('courses.priceFixFailed'));
   } finally {
     priceEdit.saving = false;
   }
@@ -172,14 +174,20 @@ async function savePriceEdit() {
 
 async function deletePriceRecord(record: PriceRecord) {
   if (!editingCourse.value) return;
-  if (!window.confirm(`Удалить цену ${formatPrice(record.price)} с ${formatDay(record.valid_from)}?`)) return;
+  const ok = await confirmDialog({
+    title: t('courses.deletePriceConfirm', { price: formatPrice(record.price), date: formatDay(record.valid_from) }),
+    message: t('courses.deletePriceHint'),
+    danger: true,
+  });
+  if (!ok || !editingCourse.value) return;
   try {
     const { data } = await client.delete<ApiEnvelope<CourseData>>(
       `/courses/${editingCourse.value.id}/prices/${record.id}`,
     );
     await applyCourse(data.data);
-  } catch (err: any) {
-    formError.value = err?.response?.data?.message || 'Не удалось удалить цену';
+    toast.success(t('courses.priceDeleted'));
+  } catch (err: unknown) {
+    toast.error(apiErrorMessage(err, t('courses.priceDeleteFailed')));
   }
 }
 
@@ -207,14 +215,21 @@ async function openCourse(id: number) {
 }
 
 async function deleteCourse() {
-  if (!editingCourse.value || !window.confirm('Delete this course?')) return;
+  if (!editingCourse.value) return;
+  const ok = await confirmDialog({
+    title: t('courses.deleteConfirm', { name: editingCourse.value.name }),
+    message: t('confirm.cannotUndo'),
+    danger: true,
+  });
+  if (!ok || !editingCourse.value) return;
   deleting.value = true;
   try {
     await client.delete(`/courses/${editingCourse.value.id}`);
     closePanel();
+    toast.success(t('toast.deleted'));
     await loadCourses();
-  } catch (err: any) {
-    formError.value = err?.response?.data?.message || 'Could not delete course';
+  } catch (err: unknown) {
+    formError.value = apiErrorMessage(err, t('courses.deleteFailed'));
   } finally {
     deleting.value = false;
   }
@@ -250,13 +265,13 @@ onMounted(async () => {
 async function saveCourse() {
   formError.value = '';
   if (!form.name.trim()) {
-    formError.value = 'Enter course name';
+    formError.value = t('courses.nameRequired');
     return;
   }
   // A course keeps the code it already has (old ones may not fit the rule): only a new code is checked
   const codeUnchanged = Boolean(editingCourse.value) && normalizeCourseCode(form.code) === editingCourse.value?.code;
   if (!codeUnchanged && !isValidCourseCode(form.code)) {
-    formError.value = `Enter a valid Code Course (${courseCodeHint()})`;
+    formError.value = t('courses.codeInvalid', { hint: courseCodeHint() });
     return;
   }
 
@@ -270,6 +285,7 @@ async function saveCourse() {
       price: parsePrice(form.price),
       description: form.description.trim(),
     };
+    const wasEditing = Boolean(editingCourse.value);
     if (editingCourse.value) {
       // A new price never rewrites the past: it starts on the chosen day
       if (auth.isCeo && form.price_from) payload.price_from = form.price_from;
@@ -279,8 +295,9 @@ async function saveCourse() {
     }
     await loadCourses();
     closePanel();
-  } catch (err: any) {
-    formError.value = err?.response?.data?.message || 'Could not save course';
+    toast.success(wasEditing ? t('toast.saved') : t('courses.created'));
+  } catch (err: unknown) {
+    formError.value = apiErrorMessage(err, t('errors.saveFailed'));
   } finally {
     saving.value = false;
   }
@@ -290,22 +307,22 @@ async function saveCourse() {
 <template>
   <div class="space-y-6">
     <div class="flex items-center justify-between">
-      <h1 class="!mb-0 text-[28px] font-normal text-fb-secondary">Courses</h1>
+      <h1 class="!mb-0 text-[28px] font-normal text-fb-secondary">{{ t('nav.courses') }}</h1>
       <button
         type="button"
         class="px-6 py-2.5 rounded-full bg-fb-blue text-white text-[14px] font-semibold tracking-wide hover:opacity-90"
         @click="openPanel"
       >
-        ADD NEW
+        {{ t('common.addNew') }}
       </button>
     </div>
 
-    <div v-if="loading" class="py-16 text-center text-fb-secondary text-[16px]">Loading…</div>
+    <div v-if="loading" class="py-16 text-center text-fb-secondary text-[16px]">{{ t('common.loading') }}</div>
     <div
       v-else-if="!rows.length"
       class="py-16 text-center text-fb-icon text-[16px]"
     >
-      No courses yet. Click ADD NEW to add one.
+      {{ t('courses.empty') }}
     </div>
     <div v-else class="mx-auto w-[90%]">
       <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
@@ -328,10 +345,10 @@ async function saveCourse() {
               {{ row.cardTitle }}
             </h3>
             <p class="truncate text-[13px] text-fb-icon">
-              {{ row.priceText }}
+              {{ formatPrice(row.price) }}
             </p>
             <p v-if="row.next_price" class="truncate text-[12px] text-amber-700">
-              с {{ formatDay(row.next_price.valid_from) }} — {{ formatPrice(row.next_price.price) }}
+              {{ t('courses.fromDate', { date: formatDay(row.next_price.valid_from) }) }} — {{ formatPrice(row.next_price.price) }}
             </p>
           </div>
         </article>
@@ -344,11 +361,12 @@ async function saveCourse() {
       <aside class="drawer-panel-fb max-w-md h-full">
         <div class="px-6 py-5 border-b border-fb-line flex items-center justify-between">
           <h2 class="text-[22px] font-semibold text-fb-text">
-            {{ editingCourse ? 'Edit course' : 'Add New Item' }}
+            {{ editingCourse ? t('courses.editTitle') : t('courses.addTitle') }}
           </h2>
           <button
             type="button"
             class="text-fb-icon hover:text-fb-secondary text-2xl leading-none"
+            :aria-label="t('common.close')"
             @click="closePanel"
           >
             ×
@@ -356,10 +374,10 @@ async function saveCourse() {
         </div>
 
         <form class="flex-1 overflow-y-auto px-6 py-6 space-y-5" @submit.prevent="saveCourse">
-          <div v-if="panelLoading" class="text-fb-secondary">Loading…</div>
+          <div v-if="panelLoading" class="text-fb-secondary">{{ t('common.loading') }}</div>
           <template v-else>
           <div>
-            <label class="block text-[15px] font-medium text-fb-secondary mb-2">Name</label>
+            <label class="block text-[15px] font-medium text-fb-secondary mb-2">{{ t('common.name') }}</label>
             <input
               v-model="form.name"
               type="text"
@@ -369,7 +387,7 @@ async function saveCourse() {
           </div>
 
           <div>
-            <label class="block text-[15px] font-medium text-fb-secondary mb-2">Code Course</label>
+            <label class="block text-[15px] font-medium text-fb-secondary mb-2">{{ t('courses.code') }}</label>
             <input
               v-model="form.code"
               type="text"
@@ -378,24 +396,24 @@ async function saveCourse() {
               class="w-full h-11 px-4 rounded-lg border border-fb-line text-[16px] focus:outline-none focus:border-fb-blue"
             />
             <p class="mt-1.5 text-[13px] text-fb-icon">
-              {{ courseCodeHint() }}. This code sets the card color and label.
+              {{ courseCodeHint() }}. {{ t('courses.codeCardHint') }}
             </p>
           </div>
 
           <div>
-            <label class="block text-[15px] font-medium text-fb-secondary mb-2">Lesson duration</label>
+            <label class="block text-[15px] font-medium text-fb-secondary mb-2">{{ t('courses.lessonDuration') }}</label>
             <select
               v-model.number="form.lesson_duration"
               class="w-full h-11 px-4 rounded-lg border border-fb-line text-[16px] focus:outline-none focus:border-fb-blue bg-fb-card"
             >
               <option v-for="mins in lessonDurations" :key="mins" :value="mins">
-                {{ mins }} minutes
+                {{ t('courses.minutes', { count: mins }) }}
               </option>
             </select>
           </div>
 
           <div>
-            <label class="block text-[15px] font-medium text-fb-secondary mb-2">Course duration (month)</label>
+            <label class="block text-[15px] font-medium text-fb-secondary mb-2">{{ t('courses.courseDuration') }}</label>
             <input
               v-model.number="form.course_duration"
               type="number"
@@ -405,7 +423,7 @@ async function saveCourse() {
           </div>
 
           <div>
-            <label class="block text-[15px] font-medium text-fb-secondary mb-2">Price</label>
+            <label class="block text-[15px] font-medium text-fb-secondary mb-2">{{ t('common.price') }}</label>
             <input
               v-model="form.price"
               type="text"
@@ -414,45 +432,44 @@ async function saveCourse() {
               class="w-full h-11 px-4 rounded-lg border border-fb-line text-[16px] focus:outline-none focus:border-fb-blue read-only:bg-fb-canvas"
             />
             <p v-if="editingCourse && !auth.isCeo" class="mt-1.5 text-[13px] text-fb-icon">
-              Цену курса меняет только CEO.
+              {{ t('courses.onlyCeoPrice') }}
             </p>
           </div>
 
           <template v-if="editingCourse">
             <div v-if="auth.isCeo">
-              <label class="block text-[15px] font-medium text-fb-secondary mb-2">Новая цена действует с</label>
+              <label class="block text-[15px] font-medium text-fb-secondary mb-2">{{ t('courses.newPriceFrom') }}</label>
               <input
                 v-model="form.price_from"
                 type="date"
                 class="w-full h-11 px-4 rounded-lg border border-fb-line text-[16px] focus:outline-none focus:border-fb-blue"
               />
               <p class="mt-1.5 text-[13px] text-fb-icon">
-                Всё, что было до этой даты, останется по старой цене. Если цена была введена с ошибкой —
-                нажмите «Исправить» в истории ниже.
+                {{ t('courses.newPriceHint') }}
               </p>
             </div>
 
             <div v-if="priceHistory.length">
-              <label class="block text-[15px] font-medium text-fb-secondary mb-2">История цен</label>
+              <label class="block text-[15px] font-medium text-fb-secondary mb-2">{{ t('courses.priceHistory') }}</label>
               <ul class="divide-y divide-fb-line rounded-lg border border-fb-line text-[14px]">
                 <li v-for="record in priceHistory" :key="record.id" class="px-3 py-2.5">
                   <div v-if="priceEdit.id !== record.id" class="flex flex-wrap items-center gap-x-2 gap-y-1">
                     <span class="text-fb-secondary">
-                      {{ record.is_first ? 'с начала' : `с ${formatDay(record.valid_from)}` }}
+                      {{ record.is_first ? t('courses.fromStart') : t('courses.fromDate', { date: formatDay(record.valid_from) }) }}
                     </span>
                     <span class="font-semibold text-fb-text">{{ formatPrice(record.price) }}</span>
-                    <span v-if="record.is_current" class="rounded-full bg-emerald-100 px-2 py-0.5 text-[12px] text-emerald-800">сейчас</span>
-                    <span v-else-if="record.is_future" class="rounded-full bg-amber-100 px-2 py-0.5 text-[12px] text-amber-800">запланирована</span>
+                    <span v-if="record.is_current" class="rounded-full bg-emerald-100 px-2 py-0.5 text-[12px] text-emerald-800">{{ t('courses.now') }}</span>
+                    <span v-else-if="record.is_future" class="rounded-full bg-amber-100 px-2 py-0.5 text-[12px] text-amber-800">{{ t('courses.planned') }}</span>
                     <span v-if="record.created_by" class="text-[12px] text-fb-icon">{{ record.created_by }}</span>
                     <span v-if="auth.isCeo" class="ml-auto flex gap-3">
-                      <button type="button" class="text-fb-blue hover:underline" @click="startPriceEdit(record)">Исправить</button>
+                      <button type="button" class="text-fb-blue hover:underline" @click="startPriceEdit(record)">{{ t('courses.fix') }}</button>
                       <button
                         v-if="priceHistory.length > 1"
                         type="button"
                         class="text-fb-danger hover:underline"
                         @click="deletePriceRecord(record)"
                       >
-                        Удалить
+                        {{ t('common.delete') }}
                       </button>
                     </span>
                   </div>
@@ -471,7 +488,7 @@ async function saveCourse() {
                       />
                     </div>
                     <p v-if="record.is_first" class="text-[12px] text-fb-icon">
-                      Это первая цена курса: она действует и для всех дней до своей даты.
+                      {{ t('courses.firstPriceHint') }}
                     </p>
                     <p v-if="priceEdit.error" class="text-[13px] text-fb-danger">{{ priceEdit.error }}</p>
                     <div class="flex gap-3">
@@ -481,9 +498,9 @@ async function saveCourse() {
                         :disabled="priceEdit.saving"
                         @click="savePriceEdit"
                       >
-                        {{ priceEdit.saving ? 'Секунду…' : 'Сохранить исправление' }}
+                        {{ priceEdit.saving ? t('common.saving') : t('courses.saveFix') }}
                       </button>
-                      <button type="button" class="text-fb-secondary hover:underline" @click="priceEdit.id = 0">Отмена</button>
+                      <button type="button" class="text-fb-secondary hover:underline" @click="priceEdit.id = 0">{{ t('common.cancel') }}</button>
                     </div>
                   </div>
                 </li>
@@ -492,7 +509,7 @@ async function saveCourse() {
           </template>
 
           <div>
-            <label class="block text-[15px] font-medium text-fb-secondary mb-2">Description</label>
+            <label class="block text-[15px] font-medium text-fb-secondary mb-2">{{ t('common.description') }}</label>
             <textarea
               v-model="form.description"
               rows="5"
@@ -508,7 +525,7 @@ async function saveCourse() {
               class="px-8 py-3 rounded-full bg-fb-blue text-white text-[16px] font-semibold hover:opacity-90 disabled:opacity-60"
               :disabled="saving"
             >
-              {{ saving ? 'Saving…' : 'Save' }}
+              {{ saving ? t('common.saving') : t('common.save') }}
             </button>
             <button
               v-if="editingCourse && auth.isCeo"
@@ -517,7 +534,7 @@ async function saveCourse() {
               :disabled="deleting"
               @click="deleteCourse"
             >
-              Delete
+              {{ t('common.delete') }}
             </button>
           </div>
           </template>

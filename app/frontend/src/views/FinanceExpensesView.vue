@@ -3,6 +3,11 @@ import { computed, onMounted, reactive, ref , watch} from 'vue';
 
 import client, { type ApiEnvelope } from '../api/client';
 import { todayIso } from '../utils/dates';
+import { t, type MessageKey } from '../i18n';
+import { payMethodLabel } from '../i18n/labels';
+import { confirmDialog, toast } from '../ui/feedback';
+import { apiErrorMessage } from '../utils/apiError';
+import { formatSum } from '../utils/wallet';
 
 interface Branch {
   id: number;
@@ -35,9 +40,9 @@ interface ExpenseRow {
 }
 
 const METHODS = [
-  { value: 'cash', label: 'Наличные' },
-  { value: 'card', label: 'Карта' },
-  { value: 'transfer', label: 'Перевод' },
+  { value: 'cash', label: 'payMethod.cash' as MessageKey },
+  { value: 'card', label: 'payMethod.card' as MessageKey },
+  { value: 'transfer', label: 'payMethod.transfer' as MessageKey },
 ] as const;
 
 const rows = ref<ExpenseRow[]>([]);
@@ -76,7 +81,7 @@ const form = reactive({
 
 const isReadOnly = computed(() => Boolean(detailRow.value && !editingRow.value));
 const panelTitle = computed(() =>
-  editingRow.value ? 'Edit expense' : detailRow.value ? 'Expense details' : 'New expense',
+  editingRow.value ? t('expenses.editTitle') : detailRow.value ? t('expenses.detailTitle') : t('expenses.addTitle'),
 );
 const tableRows = computed(() =>
   rows.value.map((r) => ({
@@ -86,8 +91,8 @@ const tableRows = computed(() =>
     category: r.category,
     description: r.description || '—',
     payee: r.payee || '—',
-    method_pay: r.method_pay,
-    sum: r.sum.toLocaleString(),
+    method_pay: payMethodLabel(r.method, r.method_pay),
+    sum: formatSum(r.sum),
     creator: r.creator,
   })),
 );
@@ -138,8 +143,9 @@ async function addCategory() {
     await client.post('/expense_types', { name });
     newCategoryName.value = '';
     await loadCategories();
-  } catch {
-    categoryError.value = 'Failed to create category';
+    toast.success(t('toast.created'));
+  } catch (err: unknown) {
+    categoryError.value = apiErrorMessage(err, t('expenses.categoryCreateFailed'));
   } finally {
     categorySaving.value = false;
   }
@@ -159,22 +165,29 @@ async function saveEditCategory(c: Category) {
     await client.patch(`/expense_types/${c.id}`, { name });
     editingCategoryId.value = null;
     await loadCategories();
-  } catch {
-    categoryError.value = 'Failed to update category';
+    toast.success(t('toast.saved'));
+  } catch (err: unknown) {
+    categoryError.value = apiErrorMessage(err, t('expenses.categoryUpdateFailed'));
   } finally {
     categorySaving.value = false;
   }
 }
 
-async function deleteCategory(id: number) {
-  if (!window.confirm('Delete this expense category?')) return;
+async function deleteCategory(category: Category) {
+  const ok = await confirmDialog({
+    title: t('expenses.categoryDeleteConfirm', { name: category.name }),
+    message: t('confirm.cannotUndo'),
+    danger: true,
+  });
+  if (!ok) return;
   categorySaving.value = true;
   categoryError.value = '';
   try {
-    await client.delete(`/expense_types/${id}`);
+    await client.delete(`/expense_types/${category.id}`);
     await loadCategories();
-  } catch {
-    categoryError.value = 'Failed to delete category';
+    toast.success(t('toast.deleted'));
+  } catch (err: unknown) {
+    categoryError.value = apiErrorMessage(err, t('expenses.categoryDeleteFailed'));
   } finally {
     categorySaving.value = false;
   }
@@ -248,15 +261,15 @@ function closePanel() {
 async function submitForm() {
   formError.value = '';
   if (!Number.isInteger(form.amount) || form.amount <= 0) {
-    formError.value = 'Сумма — целое положительное число.';
+    formError.value = t('finance.amountPositive');
     return;
   }
   if (form.branch_id === '') {
-    formError.value = 'Выберите филиал расхода.';
+    formError.value = t('expenses.branchRequired');
     return;
   }
   if (!form.expense_date || form.expense_date > todayIso()) {
-    formError.value = 'Дата расхода не может быть позже сегодняшнего дня.';
+    formError.value = t('expenses.dateNotFuture');
     return;
   }
   saving.value = true;
@@ -270,30 +283,39 @@ async function submitForm() {
       method: form.method,
       amount: form.amount,
     };
+    const wasEditing = Boolean(editingRow.value);
     if (editingRow.value) {
       await client.patch(`/expense/${editingRow.value.id}`, payload);
     } else {
       await client.post('/expense', payload);
     }
     closePanel();
+    toast.success(wasEditing ? t('toast.saved') : t('expenses.created', { amount: formatSum(payload.amount) }));
     await loadRows();
-  } catch (err: any) {
-    formError.value = err?.response?.data?.message || 'Could not save expense';
+  } catch (err: unknown) {
+    formError.value = apiErrorMessage(err, t('errors.saveFailed'));
   } finally {
     saving.value = false;
   }
 }
 
 async function deleteRow() {
-  if (!detailRow.value || !window.confirm('Delete this expense?')) return;
+  if (!detailRow.value) return;
+  const ok = await confirmDialog({
+    title: t('expenses.deleteConfirm', { amount: formatSum(detailRow.value.sum) }),
+    message: t('withdraw.deleteHint', { name: detailRow.value.category || detailRow.value.description || '—', date: detailRow.value.date }),
+    danger: true,
+  });
+  if (!ok || !detailRow.value) return;
   deleting.value = true;
   try {
     await client.delete(`/expense/${detailRow.value.id}`);
     closePanel();
+    toast.success(t('toast.deleted'));
     await loadRows();
-  } catch (err: any) {
+  } catch (err: unknown) {
     // e.g. the month is closed, or it is a salary payout
-    window.alert(err?.response?.data?.message || 'Не удалось удалить расход');
+    toast.error(apiErrorMessage(err, t('expenses.deleteFailed')));
   } finally {
     deleting.value = false;
   }
@@ -321,65 +343,65 @@ watch(
 <template>
   <div class="space-y-4">
     <div class="flex flex-wrap items-center justify-between gap-3">
-      <h1 class="text-xl font-semibold text-fb-text">Total Expenses</h1>
+      <h1 class="text-xl font-semibold text-fb-text">{{ t('nav.expenses') }}</h1>
       <div class="flex items-center gap-2">
         <button
           type="button"
           class="rounded-lg border border-fb-line px-4 py-2 text-sm font-medium text-fb-secondary hover:border-fb-blue hover:text-fb-blue"
           @click="showCategoriesModal = true"
         >
-          Manage categories
+          {{ t('expenses.manageCategories') }}
         </button>
         <button type="button" class="rounded-lg bg-fb-blue px-4 py-2 text-sm font-medium text-white" @click="openCreate">
-          New expense
+          {{ t('expenses.addTitle') }}
         </button>
       </div>
     </div>
 
     <div class="flex flex-wrap items-end gap-3 rounded-xl border border-fb-line bg-fb-card p-4">
       <div>
-        <label class="mb-1 block text-xs text-fb-secondary">Филиал</label>
+        <label class="mb-1 block text-xs text-fb-secondary">{{ t('common.branch') }}</label>
         <select v-model="filters.branch_id" class="rounded-lg border border-fb-line px-3 py-2 text-sm">
-          <option value="">Все</option>
+          <option value="">{{ t('common.all') }}</option>
           <option v-for="b in branches" :key="b.id" :value="String(b.id)">{{ b.name }}</option>
         </select>
       </div>
       <div>
-        <label class="mb-1 block text-xs text-fb-secondary">Category</label>
+        <label class="mb-1 block text-xs text-fb-secondary">{{ t('expenses.category') }}</label>
         <select v-model="filters.category_id" class="rounded-lg border border-fb-line px-3 py-2 text-sm">
-          <option value="">All</option>
+          <option value="">{{ t('common.all') }}</option>
           <option v-for="c in categories" :key="c.id" :value="String(c.id)">{{ c.name }}</option>
         </select>
       </div>
       <div>
-        <label class="mb-1 block text-xs text-fb-secondary">From</label>
+        <label class="mb-1 block text-xs text-fb-secondary">{{ t('common.from') }}</label>
         <input v-model="filters.date_from" type="date" class="rounded-lg border border-fb-line px-3 py-2 text-sm" />
       </div>
       <div>
-        <label class="mb-1 block text-xs text-fb-secondary">To</label>
+        <label class="mb-1 block text-xs text-fb-secondary">{{ t('common.to') }}</label>
         <input v-model="filters.date_to" type="date" class="rounded-lg border border-fb-line px-3 py-2 text-sm" />
       </div>
       <div class="min-w-[180px] flex-1">
-        <label class="mb-1 block text-xs text-fb-secondary">Search</label>
+        <label class="mb-1 block text-xs text-fb-secondary">{{ t('common.search') }}</label>
         <input v-model="filters.q" type="search" class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm" @keydown.enter="loadRows" />
       </div>
-      <button type="button" class="rounded-lg border border-fb-line px-4 py-2 text-sm" @click="loadRows">Apply</button>
+      <button type="button" class="rounded-lg border border-fb-line px-4 py-2 text-sm" @click="loadRows">{{ t('common.apply') }}</button>
     </div>
 
     <div class="overflow-hidden rounded-xl border border-fb-line bg-fb-card">
-      <div v-if="loading" class="p-8 text-center text-fb-secondary">Loading…</div>
-      <div v-else-if="!tableRows.length" class="p-8 text-center text-fb-icon">No expenses</div>
+      <div v-if="loading" class="p-8 text-center text-fb-secondary">{{ t('common.loading') }}</div>
+      <div v-else-if="!tableRows.length" class="p-8 text-center text-fb-icon">{{ t('expenses.empty') }}</div>
       <table v-else class="w-full text-base">
         <thead class="border-b bg-fb-canvas">
           <tr>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Date</th>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Филиал</th>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Category</th>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Description</th>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Payee</th>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Method</th>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Sum</th>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Creator</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('common.date') }}</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('common.branch') }}</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('expenses.category') }}</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('common.description') }}</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('expenses.payee') }}</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('expenses.method') }}</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('common.amount') }}</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('finance.creator') }}</th>
           </tr>
         </thead>
         <tbody>
@@ -402,7 +424,7 @@ watch(
           :disabled="loadingMore"
           @click="loadMore"
         >
-          {{ loadingMore ? 'Загрузка…' : 'Показать ещё' }}
+          {{ loadingMore ? t('common.loading') : t('common.showMore') }}
         </button>
       </div>
     </div>
@@ -412,13 +434,13 @@ watch(
       <div class="drawer-panel-fb max-w-lg">
         <div class="flex items-center justify-between border-b px-6 py-4">
           <h2 class="text-lg font-semibold">{{ panelTitle }}</h2>
-          <button type="button" @click="closePanel">✕</button>
+          <button type="button" :aria-label="t('common.close')" @click="closePanel">✕</button>
         </div>
-        <div v-if="panelLoading" class="p-6 text-fb-secondary">Loading…</div>
+        <div v-if="panelLoading" class="p-6 text-fb-secondary">{{ t('common.loading') }}</div>
         <form v-else class="flex flex-1 flex-col overflow-hidden" @submit.prevent="submitForm">
           <div class="flex-1 space-y-4 overflow-y-auto p-6">
             <div>
-              <label class="mb-1 block text-sm font-medium">Дата расхода</label>
+              <label class="mb-1 block text-sm font-medium">{{ t('expenses.date') }}</label>
               <input
                 v-model="form.expense_date"
                 type="date"
@@ -428,39 +450,39 @@ watch(
                 class="w-full rounded-lg border px-3 py-2 read-only:bg-fb-canvas"
               />
               <p v-if="!isReadOnly" class="mt-1 text-[11px] text-fb-secondary">
-                Выберите день, к которому относится расход: например, аренда за сентябрь — сентябрьской датой.
+                {{ t('expenses.dateHint') }}
               </p>
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium">Филиал</label>
+              <label class="mb-1 block text-sm font-medium">{{ t('common.branch') }}</label>
               <select v-model="form.branch_id" :disabled="isReadOnly" required class="w-full rounded-lg border px-3 py-2">
-                <option value="">— Выберите филиал —</option>
+                <option value="">— {{ t('staff.chooseBranch') }} —</option>
                 <option v-for="b in branches" :key="b.id" :value="b.id">{{ b.name }}</option>
               </select>
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium">Category</label>
+              <label class="mb-1 block text-sm font-medium">{{ t('expenses.category') }}</label>
               <select v-model="form.category_id" :disabled="isReadOnly" class="w-full rounded-lg border px-3 py-2">
-                <option value="">— None —</option>
+                <option value="">— {{ t('expenses.noCategory') }} —</option>
                 <option v-for="c in categories" :key="c.id" :value="c.id">{{ c.name }}</option>
               </select>
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium">Description</label>
+              <label class="mb-1 block text-sm font-medium">{{ t('common.description') }}</label>
               <textarea v-model="form.description" :readonly="isReadOnly" rows="2" class="w-full rounded-lg border px-3 py-2 read-only:bg-fb-canvas" />
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium">Payee</label>
+              <label class="mb-1 block text-sm font-medium">{{ t('expenses.payee') }}</label>
               <input v-model="form.payee" :readonly="isReadOnly" class="w-full rounded-lg border px-3 py-2 read-only:bg-fb-canvas" />
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium">Method</label>
+              <label class="mb-1 block text-sm font-medium">{{ t('expenses.method') }}</label>
               <select v-model="form.method" :disabled="isReadOnly" class="w-full rounded-lg border px-3 py-2">
-                <option v-for="m in METHODS" :key="m.value" :value="m.value">{{ m.label }}</option>
+                <option v-for="m in METHODS" :key="m.value" :value="m.value">{{ t(m.label) }}</option>
               </select>
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium">Amount</label>
+              <label class="mb-1 block text-sm font-medium">{{ t('common.amount') }}</label>
               <input v-model.number="form.amount" type="number" min="1" step="1" :readonly="isReadOnly" required class="w-full rounded-lg border px-3 py-2 read-only:bg-fb-canvas" />
             </div>
             <p v-if="formError" class="text-sm text-fb-danger">{{ formError }}</p>
@@ -469,17 +491,17 @@ watch(
             <template v-if="isReadOnly && detailRow">
               <!-- A salary payout is changed or cancelled only in "Зарплаты" (payroll and P&L must agree) -->
               <p v-if="detailRow.is_salary_payout" class="self-center text-xs text-fb-secondary">
-                Это выплата зарплаты — изменить или отменить её можно в разделе «Зарплаты».
+                {{ t('expenses.salaryPayoutHint') }}
               </p>
               <template v-else>
-                <button type="button" class="rounded-lg bg-fb-blue px-5 py-2 text-sm text-white" @click="startEdit">Edit</button>
-                <button type="button" class="rounded-lg border border-red-300 px-5 py-2 text-sm text-fb-danger" :disabled="deleting" @click="deleteRow">Delete</button>
+                <button type="button" class="rounded-lg bg-fb-blue px-5 py-2 text-sm text-white" @click="startEdit">{{ t('common.edit') }}</button>
+                <button type="button" class="rounded-lg border border-red-300 px-5 py-2 text-sm text-fb-danger" :disabled="deleting" @click="deleteRow">{{ t('common.delete') }}</button>
               </template>
             </template>
             <button v-else type="submit" class="rounded-lg bg-fb-blue px-5 py-2 text-sm text-white" :disabled="saving">
-              {{ saving ? 'Saving…' : editingRow ? 'Save' : 'Create' }}
+              {{ saving ? t('common.saving') : editingRow ? t('common.save') : t('common.create') }}
             </button>
-            <button type="button" class="rounded-lg border px-5 py-2 text-sm" @click="closePanel">Cancel</button>
+            <button type="button" class="rounded-lg border px-5 py-2 text-sm" @click="closePanel">{{ t('common.cancel') }}</button>
           </div>
         </form>
       </div>
@@ -490,8 +512,8 @@ watch(
       <div class="absolute inset-0 bg-black/40" @click="showCategoriesModal = false" />
       <div class="relative w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
         <div class="flex items-center justify-between border-b pb-4">
-          <h3 class="text-lg font-semibold text-fb-text">Expense categories</h3>
-          <button type="button" class="text-fb-secondary hover:text-fb-text" @click="showCategoriesModal = false">✕</button>
+          <h3 class="text-lg font-semibold text-fb-text">{{ t('expenses.categoriesTitle') }}</h3>
+          <button type="button" class="text-fb-secondary hover:text-fb-text" :aria-label="t('common.close')" @click="showCategoriesModal = false">✕</button>
         </div>
 
         <div class="mt-4 space-y-3">
@@ -500,7 +522,7 @@ watch(
             <input
               v-model="newCategoryName"
               type="text"
-              placeholder="New category name…"
+              :placeholder="t('expenses.newCategoryPlaceholder')"
               class="flex-1 rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none"
               :disabled="categorySaving"
             />
@@ -509,7 +531,7 @@ watch(
               class="rounded-lg bg-fb-blue px-4 py-2 text-sm font-medium text-white hover:bg-fb-blue-dark disabled:opacity-50"
               :disabled="categorySaving || !newCategoryName.trim()"
             >
-              Add
+              {{ t('common.add') }}
             </button>
           </form>
 
@@ -535,14 +557,14 @@ watch(
                   class="text-xs font-semibold text-fb-blue hover:underline"
                   @click="saveEditCategory(c)"
                 >
-                  Save
+                  {{ t('common.save') }}
                 </button>
                 <button
                   type="button"
                   class="text-xs text-fb-secondary hover:underline"
                   @click="editingCategoryId = null"
                 >
-                  Cancel
+                  {{ t('common.cancel') }}
                 </button>
               </div>
               <template v-else>
@@ -553,20 +575,20 @@ watch(
                     class="text-xs text-fb-blue hover:underline"
                     @click="startEditCategory(c)"
                   >
-                    Edit
+                    {{ t('common.edit') }}
                   </button>
                   <button
                     type="button"
                     class="text-xs text-fb-danger hover:underline"
-                    @click="deleteCategory(c.id)"
+                    @click="deleteCategory(c)"
                   >
-                    Delete
+                    {{ t('common.delete') }}
                   </button>
                 </div>
               </template>
             </div>
             <div v-if="!categories.length" class="py-4 text-center text-xs text-fb-secondary">
-              No categories yet
+              {{ t('expenses.noCategories') }}
             </div>
           </div>
         </div>
@@ -577,7 +599,7 @@ watch(
             class="rounded-lg border border-fb-line px-4 py-2 text-sm font-medium text-fb-secondary hover:text-fb-text"
             @click="showCategoriesModal = false"
           >
-            Close
+            {{ t('common.close') }}
           </button>
         </div>
       </div>

@@ -1,3 +1,5 @@
+import { t } from '../i18n';
+
 export type CefrLevel = 'A1' | 'A2' | 'B1' | 'B2' | 'C1' | 'C2';
 
 const CEFR_LEVELS: CefrLevel[] = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'];
@@ -90,5 +92,5 @@ export function buildCourseCardDisplay(code: string): CourseCardDisplay {
 }
 
 export function courseCodeHint(): string {
-  return `Use a CEFR code: ${CEFR_LEVELS.join(', ')}`;
+  return t('courses.codeHint', { levels: CEFR_LEVELS.join(', ') });
 }

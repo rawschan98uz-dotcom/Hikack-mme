@@ -591,7 +591,7 @@ function logout() {
             </button>
             <div
               v-if="showUserMenu"
-              class="absolute right-0 top-[calc(100%+6px)] z-50 min-w-[160px] overflow-hidden rounded-lg border border-fb-line bg-fb-card py-1 shadow-fb"
+              class="absolute right-0 top-[calc(100%+6px)] z-50 min-w-[220px] overflow-hidden rounded-lg border border-fb-line bg-fb-card py-1 shadow-fb"
             >
               <button
                 type="button"
@@ -603,6 +603,20 @@ function logout() {
               <p v-if="userRoleLabel" class="px-4 py-2 text-xs text-fb-icon">
                 {{ t('layout.role', { role: userRoleLabel }) }}
               </p>
+              <div class="mx-3 border-t border-fb-line" />
+              <!-- Light / dark look: also here, not only behind the sun icon in the header -->
+              <p class="px-4 pb-1 pt-2 text-xs font-semibold uppercase tracking-wide text-fb-icon">{{ t('theme.title') }}</p>
+              <button
+                v-for="option in THEME_OPTIONS"
+                :key="option.id"
+                type="button"
+                class="flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left text-[15px] hover:bg-fb-canvas"
+                :class="themeChoice === option.id ? 'font-medium text-fb-blue' : 'text-fb-text'"
+                @click="selectTheme(option.id); showUserMenu = false"
+              >
+                {{ t(option.label) }}
+                <span v-if="themeChoice === option.id" aria-hidden="true">✓</span>
+              </button>
               <div class="mx-3 border-t border-fb-line" />
               <button
                 type="button"

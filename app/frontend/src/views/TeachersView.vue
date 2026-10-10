@@ -14,6 +14,10 @@ import {
   teacherRoute,
 } from '../utils/crossLinks';
 import { onCardsReturn, pathWithoutCards } from '../utils/cardStack';
+import { t } from '../i18n';
+import { groupStatusLabel, serverLabel } from '../i18n/labels';
+import { confirmDialog, toast } from '../ui/feedback';
+import { apiErrorMessage } from '../utils/apiError';
 
 interface Branch {
   id: number;
@@ -118,7 +122,7 @@ const filteredTeachers = computed(() => {
 
 const quantity = computed(() => filteredTeachers.value.length);
 const totalQuantity = computed(() => teachers.value.length);
-const modalTitle = computed(() => (editingTeacher.value ? 'Edit teacher' : 'Add teacher'));
+const modalTitle = computed(() => (editingTeacher.value ? t('teachers.editTitle') : t('teachers.addTitle')));
 
 const honorifics = ['Mr', 'Ms', 'Mrs'];
 
@@ -218,11 +222,11 @@ onUnmounted(() => {
 async function submitTeacher() {
   formError.value = '';
   if (!form.first_name.trim() || !form.phone.trim()) {
-    formError.value = 'Fill in first name and phone';
+    formError.value = t('staff.namePhoneRequired');
     return;
   }
   if (!form.branches.length) {
-    formError.value = 'Select at least one branch';
+    formError.value = t('teachers.branchRequired');
     return;
   }
 
@@ -248,6 +252,7 @@ async function submitTeacher() {
       await client.patch(`/user/teacher/${teacherId}`, payload);
       await loadTeachers();
       closeModal();
+      toast.success(t('toast.saved'));
       if (showProfile.value && profileTeacher.value?.id === teacherId) {
         await refreshProfile();
       }
@@ -257,6 +262,7 @@ async function submitTeacher() {
       const created = data.data;
       await loadTeachers();
       closeModal();
+      toast.success(t('teachers.created'));
       // Show generated password
       if (created.generated_password) {
         generatedTeacherName.value = created.name || `${form.first_name} ${form.last_name}`.trim();
@@ -265,11 +271,8 @@ async function submitTeacher() {
         showPasswordModal.value = true;
       }
     }
-  } catch (err: any) {
-    formError.value =
-      err.response?.data?.message ||
-      err.response?.data?.error ||
-      (editingTeacher.value ? 'Could not update teacher.' : 'Could not create teacher.');
+  } catch (err: unknown) {
+    formError.value = apiErrorMessage(err, t('errors.saveFailed'));
   } finally {
     saving.value = false;
   }
@@ -294,21 +297,32 @@ async function copyPassword() {
 async function deleteTeacher(teacher: Teacher) {
   closeMenu();
   if (!canDeleteTeacher(teacher)) return;
-  if (!window.confirm(`Delete ${teacher.name}?`)) return;
+  const ok = await confirmDialog({
+    title: t('teachers.deleteConfirm', { name: teacher.name }),
+    message: t('staff.deleteHint'),
+    danger: true,
+  });
+  if (!ok) return;
   try {
     await client.delete(`/user/teacher/${teacher.id}`);
     if (profileTeacher.value?.id === teacher.id) {
       closeProfile();
     }
+    toast.success(t('toast.deleted'));
     await loadTeachers();
-  } catch (err: any) {
-    window.alert(err.response?.data?.message || 'Could not delete teacher');
+  } catch (err: unknown) {
+    toast.error(apiErrorMessage(err, t('teachers.deleteFailed')));
   }
 }
 
 async function archiveTeacher(teacher: Teacher) {
   closeMenu();
-  if (!window.confirm(`Move teacher "${teacher.name}" to archive?`)) return;
+  const ok = await confirmDialog({
+    title: t('teachers.archiveConfirm', { name: teacher.name }),
+    message: t('teachers.archiveHint'),
+    confirmText: t('common.archive'),
+  });
+  if (!ok) return;
   try {
     await client.post('/archive/list', {
       name: teacher.name,
@@ -325,10 +339,15 @@ async function archiveTeacher(teacher: Teacher) {
     if (profileTeacher.value?.id === teacher.id) {
       closeProfile();
     }
+    toast.success(t('toast.archived'));
     await loadTeachers();
-  } catch (err: any) {
-    window.alert(err.response?.data?.message || 'Could not archive teacher');
+  } catch (err: unknown) {
+    toast.error(apiErrorMessage(err, t('teachers.archiveFailed')));
   }
+}
+
+function groupsCountLabel(teacher: Teacher) {
+  return t('teachers.groupsCount', { count: teacher.groups_count ?? 0 });
 }
 
 function editTeacher(teacher: Teacher) {
@@ -406,9 +425,9 @@ onCardsReturn(props.cardLevel ?? -1, () => {
     <!-- Page header -->
     <div class="flex items-start justify-between gap-4">
       <div class="flex items-baseline gap-3 flex-wrap">
-        <h1 class="!mb-0">Teachers</h1>
+        <h1 class="!mb-0">{{ t('nav.teachers') }}</h1>
         <span class="text-[18px] text-fb-secondary font-normal">
-          Quantity — {{ quantity }}<span v-if="quantity !== totalQuantity"> of {{ totalQuantity }}</span>
+          {{ t('archive.quantity', { count: quantity }) }}<span v-if="quantity !== totalQuantity"> ({{ t('archive.ofTotal', { total: totalQuantity }) }})</span>
         </span>
       </div>
       <div class="flex gap-3 shrink-0">
@@ -421,7 +440,7 @@ onCardsReturn(props.cardLevel ?? -1, () => {
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
             <path d="M12 8v8m0 0l-4-4m4 4l4-4M4 20h16" />
           </svg>
-          Import
+          {{ t('common.import') }}
         </button>
         <button
           v-if="canCreateTeacher"
@@ -429,7 +448,7 @@ onCardsReturn(props.cardLevel ?? -1, () => {
           class="px-6 py-2.5 rounded-lg bg-fb-blue text-white text-[15px] font-bold hover:opacity-90"
           @click="openModal()"
         >
-          ADD NEW
+          {{ t('common.addNew') }}
         </button>
       </div>
     </div>
@@ -440,7 +459,7 @@ onCardsReturn(props.cardLevel ?? -1, () => {
         <input
           v-model="searchQuery"
           type="search"
-          placeholder="Search by name, phone or title…"
+          :placeholder="t('staff.searchPlaceholder')"
           class="w-full h-11 pl-10 pr-4 rounded-xl border border-fb-line bg-fb-card text-[15px] focus:outline-none focus:border-fb-blue"
         />
         <svg class="absolute left-3.5 top-3 text-fb-secondary" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -452,7 +471,7 @@ onCardsReturn(props.cardLevel ?? -1, () => {
         v-model="selectedBranch"
         class="h-11 px-4 rounded-xl border border-fb-line bg-fb-card text-[15px] text-fb-text focus:outline-none focus:border-fb-blue"
       >
-        <option value="">All branches</option>
+        <option value="">{{ t('common.allBranches') }}</option>
         <option v-for="b in branches" :key="b.id" :value="String(b.id)">{{ b.name }}</option>
       </select>
     </div>
@@ -465,17 +484,17 @@ onCardsReturn(props.cardLevel ?? -1, () => {
         </svg>
       </div>
       <div>
-        <div class="text-fb-text font-bold text-[17px]">Attention!</div>
+        <div class="text-fb-text font-bold text-[17px]">{{ t('teachers.attention') }}</div>
         <p class="text-fb-secondary text-[16px] mt-1">
-          CEO profiles can link teachers to other branches.
+          {{ t('teachers.ceoBranchesHint') }}
         </p>
       </div>
     </div>
 
     <!-- Teacher list -->
-    <div v-if="loading" class="text-fb-secondary text-[16px] py-8">Loading…</div>
+    <div v-if="loading" class="text-fb-secondary text-[16px] py-8">{{ t('common.loading') }}</div>
     <div v-else-if="!filteredTeachers.length" class="rounded-xl border border-fb-line bg-fb-card p-10 text-center text-fb-icon text-[16px]">
-      {{ teachers.length ? 'No teachers match your search.' : 'No teachers yet. Click ADD NEW to create one.' }}
+      {{ teachers.length ? t('common.nothingFound') : t('teachers.empty') }}
     </div>
     <div v-else class="grid grid-cols-1 md:grid-cols-2 gap-4">
       <div
@@ -494,7 +513,7 @@ onCardsReturn(props.cardLevel ?? -1, () => {
           {{ teacher.phone_formatted || teacher.phone }}
         </div>
         <div class="text-[14px] text-fb-secondary flex-1 text-right pr-2 truncate">
-          {{ teacher.groups_label }}
+          {{ groupsCountLabel(teacher) }}
         </div>
 
         <div class="relative shrink-0" data-teacher-menu @click.stop>
@@ -502,7 +521,7 @@ onCardsReturn(props.cardLevel ?? -1, () => {
             type="button"
             class="w-10 h-10 rounded-full flex items-center justify-center text-fb-blue transition-colors"
             :class="openMenuId === teacher.id ? 'bg-fb-hover' : 'hover:bg-fb-hover'"
-            title="Actions"
+            :title="t('common.actions')"
             @click.stop="toggleMenu(teacher.id)"
           >
             <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
@@ -527,7 +546,7 @@ onCardsReturn(props.cardLevel ?? -1, () => {
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                 <path d="M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4L16.5 3.5z" />
               </svg>
-              Edit
+              {{ t('common.edit') }}
             </button>
             <button
               v-if="canEditTeacher"
@@ -538,7 +557,7 @@ onCardsReturn(props.cardLevel ?? -1, () => {
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                 <path d="M21 8v13H3V8M1 3h22v5H1zM10 12h4" />
               </svg>
-              To Archive
+              {{ t('common.archive') }}
             </button>
             <button
               v-if="canDeleteTeacher(teacher)"
@@ -549,7 +568,7 @@ onCardsReturn(props.cardLevel ?? -1, () => {
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                 <path d="M4 7h16M9 7V5h6v2M7 7l1 14h8l1-14" />
               </svg>
-              Delete
+              {{ t('common.delete') }}
             </button>
           </div>
         </div>
@@ -567,7 +586,7 @@ onCardsReturn(props.cardLevel ?? -1, () => {
       <div class="modal-panel-fb max-w-2xl max-h-[90vh] flex flex-col overflow-hidden my-auto">
         <div class="px-8 py-5 border-b border-fb-line flex items-center justify-between shrink-0">
           <h2 class="text-[24px] font-semibold text-fb-text">{{ modalTitle }}</h2>
-          <button type="button" class="text-fb-icon hover:text-fb-secondary text-2xl leading-none" @click="closeModal">
+          <button type="button" class="text-fb-icon hover:text-fb-secondary text-2xl leading-none" :aria-label="t('common.close')" @click="closeModal">
             ×
           </button>
         </div>
@@ -576,7 +595,7 @@ onCardsReturn(props.cardLevel ?? -1, () => {
           <div class="px-8 py-6 space-y-5 flex-1 overflow-y-auto">
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-5">
               <div>
-                <label class="block text-[15px] font-medium text-fb-secondary mb-2">Honorific</label>
+                <label class="block text-[15px] font-medium text-fb-secondary mb-2">{{ t('teachers.honorific') }}</label>
                 <select
                   v-model="form.honorific"
                   class="w-full h-12 px-4 rounded-lg border border-fb-line text-[16px] focus:outline-none focus:border-fb-blue"
@@ -585,7 +604,7 @@ onCardsReturn(props.cardLevel ?? -1, () => {
                 </select>
               </div>
               <div>
-                <label class="block text-[15px] font-medium text-fb-secondary mb-2">Phone</label>
+                <label class="block text-[15px] font-medium text-fb-secondary mb-2">{{ t('common.phone') }}</label>
                 <input
                   v-model="form.phone"
                   type="tel"
@@ -594,7 +613,7 @@ onCardsReturn(props.cardLevel ?? -1, () => {
                 />
               </div>
               <div>
-                <label class="block text-[15px] font-medium text-fb-secondary mb-2">First name</label>
+                <label class="block text-[15px] font-medium text-fb-secondary mb-2">{{ t('common.firstName') }}</label>
                 <input
                   v-model="form.first_name"
                   type="text"
@@ -603,7 +622,7 @@ onCardsReturn(props.cardLevel ?? -1, () => {
                 />
               </div>
               <div>
-                <label class="block text-[15px] font-medium text-fb-secondary mb-2">Last name</label>
+                <label class="block text-[15px] font-medium text-fb-secondary mb-2">{{ t('common.lastName') }}</label>
                 <input
                   v-model="form.last_name"
                   type="text"
@@ -611,11 +630,11 @@ onCardsReturn(props.cardLevel ?? -1, () => {
                 />
               </div>
               <div class="sm:col-span-2">
-                <label class="block text-[15px] font-medium text-fb-secondary mb-2">Job title / Specialization</label>
+                <label class="block text-[15px] font-medium text-fb-secondary mb-2">{{ t('teachers.jobTitle') }}</label>
                 <input
                   v-model="form.job_title"
                   type="text"
-                  placeholder="e.g. Senior English Teacher"
+                  :placeholder="t('teachers.jobTitlePlaceholder')"
                   class="w-full h-12 px-4 rounded-lg border border-fb-line text-[16px] focus:outline-none focus:border-fb-blue"
                 />
               </div>
@@ -625,28 +644,28 @@ onCardsReturn(props.cardLevel ?? -1, () => {
                     <svg class="inline-block w-4 h-4 mr-1 -mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                       <path d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
                     </svg>
-                    Password will be generated automatically and shown after creation.
+                    {{ t('teachers.passwordAuto') }}
                   </p>
                 </div>
               </div>
               <div v-else-if="auth.isCeo" class="sm:col-span-2">
-                <label class="block text-[15px] font-medium text-fb-secondary mb-2">New password (optional, CEO only)</label>
+                <label class="block text-[15px] font-medium text-fb-secondary mb-2">{{ t('teachers.newPasswordCeo') }}</label>
                 <input
                   v-model="form.password"
                   type="password"
-                  placeholder="Leave blank to keep current"
+                  :placeholder="t('profile.newPasswordPlaceholder')"
                   class="w-full h-12 px-4 rounded-lg border border-fb-line text-[16px] focus:outline-none focus:border-fb-blue"
                 />
               </div>
             </div>
 
             <div>
-              <label class="block text-[15px] font-medium text-fb-secondary mb-2">Branches</label>
+              <label class="block text-[15px] font-medium text-fb-secondary mb-2">{{ t('profile.branches') }}</label>
               <p v-if="!auth.isCeo" class="text-[13px] text-amber-600 mb-2">
-                Only CEO can assign teachers to multiple branches.
+                {{ t('teachers.onlyCeoBranches') }}
               </p>
               <p v-else class="text-[14px] text-fb-secondary mb-3">
-                CEO can assign a teacher to multiple branches.
+                {{ t('teachers.ceoCanBranches') }}
               </p>
               <div class="flex flex-wrap gap-3">
                 <label
@@ -681,14 +700,14 @@ onCardsReturn(props.cardLevel ?? -1, () => {
               class="px-6 py-2.5 rounded-lg border border-fb-line text-[15px] font-medium text-fb-secondary hover:bg-fb-canvas"
               @click="closeModal"
             >
-              Cancel
+              {{ t('common.cancel') }}
             </button>
             <button
               type="submit"
               class="px-8 py-2.5 rounded-lg bg-fb-blue text-white text-[15px] font-bold hover:opacity-90 disabled:opacity-60"
               :disabled="saving"
             >
-              {{ saving ? 'Saving…' : editingTeacher ? 'Save' : 'Create' }}
+              {{ saving ? t('common.saving') : editingTeacher ? t('common.save') : t('common.create') }}
             </button>
           </div>
         </form>
@@ -699,13 +718,13 @@ onCardsReturn(props.cardLevel ?? -1, () => {
     <div v-if="showProfile" class="drawer-wide-shell">
       <aside class="drawer-panel-fb">
         <div class="flex items-center justify-between border-b border-fb-line px-8 py-5">
-          <h2 class="text-[22px] font-semibold text-fb-text">Teacher profile</h2>
-          <button type="button" class="text-2xl leading-none text-fb-icon hover:text-fb-secondary" @click="closeProfile">
+          <h2 class="text-[22px] font-semibold text-fb-text">{{ t('teachers.profileTitle') }}</h2>
+          <button type="button" class="text-2xl leading-none text-fb-icon hover:text-fb-secondary" :aria-label="t('common.close')" @click="closeProfile">
             ×
           </button>
         </div>
 
-        <div v-if="profileLoading" class="p-8 text-center text-fb-secondary">Loading…</div>
+        <div v-if="profileLoading" class="p-8 text-center text-fb-secondary">{{ t('common.loading') }}</div>
         <div v-else-if="profileTeacher" class="flex-1 overflow-y-auto px-8 py-6">
           <div class="flex flex-wrap items-start justify-between gap-6">
             <div>
@@ -721,7 +740,7 @@ onCardsReturn(props.cardLevel ?? -1, () => {
                 class="rounded-lg bg-fb-blue px-5 py-2.5 text-sm font-semibold text-white hover:opacity-90"
                 @click="editTeacher(profileTeacher)"
               >
-                Edit teacher
+                {{ t('teachers.editTitle') }}
               </button>
               <button
                 v-if="canEditTeacher"
@@ -729,7 +748,7 @@ onCardsReturn(props.cardLevel ?? -1, () => {
                 class="rounded-lg border border-amber-300 px-5 py-2.5 text-sm font-medium text-amber-700 hover:bg-amber-50"
                 @click="archiveTeacher(profileTeacher)"
               >
-                Archive
+                {{ t('common.archive') }}
               </button>
               <button
                 v-if="canDeleteTeacher(profileTeacher)"
@@ -737,7 +756,7 @@ onCardsReturn(props.cardLevel ?? -1, () => {
                 class="rounded-lg border border-red-300 px-5 py-2.5 text-sm font-medium text-red-500 hover:bg-red-50"
                 @click="deleteTeacher(profileTeacher)"
               >
-                Delete
+                {{ t('common.delete') }}
               </button>
             </div>
           </div>
@@ -745,21 +764,21 @@ onCardsReturn(props.cardLevel ?? -1, () => {
           <!-- Key facts at a glance -->
           <div class="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <div class="fact-tile-fb">
-              <div class="fact-label">Телефон</div>
+              <div class="fact-label">{{ t('common.phone') }}</div>
               <div class="fact-value text-fb-blue">{{ profileTeacher.phone_formatted || profileTeacher.phone }}</div>
             </div>
             <div class="fact-tile-fb">
-              <div class="fact-label">Филиалы</div>
+              <div class="fact-label">{{ t('profile.branches') }}</div>
               <div class="fact-value">{{ profileTeacher.branches.map((b) => b.name).join(', ') || '—' }}</div>
             </div>
             <div class="fact-tile-fb">
-              <div class="fact-label">Групп ведёт сейчас</div>
+              <div class="fact-label">{{ t('teachers.groupsNow') }}</div>
               <div class="fact-value">
                 {{ (profileTeacher.groups || []).filter((g) => g.status === GROUP_ACTIVE).length }}
               </div>
             </div>
             <div class="fact-tile-fb">
-              <div class="fact-label">Учеников в этих группах</div>
+              <div class="fact-label">{{ t('teachers.studentsInGroups') }}</div>
               <div class="fact-value">
                 {{ (profileTeacher.groups || []).filter((g) => g.status === GROUP_ACTIVE).reduce((sum, g) => sum + (g.students_count || 0), 0) }}
               </div>
@@ -768,26 +787,26 @@ onCardsReturn(props.cardLevel ?? -1, () => {
 
           <div class="mt-8">
             <div class="mb-3 flex items-center justify-between">
-              <p class="text-base font-semibold text-fb-text">Группы</p>
+              <p class="text-base font-semibold text-fb-text">{{ t('nav.groups') }}</p>
               <button type="button" class="text-sm text-fb-blue hover:underline" @click="goGroups(profileTeacher)">
-                All groups →
+                {{ t('teacherAtt.allGroups') }} →
               </button>
             </div>
             <div v-if="!profileTeacher.groups?.length" class="rounded-lg bg-fb-canvas py-8 text-center text-fb-icon">
-              No groups assigned
+              {{ t('teachers.noGroups') }}
             </div>
             <div v-else class="overflow-hidden rounded-xl border border-fb-line">
               <table class="w-full text-left text-sm">
                 <thead class="border-b border-fb-line bg-fb-canvas text-xs font-semibold uppercase tracking-wider text-fb-secondary">
                   <tr>
-                    <th class="px-4 py-3">Группа</th>
-                    <th class="px-4 py-3">Курс</th>
-                    <th class="px-4 py-3">Дни</th>
-                    <th class="px-4 py-3">Время</th>
-                    <th class="px-4 py-3">Аудитория</th>
-                    <th class="px-4 py-3">Филиал</th>
-                    <th class="px-4 py-3 text-right">Учеников</th>
-                    <th class="px-4 py-3">Статус</th>
+                    <th class="px-4 py-3">{{ t('schedule.group') }}</th>
+                    <th class="px-4 py-3">{{ t('schedule.course') }}</th>
+                    <th class="px-4 py-3">{{ t('groups.days') }}</th>
+                    <th class="px-4 py-3">{{ t('common.time') }}</th>
+                    <th class="px-4 py-3">{{ t('groups.room') }}</th>
+                    <th class="px-4 py-3">{{ t('common.branch') }}</th>
+                    <th class="px-4 py-3 text-right">{{ t('nav.students') }}</th>
+                    <th class="px-4 py-3">{{ t('common.status') }}</th>
                   </tr>
                 </thead>
                 <tbody class="divide-y divide-fb-line">
@@ -802,7 +821,7 @@ onCardsReturn(props.cardLevel ?? -1, () => {
                       </button>
                     </td>
                     <td class="px-4 py-3 text-fb-text">{{ group.course }}</td>
-                    <td class="px-4 py-3 text-fb-secondary">{{ group.days_label }}</td>
+                    <td class="px-4 py-3 text-fb-secondary">{{ serverLabel(group.days_label) }}</td>
                     <td class="whitespace-nowrap px-4 py-3 text-fb-secondary">{{ group.time || '—' }}</td>
                     <td class="px-4 py-3 text-fb-secondary">{{ group.room || '—' }}</td>
                     <td class="px-4 py-3 text-fb-secondary">{{ group.branch }}</td>
@@ -812,7 +831,7 @@ onCardsReturn(props.cardLevel ?? -1, () => {
                         class="inline-block rounded-full px-2.5 py-0.5 text-xs font-medium"
                         :class="group.status === GROUP_ACTIVE ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600'"
                       >
-                        {{ group.status_label || '—' }}
+                        {{ groupStatusLabel(group.status, group.status_label) }}
                       </span>
                     </td>
                   </tr>
@@ -831,12 +850,11 @@ onCardsReturn(props.cardLevel ?? -1, () => {
     >
       <div class="bg-fb-card rounded-2xl shadow-2xl max-w-md w-full overflow-hidden">
         <div class="px-8 py-5 border-b border-fb-line">
-          <h2 class="text-[20px] font-semibold text-fb-text">Teacher created!</h2>
+          <h2 class="text-[20px] font-semibold text-fb-text">{{ t('teachers.createdTitle') }}</h2>
         </div>
         <div class="px-8 py-6 space-y-4">
           <p class="text-[15px] text-fb-secondary">
-            Teacher <strong class="text-fb-text">{{ generatedTeacherName }}</strong> has been created.
-            Please save or copy the auto-generated password below.
+            {{ t('teachers.createdText', { name: generatedTeacherName }) }}
           </p>
           <div class="flex items-center gap-3 rounded-xl border-2 border-fb-blue bg-fb-hover px-5 py-4">
             <span class="text-[22px] font-mono font-bold text-fb-text tracking-widest flex-1 select-all">
@@ -850,7 +868,7 @@ onCardsReturn(props.cardLevel ?? -1, () => {
                 : 'bg-fb-blue text-white hover:opacity-90'"
               @click="copyPassword"
             >
-              {{ passwordCopied ? '✓ Copied' : 'Copy' }}
+              {{ passwordCopied ? `✓ ${t('common.copied')}` : t('common.copy') }}
             </button>
           </div>
           <div class="rounded-lg bg-amber-50 border border-amber-200 px-4 py-3">
@@ -858,7 +876,7 @@ onCardsReturn(props.cardLevel ?? -1, () => {
               <svg class="inline-block w-4 h-4 mr-1 -mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
-              This password will not be shown again. Only CEO can reset it later.
+              {{ t('teachers.passwordOnce') }}
             </p>
           </div>
         </div>
@@ -868,7 +886,7 @@ onCardsReturn(props.cardLevel ?? -1, () => {
             class="px-8 py-2.5 rounded-lg bg-fb-blue text-white text-[15px] font-bold hover:opacity-90"
             @click="showPasswordModal = false"
           >
-            Done
+            {{ t('import.done') }}
           </button>
         </div>
       </div>
@@ -877,12 +895,12 @@ onCardsReturn(props.cardLevel ?? -1, () => {
     <ImportCsvModal
       v-if="!isCard"
       v-model:open="showImportModal"
-      title="Import teachers"
+      :title="t('teachers.importTitle')"
       upload-url="/user/teacher/import"
       template-filename="teachers-import-template.csv"
       :template-header="['honorific', 'first_name', 'last_name', 'phone', 'password', 'job_title', 'branch_ids']"
       :template-example="['Mr', 'Ali', 'Karimov', '901001010', 'demo1234', 'Teacher', '1']"
-      columns-help="Required columns: first_name, phone. Optional: honorific, last_name, password (auto-generated if empty), job_title, branch_ids (comma-separated branch IDs)."
+      :columns-help="t('teachers.importHelp')"
       @imported="loadTeachers"
     />
   </div>

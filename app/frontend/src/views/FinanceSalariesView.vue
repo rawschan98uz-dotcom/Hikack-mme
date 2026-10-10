@@ -1,10 +1,13 @@
 <script setup lang="ts">
-import { currentMonthIso } from '../utils/dates';
+import { currentMonthIso, formatMonthTitle } from '../utils/dates';
 import { computed, onMounted, reactive, ref } from 'vue';
 
 import client, { type ApiEnvelope } from '../api/client';
 import { useAuthStore } from '../stores/auth';
 import { PERM } from '../utils/rbac';
+import { t, type MessageKey } from '../i18n';
+import { confirmDialog, toast } from '../ui/feedback';
+import { apiErrorMessage } from '../utils/apiError';
 
 const auth = useAuthStore();
 // Salaries and rates are the CEO's (finance.write); a branch director only looks
@@ -121,11 +124,24 @@ const expanded = ref<number | null>(null);
 const monthClosed = ref<ClosedInfo | null>(null);
 const canClose = ref(false);
 
-const MONTH_NAMES = ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь'];
-const monthTitle = computed(() => {
-  const [y, m] = selectedMonth.value.split('-').map(Number);
-  return m ? `${MONTH_NAMES[m - 1]} ${y}` : selectedMonth.value;
-});
+const monthTitle = computed(() => formatMonthTitle(selectedMonth.value));
+
+// Where a teacher's percent came from; the server names it in Russian
+const PERCENT_SCOPES: Record<string, MessageKey> = {
+  'группа': 'salaries.scopeGroup',
+  'курс': 'salaries.scopeCourse',
+  'общий': 'salaries.scopeGeneral',
+  'не задан': 'salaries.scopeNone',
+};
+
+function percentScopeLabel(scope: string) {
+  const key = PERCENT_SCOPES[scope];
+  return key ? t(key) : scope;
+}
+
+function kindLabel(row: PayrollRow) {
+  return row.kind === 'teacher' ? t('salaries.kindTeacher') : t('salaries.kindStaff');
+}
 
 async function loadPayroll() {
   payrollLoading.value = true;
@@ -138,8 +154,8 @@ async function loadPayroll() {
     payrollRows.value = data.data.rows;
     monthClosed.value = data.data.closed;
     canClose.value = data.data.can_close;
-  } catch (err: any) {
-    payrollError.value = err?.response?.data?.message || 'Не удалось загрузить ведомость';
+  } catch (err: unknown) {
+    payrollError.value = apiErrorMessage(err, t('salaries.loadFailed'));
   } finally {
     payrollLoading.value = false;
   }
@@ -153,9 +169,9 @@ function shiftMonth(delta: number) {
 }
 
 function statusLabel(row: PayrollRow) {
-  if (row.status === 'paid') return row.overpaid ? `Выплачено (+${money(row.overpaid)} сверх)` : 'Выплачено';
-  if (row.status === 'partial') return 'Частично';
-  if (row.status === 'unpaid') return 'Не выплачено';
+  if (row.status === 'paid') return row.overpaid ? t('salaries.paidOver', { amount: money(row.overpaid) }) : t('salaries.paid');
+  if (row.status === 'partial') return t('salaries.partial');
+  if (row.status === 'unpaid') return t('salaries.unpaid');
   return '—';
 }
 
@@ -187,7 +203,7 @@ function openPay(row: PayrollRow) {
   payModal.row = row;
   payModal.amount = row.balance > 0 ? row.balance : 0;
   payModal.method = 'cash';
-  payModal.comment = `Зарплата за ${selectedMonth.value}: ${row.teacher_name}`;
+  payModal.comment = t('salaries.payComment', { month: selectedMonth.value, name: row.teacher_name });
   payModal.branch_id = '';
   payModal.force = false;
   payModal.overpay = false;
@@ -198,11 +214,11 @@ function openPay(row: PayrollRow) {
 async function submitPay() {
   if (!payModal.row) return;
   if (!Number.isInteger(payModal.amount) || payModal.amount <= 0) {
-    payModal.error = 'Сумма — целое положительное число.';
+    payModal.error = t('finance.amountPositive');
     return;
   }
   if (payNeedsBranch.value && payModal.branch_id === '') {
-    payModal.error = 'Выберите филиал, на который записать зарплату.';
+    payModal.error = t('salaries.payBranchRequired');
     return;
   }
   payModal.saving = true;
@@ -217,14 +233,17 @@ async function submitPay() {
       ...(payModal.branch_id !== '' ? { branch_id: payModal.branch_id } : {}),
       ...(payModal.force ? { force: true } : {}),
     });
+    const paidName = payModal.row.teacher_name;
+    const paidAmount = payModal.amount;
     payModal.show = false;
+    toast.success(t('salaries.paidToast', { amount: money(paidAmount), name: paidName }));
     await loadPayroll();
-  } catch (err: any) {
-    const data = err?.response?.data;
+  } catch (err: unknown) {
+    const data = (err as { response?: { data?: { code?: string; balance?: number } } })?.response?.data;
     payModal.overpay = data?.code === 'overpayment';
     payModal.error = payModal.overpay
-      ? `Это больше начисленного: к выплате осталось ${money(data?.balance)} сум.`
-      : data?.message || 'Не удалось провести выплату';
+      ? t('salaries.overpay', { amount: money(data?.balance) })
+      : apiErrorMessage(err, t('salaries.payFailed'));
   } finally {
     payModal.saving = false;
   }
@@ -232,12 +251,19 @@ async function submitPay() {
 
 async function cancelPayout(row: PayrollRow, payout: Payout) {
   if (!payout.id) return;
-  if (!window.confirm(`Отменить выплату ${money(payout.amount)} сум (${row.teacher_name})? Запись в расходах тоже будет удалена.`)) return;
+  const ok = await confirmDialog({
+    title: t('salaries.cancelPayoutConfirm', { amount: money(payout.amount), name: row.teacher_name }),
+    message: t('salaries.cancelPayoutHint'),
+    danger: true,
+    confirmText: t('salaries.cancelPayout'),
+  });
+  if (!ok) return;
   try {
     await client.delete(`/finance/payroll/payouts/${payout.id}`);
+    toast.success(t('salaries.payoutCancelled'));
     await loadPayroll();
-  } catch (err: any) {
-    window.alert(err?.response?.data?.message || 'Не удалось отменить выплату');
+  } catch (err: unknown) {
+    toast.error(apiErrorMessage(err, t('salaries.cancelPayoutFailed')));
   }
 }
 
@@ -259,7 +285,7 @@ function openMonthModal(mode: 'close' | 'reopen') {
 
 async function submitMonth() {
   if (monthModal.mode === 'reopen' && monthModal.reason.trim().length < 3) {
-    monthModal.error = 'Укажите причину, зачем открываете месяц.';
+    monthModal.error = t('salaries.reopenReasonRequired');
     return;
   }
   monthModal.saving = true;
@@ -269,10 +295,12 @@ async function submitMonth() {
       month: selectedMonth.value,
       ...(monthModal.mode === 'reopen' ? { reason: monthModal.reason.trim() } : {}),
     });
+    const closing = monthModal.mode === 'close';
     monthModal.show = false;
+    toast.success(closing ? t('salaries.monthClosedToast', { month: monthTitle.value }) : t('salaries.monthReopenedToast', { month: monthTitle.value }));
     await loadPayroll();
-  } catch (err: any) {
-    monthModal.error = err?.response?.data?.message || 'Не получилось';
+  } catch (err: unknown) {
+    monthModal.error = apiErrorMessage(err);
   } finally {
     monthModal.saving = false;
   }
@@ -301,11 +329,11 @@ function openAdjustment(row: PayrollRow) {
 async function submitAdjustment() {
   if (!adjModal.row) return;
   if (!Number.isInteger(adjModal.amount) || Number(adjModal.amount) <= 0) {
-    adjModal.error = 'Сумма — целое положительное число.';
+    adjModal.error = t('finance.amountPositive');
     return;
   }
   if (adjModal.reason.trim().length < 3) {
-    adjModal.error = 'Укажите причину поправки.';
+    adjModal.error = t('salaries.adjReasonRequired');
     return;
   }
   adjModal.saving = true;
@@ -318,21 +346,28 @@ async function submitAdjustment() {
       reason: adjModal.reason.trim(),
     });
     adjModal.show = false;
+    toast.success(t('salaries.adjSaved'));
     await loadPayroll();
-  } catch (err: any) {
-    adjModal.error = err?.response?.data?.message || 'Не удалось сохранить поправку';
+  } catch (err: unknown) {
+    adjModal.error = apiErrorMessage(err, t('salaries.adjSaveFailed'));
   } finally {
     adjModal.saving = false;
   }
 }
 
 async function deleteAdjustment(row: PayrollRow, adj: Adjustment) {
-  if (!window.confirm(`Удалить поправку ${adj.amount > 0 ? '+' : '−'}${money(Math.abs(adj.amount))} сум (${row.teacher_name})?`)) return;
+  const ok = await confirmDialog({
+    title: t('salaries.adjDeleteConfirm', { amount: `${adj.amount > 0 ? '+' : '−'}${money(Math.abs(adj.amount))}`, name: row.teacher_name }),
+    message: adj.reason,
+    danger: true,
+  });
+  if (!ok) return;
   try {
     await client.delete(`/finance/payroll/adjustments/${adj.id}`);
+    toast.success(t('toast.deleted'));
     await loadPayroll();
-  } catch (err: any) {
-    window.alert(err?.response?.data?.message || 'Не удалось удалить поправку');
+  } catch (err: unknown) {
+    toast.error(apiErrorMessage(err, t('salaries.adjDeleteFailed')));
   }
 }
 
@@ -393,14 +428,14 @@ async function loadOptions() {
 }
 
 function rateText(r: SalaryRow) {
-  return r.salary_type === 'percent' ? `${r.amount}%` : `${money(r.amount)} сум / мес`;
+  return r.salary_type === 'percent' ? `${r.amount}%` : t('payments.perMonth', { amount: money(r.amount) });
 }
 
 function rateScope(r: SalaryRow) {
-  if (r.person_kind === 'staff') return 'Фикс в месяц';
-  if (r.group_id) return `Группа: ${r.group}`;
-  if (r.course_id) return `Курс: ${r.course}`;
-  return 'Общий процент учителя';
+  if (r.person_kind === 'staff') return t('salaries.fixedMonthly');
+  if (r.group_id) return t('salaries.forGroup', { name: r.group });
+  if (r.course_id) return t('salaries.forCourse', { name: r.course });
+  return t('salaries.generalPercent');
 }
 
 function openRate(r?: SalaryRow) {
@@ -418,15 +453,15 @@ function openRate(r?: SalaryRow) {
 async function saveRate() {
   panel.error = '';
   if (panel.person_id === '') {
-    panel.error = 'Выберите учителя или сотрудника.';
+    panel.error = t('salaries.choosePerson');
     return;
   }
   if (!Number.isInteger(panel.amount) || Number(panel.amount) < 0) {
-    panel.error = panelIsTeacher.value ? 'Процент — целое число от 0 до 100.' : 'Сумма — целое число, не меньше 0.';
+    panel.error = panelIsTeacher.value ? t('salaries.percentRange') : t('salaries.amountNonNegative');
     return;
   }
   if (panelIsTeacher.value && Number(panel.amount) > 100) {
-    panel.error = 'Процент — целое число от 0 до 100.';
+    panel.error = t('salaries.percentRange');
     return;
   }
   const payload = {
@@ -446,22 +481,30 @@ async function saveRate() {
       await client.post('/salary-settings', payload);
     }
     panel.show = false;
+    toast.success(t('toast.saved'));
     await Promise.all([loadRates(), loadPayroll()]);
-  } catch (err: any) {
-    panel.error = err?.response?.data?.message || 'Не удалось сохранить';
+  } catch (err: unknown) {
+    panel.error = apiErrorMessage(err, t('errors.saveFailed'));
   } finally {
     panel.saving = false;
   }
 }
 
 async function deleteRate() {
-  if (!panel.editing || !window.confirm('Удалить эту ставку?')) return;
+  if (!panel.editing) return;
+  const ok = await confirmDialog({
+    title: t('salaries.rateDeleteConfirm', { name: panel.editing.teacher, rate: rateText(panel.editing) }),
+    message: t('salaries.rateDeleteHint'),
+    danger: true,
+  });
+  if (!ok || !panel.editing) return;
   try {
     await client.delete(`/salary-settings/${panel.editing.id}`);
     panel.show = false;
+    toast.success(t('toast.deleted'));
     await Promise.all([loadRates(), loadPayroll()]);
-  } catch (err: any) {
-    panel.error = err?.response?.data?.message || 'Не удалось удалить';
+  } catch (err: unknown) {
+    panel.error = apiErrorMessage(err, t('errors.deleteFailed'));
   }
 }
 
@@ -474,9 +517,9 @@ onMounted(async () => {
   <div class="space-y-6">
     <div class="flex flex-wrap items-center justify-between gap-4">
       <div>
-        <h1 class="text-2xl font-bold text-fb-text">Зарплаты</h1>
+        <h1 class="text-2xl font-bold text-fb-text">{{ t('nav.salaries') }}</h1>
         <p class="mt-0.5 text-sm text-fb-secondary">
-          Учителя — процент с оплаченных месяцев учеников за проведённые уроки, сотрудники — фиксированная сумма в месяц
+          {{ t('salaries.subtitle') }}
         </p>
       </div>
       <button
@@ -485,7 +528,7 @@ onMounted(async () => {
         class="rounded-lg bg-fb-blue px-4 py-2 text-sm font-semibold text-white shadow-sm"
         @click="openRate()"
       >
-        + Добавить ставку
+        + {{ t('salaries.addRate') }}
       </button>
     </div>
 
@@ -496,7 +539,7 @@ onMounted(async () => {
         :class="activeTab === 'payroll' ? 'border-fb-blue text-fb-blue' : 'border-transparent text-fb-secondary'"
         @click="activeTab = 'payroll'"
       >
-        📑 Ведомость
+        📑 {{ t('salaries.payrollTab') }}
       </button>
       <button
         type="button"
@@ -504,14 +547,14 @@ onMounted(async () => {
         :class="activeTab === 'settings' ? 'border-fb-blue text-fb-blue' : 'border-transparent text-fb-secondary'"
         @click="activeTab = 'settings'"
       >
-        ⚙️ Ставки ({{ rates.length }})
+        ⚙️ {{ t('salaries.ratesTab') }} ({{ rates.length }})
       </button>
     </div>
 
     <!-- ================= Payroll ================= -->
     <div v-if="activeTab === 'payroll'" class="space-y-6">
       <div class="flex flex-wrap items-center gap-3 rounded-2xl border border-fb-line bg-fb-card p-4">
-        <span class="text-sm font-semibold text-fb-text">Месяц:</span>
+        <span class="text-sm font-semibold text-fb-text">{{ t('common.month') }}:</span>
         <div class="flex items-center gap-1 rounded-xl border border-fb-line bg-white p-1">
           <button type="button" class="rounded-lg px-2.5 py-1 text-xs text-fb-secondary hover:bg-fb-canvas" @click="shiftMonth(-1)">◀</button>
           <input v-model="selectedMonth" type="month" class="border-none bg-transparent px-2 py-0.5 text-sm font-bold focus:outline-none" @change="loadPayroll" />
@@ -521,7 +564,7 @@ onMounted(async () => {
           v-if="monthClosed"
           class="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700"
         >
-          🔒 Месяц закрыт
+          🔒 {{ t('salaries.monthClosed') }}
         </span>
         <button
           v-if="auth.isCeo && canClose"
@@ -529,7 +572,7 @@ onMounted(async () => {
           class="ml-auto rounded-lg border border-slate-400 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-fb-canvas"
           @click="openMonthModal('close')"
         >
-          🔒 Закрыть {{ monthTitle }}
+          🔒 {{ t('salaries.closeMonthNamed', { month: monthTitle }) }}
         </button>
         <button
           v-if="auth.isCeo && monthClosed"
@@ -537,52 +580,50 @@ onMounted(async () => {
           class="ml-auto rounded-lg border border-rose-300 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-50"
           @click="openMonthModal('reopen')"
         >
-          Открыть месяц
+          {{ t('salaries.reopenMonth') }}
         </button>
       </div>
 
       <div v-if="monthClosed" class="rounded-2xl border border-slate-300 bg-slate-50 px-5 py-3 text-sm text-slate-700">
-        <strong class="capitalize">{{ monthTitle }}</strong> закрыт {{ monthClosed.closed_at }}{{ monthClosed.closed_by ? ` (${monthClosed.closed_by})` : '' }}.
-        Оплаты, расходы, изъятия и отметки учителей с датой этого месяца менять нельзя; оклады сотрудников
-        зафиксированы. Учителю доначисляется только когда ученик гасит долг за этот месяц. Исправление —
-        «Поправкой» (CEO) или открыв месяц.
+        <strong class="capitalize">{{ monthTitle }}</strong> — {{ t('salaries.closedOn', { date: monthClosed.closed_at }) }}{{ monthClosed.closed_by ? ` (${monthClosed.closed_by})` : '' }}.
+        {{ t('salaries.closedText') }}
       </div>
 
       <div class="grid grid-cols-1 gap-4 sm:grid-cols-4">
         <div class="rounded-2xl border border-fb-line bg-fb-card p-5 shadow-sm">
-          <div class="text-xs font-semibold uppercase tracking-wider text-fb-secondary">К выплате</div>
-          <div class="mt-2 text-2xl font-black text-fb-text">{{ money(payrollSummary.total_accrued) }} <span class="text-xs text-fb-secondary">UZS</span></div>
-          <div class="mt-1 text-xs text-fb-secondary">С того, что ученики уже оплатили</div>
+          <div class="text-xs font-semibold uppercase tracking-wider text-fb-secondary">{{ t('salaries.payable') }}</div>
+          <div class="mt-2 text-2xl font-black text-fb-text">{{ money(payrollSummary.total_accrued) }} <span class="text-xs text-fb-secondary">{{ t('common.sum') }}</span></div>
+          <div class="mt-1 text-xs text-fb-secondary">{{ t('salaries.payableHint') }}</div>
         </div>
         <div class="rounded-2xl border border-fb-line bg-fb-card p-5 shadow-sm">
-          <div class="text-xs font-semibold uppercase tracking-wider text-amber-700">Ждёт оплаты учеников</div>
-          <div class="mt-2 text-2xl font-black text-amber-700">{{ money(payrollSummary.total_waiting ?? 0) }} <span class="text-xs text-fb-secondary">UZS</span></div>
-          <div class="mt-1 text-xs text-fb-secondary">Добавится к выплате, когда должники заплатят</div>
+          <div class="text-xs font-semibold uppercase tracking-wider text-amber-700">{{ t('salaries.waiting') }}</div>
+          <div class="mt-2 text-2xl font-black text-amber-700">{{ money(payrollSummary.total_waiting ?? 0) }} <span class="text-xs text-fb-secondary">{{ t('common.sum') }}</span></div>
+          <div class="mt-1 text-xs text-fb-secondary">{{ t('salaries.waitingHint') }}</div>
         </div>
         <div class="rounded-2xl border border-fb-line bg-fb-card p-5 shadow-sm">
-          <div class="text-xs font-semibold uppercase tracking-wider text-emerald-700">Выплачено</div>
-          <div class="mt-2 text-2xl font-black text-emerald-700">{{ money(payrollSummary.total_paid) }} <span class="text-xs text-fb-secondary">UZS</span></div>
+          <div class="text-xs font-semibold uppercase tracking-wider text-emerald-700">{{ t('salaries.paid') }}</div>
+          <div class="mt-2 text-2xl font-black text-emerald-700">{{ money(payrollSummary.total_paid) }} <span class="text-xs text-fb-secondary">{{ t('common.sum') }}</span></div>
         </div>
         <div class="rounded-2xl border border-fb-line bg-fb-card p-5 shadow-sm">
-          <div class="text-xs font-semibold uppercase tracking-wider text-rose-700">Осталось выплатить</div>
-          <div class="mt-2 text-2xl font-black text-rose-700">{{ money(payrollSummary.total_balance) }} <span class="text-xs text-fb-secondary">UZS</span></div>
-          <div class="mt-1 text-xs text-fb-secondary">Сумма долгов каждому человеку</div>
+          <div class="text-xs font-semibold uppercase tracking-wider text-rose-700">{{ t('salaries.leftToPay') }}</div>
+          <div class="mt-2 text-2xl font-black text-rose-700">{{ money(payrollSummary.total_balance) }} <span class="text-xs text-fb-secondary">{{ t('common.sum') }}</span></div>
+          <div class="mt-1 text-xs text-fb-secondary">{{ t('salaries.leftToPayHint') }}</div>
         </div>
       </div>
 
       <div class="overflow-hidden rounded-2xl border border-fb-line bg-fb-card shadow-sm">
-        <div v-if="payrollLoading" class="p-12 text-center text-fb-secondary">Считаю…</div>
+        <div v-if="payrollLoading" class="p-12 text-center text-fb-secondary">{{ t('salaries.counting') }}</div>
         <div v-else-if="payrollError" class="p-12 text-center text-fb-danger">{{ payrollError }}</div>
-        <div v-else-if="!payrollRows.length" class="p-12 text-center text-fb-secondary">Нет данных за этот месяц</div>
+        <div v-else-if="!payrollRows.length" class="p-12 text-center text-fb-secondary">{{ t('salaries.noData') }}</div>
         <table v-else class="w-full text-left text-sm">
           <thead class="border-b border-fb-line bg-fb-canvas text-xs font-semibold uppercase tracking-wider text-fb-secondary">
             <tr>
-              <th class="px-5 py-3">Кто</th>
-              <th class="px-5 py-3 text-right">К выплате</th>
-              <th class="px-5 py-3 text-right">Ждёт оплаты учеников</th>
-              <th class="px-5 py-3 text-right">Выплачено</th>
-              <th class="px-5 py-3 text-right">Осталось</th>
-              <th class="px-5 py-3">Статус</th>
+              <th class="px-5 py-3">{{ t('salaries.who') }}</th>
+              <th class="px-5 py-3 text-right">{{ t('salaries.payable') }}</th>
+              <th class="px-5 py-3 text-right">{{ t('salaries.waiting') }}</th>
+              <th class="px-5 py-3 text-right">{{ t('salaries.paid') }}</th>
+              <th class="px-5 py-3 text-right">{{ t('months.left') }}</th>
+              <th class="px-5 py-3">{{ t('common.status') }}</th>
               <th class="px-5 py-3 text-right" />
             </tr>
           </thead>
@@ -592,14 +633,14 @@ onMounted(async () => {
                 <td class="px-5 py-3">
                   <div class="font-semibold text-fb-text">
                     {{ row.teacher_name }}
-                    <span v-if="!row.is_active" class="ml-1 rounded bg-gray-100 px-1.5 py-0.5 text-[11px] font-medium text-gray-600">в архиве</span>
+                    <span v-if="!row.is_active" class="ml-1 rounded bg-gray-100 px-1.5 py-0.5 text-[11px] font-medium text-gray-600">{{ t('conversion.archivedLabel') }}</span>
                   </div>
-                  <div class="text-xs text-fb-secondary">{{ row.kind_label }}</div>
+                  <div class="text-xs text-fb-secondary">{{ kindLabel(row) }}</div>
                 </td>
                 <td class="px-5 py-3 text-right font-semibold">
                   {{ money(row.accrued) }}
                   <div v-if="row.adjustments.length" class="text-[11px] font-normal text-fb-secondary">
-                    в т.ч. поправки {{ row.accrued - row.accrued_base >= 0 ? '+' : '−' }}{{ money(Math.abs(row.accrued - row.accrued_base)) }}
+                    {{ t('salaries.inclAdjustments') }} {{ row.accrued - row.accrued_base >= 0 ? '+' : '−' }}{{ money(Math.abs(row.accrued - row.accrued_base)) }}
                   </div>
                 </td>
                 <td class="px-5 py-3 text-right text-amber-700">{{ row.waiting ? money(row.waiting) : '—' }}</td>
@@ -614,7 +655,7 @@ onMounted(async () => {
                     class="mr-2 text-xs font-medium text-fb-blue hover:underline"
                     @click="expanded = expanded === row.person_id ? null : row.person_id"
                   >
-                    {{ expanded === row.person_id ? 'Скрыть' : 'Как посчитано' }}
+                    {{ expanded === row.person_id ? t('salaries.hide') : t('salaries.howCounted') }}
                   </button>
                   <button
                     v-if="canWriteFinance"
@@ -622,7 +663,7 @@ onMounted(async () => {
                     class="rounded-lg bg-fb-blue px-3 py-1.5 text-xs font-semibold text-white"
                     @click="openPay(row)"
                   >
-                    Выплатить
+                    {{ t('salaries.pay') }}
                   </button>
                 </td>
               </tr>
@@ -630,21 +671,19 @@ onMounted(async () => {
                 <td colspan="7" class="px-5 py-4">
                   <div v-if="row.kind === 'teacher'">
                     <p class="mb-2 text-xs text-fb-secondary">
-                      Урок ученика = сумма его месяца ÷ уроков в этом месяце. Учитель получает свой процент за каждый
-                      проведённый урок — но только с тех денег, что ученик уже заплатил. Заплатили 7 из 10 — к выплате
-                      за семерых; остальное добавится, когда должники заплатят. Процент берётся тот, что был в день урока.
+                      {{ t('salaries.howText') }}
                     </p>
                     <table class="w-full text-xs">
                       <thead class="text-fb-secondary">
                         <tr>
-                          <th class="py-1 text-left">Группа</th>
-                          <th class="py-1 text-left">Филиал</th>
-                          <th class="py-1 text-right">Уроков проведено</th>
-                          <th class="py-1 text-right">Ученико-уроков</th>
-                          <th class="py-1 text-right">Процент</th>
-                          <th class="py-1 text-right">Заработано</th>
-                          <th class="py-1 text-right">Ждёт оплаты</th>
-                          <th class="py-1 text-right">К выплате</th>
+                          <th class="py-1 text-left">{{ t('schedule.group') }}</th>
+                          <th class="py-1 text-left">{{ t('common.branch') }}</th>
+                          <th class="py-1 text-right">{{ t('salaries.heldLessons') }}</th>
+                          <th class="py-1 text-right">{{ t('salaries.studentLessons') }}</th>
+                          <th class="py-1 text-right">{{ t('salaryType.percent') }}</th>
+                          <th class="py-1 text-right">{{ t('salaries.earned') }}</th>
+                          <th class="py-1 text-right">{{ t('salaries.waitingShort') }}</th>
+                          <th class="py-1 text-right">{{ t('salaries.payable') }}</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -654,57 +693,56 @@ onMounted(async () => {
                           <td class="py-1 text-right">{{ g.held_lessons }}</td>
                           <td class="py-1 text-right">{{ g.student_lessons }}</td>
                           <td class="py-1 text-right" :class="g.percent_scope === 'не задан' ? 'text-rose-700' : ''">
-                            {{ g.percent }}% <span class="text-fb-secondary">({{ g.percent_scope }})</span>
+                            {{ g.percent }}% <span class="text-fb-secondary">({{ percentScopeLabel(g.percent_scope) }})</span>
                           </td>
                           <td class="py-1 text-right">{{ money(g.earned) }}</td>
                           <td class="py-1 text-right text-amber-700">
                             {{ g.waiting ? money(g.waiting) : '—' }}
-                            <span v-if="g.students_unpaid" class="text-fb-secondary">(должников: {{ g.students_unpaid }})</span>
+                            <span v-if="g.students_unpaid" class="text-fb-secondary">({{ t('months.summaryDebtors', { count: g.students_unpaid }) }})</span>
                           </td>
                           <td class="py-1 text-right font-semibold">{{ money(g.accrued) }}</td>
                         </tr>
-                        <tr v-if="!row.groups.length"><td colspan="8" class="py-1 text-fb-secondary">Нет групп и отметок «Я пришёл» за месяц</td></tr>
+                        <tr v-if="!row.groups.length"><td colspan="8" class="py-1 text-fb-secondary">{{ t('salaries.noGroupsMonth') }}</td></tr>
                       </tbody>
                     </table>
                   </div>
                   <p v-else class="text-xs text-fb-secondary">
-                    Фиксированная сумма в месяц: <strong>{{ row.fixed_amount === null ? 'не задана' : money(row.fixed_amount) + ' сум' }}</strong>
+                    {{ t('salaries.fixedMonthlyAmount') }}: <strong>{{ row.fixed_amount === null ? t('salaries.notSet') : t('common.sumAmount', { amount: money(row.fixed_amount) }) }}</strong>
                   </p>
                   <p v-if="row.month_closed" class="mt-2 text-[11px] text-slate-600">
-                    🔒 Месяц закрыт: уроки и их проценты зафиксированы. Поздние изменения цен, процентов и расписания
-                    сюда не попадают — добавляется только оплата учеником долга за этот месяц.
+                    🔒 {{ t('salaries.rowClosedText') }}
                   </p>
                   <div v-if="row.adjustments.length || auth.isCeo" class="mt-3">
                     <p class="mb-1 flex items-center gap-3 text-xs font-semibold text-fb-text">
-                      Поправки
+                      {{ t('salaries.adjustments') }}
                       <button
                         v-if="auth.isCeo"
                         type="button"
                         class="font-medium text-fb-blue hover:underline"
                         @click="openAdjustment(row)"
                       >
-                        + Добавить поправку
+                        + {{ t('salaries.addAdjustment') }}
                       </button>
                     </p>
-                    <p v-if="!row.adjustments.length" class="text-xs text-fb-secondary">Поправок нет</p>
+                    <p v-if="!row.adjustments.length" class="text-xs text-fb-secondary">{{ t('salaries.noAdjustments') }}</p>
                     <ul v-else class="space-y-1 text-xs">
                       <li v-for="a in row.adjustments" :key="a.id" class="flex items-center gap-3">
                         <span class="font-semibold" :class="a.amount >= 0 ? 'text-emerald-700' : 'text-rose-700'">
-                          {{ a.amount >= 0 ? '+' : '−' }}{{ money(Math.abs(a.amount)) }} сум
+                          {{ a.amount >= 0 ? '+' : '−' }}{{ t('common.sumAmount', { amount: money(Math.abs(a.amount)) }) }}
                         </span>
                         <span class="text-fb-secondary">{{ a.date }} · {{ a.reason }}{{ a.by ? ` · ${a.by}` : '' }}</span>
                         <button v-if="auth.isCeo" type="button" class="text-rose-700 hover:underline" @click="deleteAdjustment(row, a)">
-                          Удалить
+                          {{ t('common.delete') }}
                         </button>
                       </li>
                     </ul>
                   </div>
                   <div class="mt-3">
-                    <p class="mb-1 text-xs font-semibold text-fb-text">Выплаты за месяц</p>
-                    <p v-if="!row.payouts.length" class="text-xs text-fb-secondary">Выплат нет</p>
+                    <p class="mb-1 text-xs font-semibold text-fb-text">{{ t('salaries.payoutsMonth') }}</p>
+                    <p v-if="!row.payouts.length" class="text-xs text-fb-secondary">{{ t('salaries.noPayouts') }}</p>
                     <ul v-else class="space-y-1 text-xs">
                       <li v-for="(p, idx) in row.payouts" :key="p.id ?? `legacy-${idx}`" class="flex items-center gap-3">
-                        <span class="font-semibold">{{ money(p.amount) }} сум</span>
+                        <span class="font-semibold">{{ t('common.sumAmount', { amount: money(p.amount) }) }}</span>
                         <span class="text-fb-secondary">{{ p.date }} {{ p.comment }}</span>
                         <button
                           v-if="canWriteFinance && p.id"
@@ -712,7 +750,7 @@ onMounted(async () => {
                           class="text-rose-700 hover:underline"
                           @click="cancelPayout(row, p)"
                         >
-                          Отменить
+                          {{ t('salaries.cancelPayout') }}
                         </button>
                       </li>
                     </ul>
@@ -727,18 +765,18 @@ onMounted(async () => {
 
     <!-- ================= Rates ================= -->
     <div v-else class="overflow-hidden rounded-2xl border border-fb-line bg-fb-card shadow-sm">
-      <div v-if="ratesLoading" class="p-12 text-center text-fb-secondary">Загрузка…</div>
+      <div v-if="ratesLoading" class="p-12 text-center text-fb-secondary">{{ t('common.loading') }}</div>
       <div v-else-if="!rates.length" class="p-12 text-center text-fb-secondary">
-        Ставок нет. Добавьте учителю процент, сотруднику — сумму в месяц.
+        {{ t('salaries.noRates') }}
       </div>
       <table v-else class="w-full text-left text-sm">
         <thead class="border-b border-fb-line bg-fb-canvas text-xs font-semibold uppercase tracking-wider text-fb-secondary">
           <tr>
-            <th class="px-5 py-3">Кто</th>
-            <th class="px-5 py-3">Ставка</th>
-            <th class="px-5 py-3">На что</th>
-            <th class="px-5 py-3">Период</th>
-            <th class="px-5 py-3">Изменил</th>
+            <th class="px-5 py-3">{{ t('salaries.who') }}</th>
+            <th class="px-5 py-3">{{ t('salaries.rate') }}</th>
+            <th class="px-5 py-3">{{ t('salaries.appliesTo') }}</th>
+            <th class="px-5 py-3">{{ t('common.period') }}</th>
+            <th class="px-5 py-3">{{ t('salaries.changedBy') }}</th>
           </tr>
         </thead>
         <tbody class="divide-y divide-fb-line">
@@ -764,25 +802,25 @@ onMounted(async () => {
       <div class="absolute inset-0 bg-black/35" @click="panel.show = false" />
       <div class="drawer-panel-fb max-w-lg">
         <div class="flex items-center justify-between border-b px-6 py-4">
-          <h2 class="text-lg font-semibold">{{ panel.editing ? 'Ставка' : 'Новая ставка' }}</h2>
-          <button type="button" @click="panel.show = false">✕</button>
+          <h2 class="text-lg font-semibold">{{ panel.editing ? t('salaries.rate') : t('salaries.newRate') }}</h2>
+          <button type="button" :aria-label="t('common.close')" @click="panel.show = false">✕</button>
         </div>
         <div class="flex-1 space-y-4 overflow-y-auto p-6">
           <div>
-            <label class="mb-1 block text-sm font-medium text-fb-secondary">Учитель или сотрудник</label>
+            <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('salaries.person') }}</label>
             <select v-model="panel.person_id" class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm">
-              <option value="">— Выберите —</option>
-              <optgroup label="Учителя (процент)">
+              <option value="">— {{ t('common.select') }} —</option>
+              <optgroup :label="t('salaries.teachersPercent')">
                 <option v-for="t in teachers" :key="t.id" :value="t.id">{{ t.name }}</option>
               </optgroup>
-              <optgroup label="Сотрудники (сумма в месяц)">
+              <optgroup :label="t('salaries.staffFixed')">
                 <option v-for="s in staff" :key="s.id" :value="s.id">{{ s.name }}</option>
               </optgroup>
             </select>
           </div>
           <div>
             <label class="mb-1 block text-sm font-medium text-fb-secondary">
-              {{ panelIsTeacher ? 'Процент от учеников (0–100)' : 'Сумма в месяц (сум)' }}
+              {{ panelIsTeacher ? t('salaries.percentLabel') : t('salaries.monthlyAmountLabel') }}
             </label>
             <input
               v-model.number="panel.amount"
@@ -795,52 +833,51 @@ onMounted(async () => {
           </div>
           <template v-if="panelIsTeacher">
             <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Только для группы (необязательно)</label>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('salaries.onlyGroup') }}</label>
               <select v-model="panel.group_id" class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm">
-                <option value="">— Для всех групп учителя —</option>
+                <option value="">— {{ t('salaries.allTeacherGroups') }} —</option>
                 <option v-for="g in groups" :key="g.id" :value="g.id">{{ g.name }}</option>
               </select>
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Только для курса (необязательно)</label>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('salaries.onlyCourse') }}</label>
               <select v-model="panel.course_id" class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm">
-                <option value="">— Для всех курсов —</option>
+                <option value="">— {{ t('conversion.allCourses') }} —</option>
                 <option v-for="c in courses" :key="c.id" :value="c.id">{{ c.name }}</option>
               </select>
               <p class="mt-1 text-[11px] text-fb-secondary">
-                Какой процент берётся: процент группы → процент курса → общий процент учителя.
+                {{ t('salaries.percentOrder') }}
               </p>
             </div>
           </template>
           <div class="grid grid-cols-2 gap-3">
             <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Действует с</label>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('salaries.validFrom') }}</label>
               <input v-model="panel.effective_from" type="date" class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm" />
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">по</label>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('salaries.validTo') }}</label>
               <input v-model="panel.effective_to" type="date" class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm" />
             </div>
           </div>
           <p class="text-[11px] text-fb-secondary">
             <template v-if="panelIsTeacher">
-              Процент запоминается в день, когда отмечен урок: уже проведённые уроки при его изменении не
-              пересчитываются. Исправить прошлое можно «Поправкой» в ведомости.
+              {{ t('salaries.percentHint') }}
             </template>
             <template v-else>
-              Оклад без даты «действует с» считается со дня, когда он введён: за прошлые месяцы он не начисляется.
+              {{ t('salaries.fixedHint') }}
             </template>
           </p>
           <p v-if="panel.error" class="text-sm text-fb-danger">{{ panel.error }}</p>
         </div>
         <div class="flex gap-2 border-t px-6 py-4">
           <button type="button" class="rounded-lg bg-fb-blue px-5 py-2 text-sm text-white" :disabled="panel.saving" @click="saveRate">
-            {{ panel.saving ? 'Сохраняю…' : 'Сохранить' }}
+            {{ panel.saving ? t('common.saving') : t('common.save') }}
           </button>
           <button v-if="panel.editing" type="button" class="rounded-lg border border-red-300 px-5 py-2 text-sm text-fb-danger" @click="deleteRate">
-            Удалить
+            {{ t('common.delete') }}
           </button>
-          <button type="button" class="rounded-lg border px-5 py-2 text-sm" @click="panel.show = false">Отмена</button>
+          <button type="button" class="rounded-lg border px-5 py-2 text-sm" @click="panel.show = false">{{ t('common.cancel') }}</button>
         </div>
       </div>
     </div>
@@ -849,54 +886,54 @@ onMounted(async () => {
     <div v-if="payModal.show" class="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
       <div class="w-full max-w-md overflow-hidden rounded-2xl bg-fb-card shadow-2xl">
         <div class="border-b border-fb-line px-6 py-4">
-          <h2 class="text-lg font-semibold text-fb-text">Выплата зарплаты</h2>
+          <h2 class="text-lg font-semibold text-fb-text">{{ t('salaries.payTitle') }}</h2>
           <p class="text-sm text-fb-secondary">
-            {{ payModal.row?.teacher_name }} · {{ selectedMonth }} · к выплате {{ money(payModal.row?.accrued) }}, осталось
-            {{ money(payModal.row?.balance) }}
+            {{ payModal.row?.teacher_name }} · {{ monthTitle }} ·
+            {{ t('salaries.payableLeft', { payable: money(payModal.row?.accrued), left: money(payModal.row?.balance) }) }}
           </p>
         </div>
         <div class="space-y-3 px-6 py-5">
           <div>
-            <label class="mb-1 block text-sm font-medium text-fb-secondary">Сумма</label>
+            <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('common.amount') }}</label>
             <input v-model.number="payModal.amount" type="number" min="1" step="1" class="w-full rounded-lg border border-fb-line px-3 py-2" />
           </div>
           <div>
-            <label class="mb-1 block text-sm font-medium text-fb-secondary">Способ</label>
+            <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('expenses.method') }}</label>
             <select v-model="payModal.method" class="w-full rounded-lg border border-fb-line px-3 py-2">
-              <option value="cash">Наличные</option>
-              <option value="card">Карта</option>
-              <option value="transfer">Перевод</option>
+              <option value="cash">{{ t('payMethod.cash') }}</option>
+              <option value="card">{{ t('payMethod.card') }}</option>
+              <option value="transfer">{{ t('payMethod.transfer') }}</option>
             </select>
           </div>
           <div v-if="payNeedsBranch">
-            <label class="mb-1 block text-sm font-medium text-fb-secondary">На какой филиал записать</label>
+            <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('salaries.payBranch') }}</label>
             <select v-model="payModal.branch_id" class="w-full rounded-lg border border-fb-line px-3 py-2">
-              <option value="">— Выберите филиал —</option>
+              <option value="">— {{ t('staff.chooseBranch') }} —</option>
               <option v-for="b in branches" :key="b.id" :value="b.id">{{ b.name }}</option>
             </select>
           </div>
           <p v-else-if="payModal.row?.kind === 'teacher'" class="text-[11px] text-fb-secondary">
-            В расходах выплата разложится по филиалам групп, за которые начислена зарплата.
+            {{ t('salaries.payBranchesHint') }}
           </p>
           <div>
-            <label class="mb-1 block text-sm font-medium text-fb-secondary">Комментарий</label>
+            <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('common.comment') }}</label>
             <input v-model="payModal.comment" class="w-full rounded-lg border border-fb-line px-3 py-2" />
           </div>
           <label v-if="payModal.overpay && auth.isCeo" class="flex items-center gap-2 text-sm text-rose-700">
             <input v-model="payModal.force" type="checkbox" />
-            Выплатить сверх начисленного (запишется в журнал)
+            {{ t('salaries.payOver') }}
           </label>
           <p v-if="payModal.error" class="text-sm text-fb-danger">{{ payModal.error }}</p>
         </div>
         <div class="flex justify-end gap-3 border-t border-fb-line px-6 py-4">
-          <button type="button" class="rounded-lg border border-fb-line px-5 py-2 text-sm" @click="payModal.show = false">Отмена</button>
+          <button type="button" class="rounded-lg border border-fb-line px-5 py-2 text-sm" @click="payModal.show = false">{{ t('common.cancel') }}</button>
           <button
             type="button"
             class="rounded-lg bg-fb-blue px-5 py-2 text-sm font-medium text-white disabled:opacity-50"
             :disabled="payModal.saving"
             @click="submitPay"
           >
-            {{ payModal.saving ? 'Провожу…' : 'Выплатить' }}
+            {{ payModal.saving ? t('common.saving') : t('salaries.pay') }}
           </button>
         </div>
       </div>
@@ -907,33 +944,32 @@ onMounted(async () => {
       <div class="w-full max-w-md overflow-hidden rounded-2xl bg-fb-card shadow-2xl">
         <div class="border-b border-fb-line px-6 py-4">
           <h2 class="text-lg font-semibold text-fb-text">
-            {{ monthModal.mode === 'close' ? 'Закрыть' : 'Открыть' }} <span>{{ monthTitle }}</span>?
+            {{ monthModal.mode === 'close' ? t('salaries.closeMonthQ', { month: monthTitle }) : t('salaries.reopenMonthQ', { month: monthTitle }) }}
           </h2>
         </div>
         <div class="space-y-3 px-6 py-5 text-sm text-fb-text">
           <template v-if="monthModal.mode === 'close'">
-            <p>После закрытия:</p>
+            <p>{{ t('salaries.afterClose') }}</p>
             <ul class="list-disc space-y-1 pl-5 text-fb-secondary">
-              <li>зарплата каждого за этот месяц сохранится как сейчас и больше не будет пересчитываться;</li>
-              <li>оплаты, возвраты, расходы, изъятия и отметки учителей с датой этого месяца нельзя будет добавить, изменить или удалить;</li>
-              <li>выплатить зарплату за этот месяц можно, как и раньше.</li>
+              <li>{{ t('salaries.afterClose1') }}</li>
+              <li>{{ t('salaries.afterClose2') }}</li>
+              <li>{{ t('salaries.afterClose3') }}</li>
             </ul>
-            <p class="text-fb-secondary">Проверьте цифры перед закрытием. Открыть месяц обратно сможет только CEO.</p>
+            <p class="text-fb-secondary">{{ t('salaries.afterCloseCheck') }}</p>
           </template>
           <template v-else>
             <p class="text-fb-secondary">
-              Месяц снова станет изменяемым, а зарплаты пересчитаются по текущим данным (цены, проценты, отметки).
-              Это попадёт в журнал.
+              {{ t('salaries.reopenText') }}
             </p>
             <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Причина</label>
-              <input v-model="monthModal.reason" class="w-full rounded-lg border border-fb-line px-3 py-2" placeholder="Например: забыли внести аренду" />
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('salaries.reason') }}</label>
+              <input v-model="monthModal.reason" class="w-full rounded-lg border border-fb-line px-3 py-2" :placeholder="t('salaries.reopenPlaceholder')" />
             </div>
           </template>
           <p v-if="monthModal.error" class="text-sm text-fb-danger">{{ monthModal.error }}</p>
         </div>
         <div class="flex justify-end gap-3 border-t border-fb-line px-6 py-4">
-          <button type="button" class="rounded-lg border border-fb-line px-5 py-2 text-sm" @click="monthModal.show = false">Отмена</button>
+          <button type="button" class="rounded-lg border border-fb-line px-5 py-2 text-sm" @click="monthModal.show = false">{{ t('common.cancel') }}</button>
           <button
             type="button"
             class="rounded-lg px-5 py-2 text-sm font-medium text-white disabled:opacity-50"
@@ -941,7 +977,7 @@ onMounted(async () => {
             :disabled="monthModal.saving"
             @click="submitMonth"
           >
-            {{ monthModal.saving ? 'Секунду…' : monthModal.mode === 'close' ? 'Закрыть месяц' : 'Открыть месяц' }}
+            {{ monthModal.saving ? t('common.saving') : monthModal.mode === 'close' ? t('salaries.closeMonth') : t('salaries.reopenMonth') }}
           </button>
         </div>
       </div>
@@ -951,8 +987,8 @@ onMounted(async () => {
     <div v-if="adjModal.show" class="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
       <div class="w-full max-w-md overflow-hidden rounded-2xl bg-fb-card shadow-2xl">
         <div class="border-b border-fb-line px-6 py-4">
-          <h2 class="text-lg font-semibold text-fb-text">Поправка к зарплате</h2>
-          <p class="text-sm text-fb-secondary">{{ adjModal.row?.teacher_name }} · {{ monthTitle }} · к выплате {{ money(adjModal.row?.accrued) }}</p>
+          <h2 class="text-lg font-semibold text-fb-text">{{ t('salaries.adjTitle') }}</h2>
+          <p class="text-sm text-fb-secondary">{{ adjModal.row?.teacher_name }} · {{ monthTitle }} · {{ t('salaries.payable') }} {{ money(adjModal.row?.accrued) }}</p>
         </div>
         <div class="space-y-3 px-6 py-5">
           <div class="flex gap-2">
@@ -962,7 +998,7 @@ onMounted(async () => {
               :class="adjModal.sign === 1 ? 'border-emerald-500 bg-emerald-50 text-emerald-700' : 'border-fb-line text-fb-secondary'"
               @click="adjModal.sign = 1"
             >
-              + Добавить
+              + {{ t('salaries.adjAdd') }}
             </button>
             <button
               type="button"
@@ -970,29 +1006,29 @@ onMounted(async () => {
               :class="adjModal.sign === -1 ? 'border-rose-500 bg-rose-50 text-rose-700' : 'border-fb-line text-fb-secondary'"
               @click="adjModal.sign = -1"
             >
-              − Убрать
+              − {{ t('salaries.adjRemove') }}
             </button>
           </div>
           <div>
-            <label class="mb-1 block text-sm font-medium text-fb-secondary">Сумма</label>
+            <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('common.amount') }}</label>
             <input v-model.number="adjModal.amount" type="number" min="1" step="1" class="w-full rounded-lg border border-fb-line px-3 py-2" />
           </div>
           <div>
-            <label class="mb-1 block text-sm font-medium text-fb-secondary">Причина</label>
-            <input v-model="adjModal.reason" class="w-full rounded-lg border border-fb-line px-3 py-2" placeholder="Например: забыли отметить урок 12.08" />
+            <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('salaries.reason') }}</label>
+            <input v-model="adjModal.reason" class="w-full rounded-lg border border-fb-line px-3 py-2" :placeholder="t('salaries.adjPlaceholder')" />
           </div>
-          <p class="text-[11px] text-fb-secondary">Поправка видна в строке учителя и пишется в журнал.</p>
+          <p class="text-[11px] text-fb-secondary">{{ t('salaries.adjHint') }}</p>
           <p v-if="adjModal.error" class="text-sm text-fb-danger">{{ adjModal.error }}</p>
         </div>
         <div class="flex justify-end gap-3 border-t border-fb-line px-6 py-4">
-          <button type="button" class="rounded-lg border border-fb-line px-5 py-2 text-sm" @click="adjModal.show = false">Отмена</button>
+          <button type="button" class="rounded-lg border border-fb-line px-5 py-2 text-sm" @click="adjModal.show = false">{{ t('common.cancel') }}</button>
           <button
             type="button"
             class="rounded-lg bg-fb-blue px-5 py-2 text-sm font-medium text-white disabled:opacity-50"
             :disabled="adjModal.saving"
             @click="submitAdjustment"
           >
-            {{ adjModal.saving ? 'Сохраняю…' : 'Сохранить' }}
+            {{ adjModal.saving ? t('common.saving') : t('common.save') }}
           </button>
         </div>
       </div>

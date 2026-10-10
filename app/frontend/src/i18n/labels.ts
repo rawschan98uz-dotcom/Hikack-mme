@@ -2,7 +2,8 @@
  * Names of statuses and kinds that the server sends as codes (with a Russian label next to them).
  * The code is shown in the interface language; an unknown code falls back to the server's label.
  */
-import { t, tMaybe } from './index';
+import { t, tMaybe, type MessageKey } from './index';
+import { messages } from './messages';
 
 type Code = string | number | null | undefined;
 
@@ -29,4 +30,25 @@ export function attendanceLabel(code: Code, fallback?: string | null): string {
   if (code === 2 || code === '2') return t('teacherAtt.late');
   if (code === 0 || code === '0') return t('teacherAtt.absent');
   return fallback || t('teacherAtt.notMarked');
+}
+
+const SERVER_LABEL_PREFIXES = ['groupDays.', 'groupStatus.', 'studentStatus.', 'leadStage.', 'payMethod.', 'txType.', 'enrollment.', 'roles.'];
+let byRussianText: Map<string, MessageKey> | null = null;
+
+/**
+ * A label the server sends only as Russian text (e.g. "Нечётные дни") in the interface language.
+ * Unknown text is returned unchanged.
+ */
+export function serverLabel(text: string | null | undefined): string {
+  if (!text) return '—';
+  if (!byRussianText) {
+    byRussianText = new Map();
+    for (const [key, phrase] of Object.entries(messages)) {
+      if (SERVER_LABEL_PREFIXES.some((prefix) => key.startsWith(prefix))) {
+        byRussianText.set(phrase.ru.toLowerCase(), key as MessageKey);
+      }
+    }
+  }
+  const key = byRussianText.get(text.trim().toLowerCase());
+  return key ? t(key) : text;
 }

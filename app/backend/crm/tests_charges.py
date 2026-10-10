@@ -527,6 +527,16 @@ class BigCardsTests(Base):
         self.assertEqual((rows[aziz.id]['is_debtor'], rows[aziz.id]['debt_amount']), (True, 1_000_000))
         self.assertEqual((rows[bek.id]['is_debtor'], rows[bek.id]['debt_amount']), (False, 0))
 
+    def test_group_list_shows_debtors_in_red(self):
+        self.student(date(2026, 9, 1))
+        bek = self.student(date(2026, 9, 1), name='Bek')
+        self.pay(bek, 1_000_000, date(2026, 9, 2))
+        row = self.c.get('/v1/groups').json()['data']['results'][0]
+        self.assertEqual((row['debtors_count'], row['debt_total']), (1, 1_000_000))
+        self.c.force_authenticate(self.tom)  # a teacher never sees money
+        row = self.c.get('/v1/groups').json()['data']['results'][0]
+        self.assertNotIn('debt_total', row)
+
     def test_teacher_sees_the_group_without_money(self):
         self.student(date(2026, 9, 1))
         self.c.force_authenticate(self.tom)

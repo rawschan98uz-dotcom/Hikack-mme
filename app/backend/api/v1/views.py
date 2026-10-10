@@ -1224,13 +1224,35 @@ def group_list(request):
 
     # ✅ Пагинация вместо hard limit
     page = paginate_queryset(qs, request, default_limit=200)
+    results = [_serialize_group(g) for g in page['results']]
+    # Who owes in each group: only for those who see money (never a teacher), same rule as the group card
+    from accounts.rbac import PERM_PAYMENTS_VIEW
+    if results and not user_is_teacher(request.user) and user_has_permission(request.user, PERM_PAYMENTS_VIEW):
+        _add_group_debts(company, results)
 
     return ok({
         'count': page['count'],
         'has_more': page['has_more'],
         'next_offset': page['next_offset'],
-        'results': [_serialize_group(g) for g in page['results']],
+        'results': results,
     })
+
+
+def _add_group_debts(company, payloads: list[dict]) -> None:
+    """Debtors of each listed group and their total debt, read from the month lines in one go."""
+    by_group = {payload['id']: payload for payload in payloads}
+    for payload in payloads:
+        payload['debtors_count'] = 0
+        payload['debt_total'] = 0
+    members = Student.objects.filter(company=company, group_id__in=by_group, status__in=Student.CURRENT_STATUSES)
+    lines = charges.company_lines(company.id)
+    freezes = charges.company_freezes(company.id)
+    for student in members:
+        state = charges.schedule(student, lines.get(student.id, []), freezes.get(student.id, []))
+        if state['is_debtor']:
+            payload = by_group[student.group_id]
+            payload['debtors_count'] += 1
+            payload['debt_total'] += state['debt_amount']
 
 
 @api_view(['GET', 'PATCH', 'DELETE'])

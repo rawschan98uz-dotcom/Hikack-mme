@@ -8,6 +8,10 @@ import { useAuthStore } from '../stores/auth';
 import { PERM } from '../utils/rbac';
 import ReceiptModal, { type ReceiptPayment } from '../components/ReceiptModal.vue';
 import PaymentLinkModal, { type StudentPaymentLinkTarget } from '../components/PaymentLinkModal.vue';
+import { t, type MessageKey } from '../i18n';
+import { payMethodLabel } from '../i18n/labels';
+import { confirmDialog, toast } from '../ui/feedback';
+import { apiErrorMessage } from '../utils/apiError';
 
 const auth = useAuthStore();
 // The administrator takes and corrects payments and gives refunds; only the CEO deletes one (owner, 2026-09-28)
@@ -58,9 +62,9 @@ interface StudentOption {
 type PageArray<T> = T[] & { has_more?: boolean; next_offset?: number | null };
 
 const METHODS = [
-  { value: 'cash', label: 'Наличные' },
-  { value: 'card', label: 'Карта' },
-  { value: 'transfer', label: 'Перевод' },
+  { value: 'cash', label: 'payMethod.cash' as MessageKey },
+  { value: 'card', label: 'payMethod.card' as MessageKey },
+  { value: 'transfer', label: 'payMethod.transfer' as MessageKey },
 ] as const;
 
 const rows = ref<PaymentRow[]>([]);
@@ -151,8 +155,8 @@ const form = reactive({
 
 const isReadOnly = computed(() => Boolean(detailRow.value && !editingRow.value));
 const panelTitle = computed(() => {
-  if (isRefund(detailRow.value)) return 'Возврат денег';
-  return editingRow.value ? 'Edit payment' : detailRow.value ? 'Payment details' : 'Add payment';
+  if (isRefund(detailRow.value)) return t('payments.refundTitle');
+  return editingRow.value ? t('payments.editTitle') : detailRow.value ? t('payments.detailTitle') : t('payments.addTitle');
 });
 
 function formatMoney(value: number) {
@@ -316,26 +320,23 @@ function closePanel() {
   resetForm();
 }
 
-function apiError(err: any, fallback: string) {
-  return err?.response?.data?.message || err?.response?.data?.error || fallback;
-}
 
 async function submitForm() {
   formError.value = '';
   if (!editingRow.value && !form.student_id) {
-    formError.value = 'Выберите ученика из списка.';
+    formError.value = t('payments.chooseStudent');
     return;
   }
   if (!Number.isInteger(form.amount) || Number(form.amount) <= 0) {
-    formError.value = 'Сумма — целое положительное число.';
+    formError.value = t('finance.amountPositive');
     return;
   }
   if (form.discount !== '' && (!Number.isInteger(form.discount) || Number(form.discount) < 0)) {
-    formError.value = 'Скидка — целое число (сумма), или оставьте поле пустым.';
+    formError.value = t('payments.discountInvalid');
     return;
   }
   if (!form.payment_date || form.payment_date > todayIso()) {
-    formError.value = 'Дата оплаты не может быть позже сегодняшнего дня.';
+    formError.value = t('payments.dateNotFuture');
     return;
   }
   saving.value = true;
@@ -364,24 +365,37 @@ async function submitForm() {
         comment: form.comment.trim(),
       });
     }
+    const wasEditing = Boolean(editingRow.value);
+    const studentName = form.student_name;
+    const amount = Number(form.amount);
     closePanel();
+    toast.success(wasEditing
+      ? t('toast.saved')
+      : t('payments.received', { amount: formatMoney(amount), name: studentName }));
     await loadRows();
-  } catch (err: any) {
-    formError.value = apiError(err, 'Could not save payment');
+  } catch (err: unknown) {
+    formError.value = apiErrorMessage(err, t('payments.saveFailed'));
   } finally {
     saving.value = false;
   }
 }
 
 async function deleteRow() {
-  if (!detailRow.value || !window.confirm('Удалить эту запись? Удаление попадёт в журнал действий.')) return;
+  if (!detailRow.value) return;
+  const ok = await confirmDialog({
+    title: t('payments.deleteConfirm', { amount: formatMoney(detailRow.value.sum), name: detailRow.value.student_name || detailRow.value.name }),
+    message: t('payments.deleteHint'),
+    danger: true,
+  });
+  if (!ok || !detailRow.value) return;
   deleting.value = true;
   try {
     await client.delete(`/replenishments/${detailRow.value.id}`);
     closePanel();
+    toast.success(t('toast.deleted'));
     await loadRows();
-  } catch (err: any) {
-    formError.value = apiError(err, 'Не удалось удалить');
+  } catch (err: unknown) {
+    formError.value = apiErrorMessage(err, t('errors.deleteFailed'));
   } finally {
     deleting.value = false;
   }
@@ -408,28 +422,31 @@ async function confirmRefund() {
   if (!detailRow.value) return;
   const max = detailRow.value.refundable ?? detailRow.value.sum;
   if (!Number.isInteger(refundModal.amount) || Number(refundModal.amount) <= 0) {
-    refundModal.error = 'Сумма возврата — целое положительное число.';
+    refundModal.error = t('payments.refundAmountPositive');
     return;
   }
   if (Number(refundModal.amount) > max) {
-    refundModal.error = `Можно вернуть не больше ${formatMoney(max)} сум.`;
+    refundModal.error = t('payments.refundMax', { amount: formatMoney(max) });
     return;
   }
   if (refundModal.reason.trim().length < 3) {
-    refundModal.error = 'Укажите причину возврата.';
+    refundModal.error = t('payments.refundReasonRequired');
     return;
   }
   refundModal.saving = true;
   try {
     await client.post(`/replenishments/${detailRow.value.id}/refund`, {
       amount: refundModal.amount,
+      // Saved into the payment record (data, not interface text): one wording whatever the screen language
       comment: `Возврат: ${refundModal.reason.trim()}`,
     });
+    const refunded = Number(refundModal.amount);
     refundModal.show = false;
     closePanel();
+    toast.success(t('payments.refunded', { amount: formatMoney(refunded) }));
     await loadRows();
-  } catch (err: any) {
-    refundModal.error = apiError(err, 'Не удалось сделать возврат');
+  } catch (err: unknown) {
+    refundModal.error = apiErrorMessage(err, t('payments.refundFailed'));
   } finally {
     refundModal.saving = false;
   }
@@ -457,50 +474,50 @@ watch(
 <template>
   <div class="space-y-4">
     <div class="flex flex-wrap items-center justify-between gap-3">
-      <h1 class="text-xl font-semibold text-fb-text">All payments</h1>
+      <h1 class="text-xl font-semibold text-fb-text">{{ t('nav.allPayments') }}</h1>
       <button v-if="canWriteFinance" type="button" class="rounded-lg bg-fb-blue px-4 py-2 text-sm font-medium text-white" @click="openCreate">
-        + Add payment
+        + {{ t('payments.addTitle') }}
       </button>
     </div>
 
     <div class="flex flex-wrap items-end gap-3 rounded-xl border border-fb-line bg-fb-card p-4">
       <div>
-        <label class="mb-1 block text-xs text-fb-secondary">From</label>
+        <label class="mb-1 block text-xs text-fb-secondary">{{ t('common.from') }}</label>
         <input v-model="filters.date_from" type="date" class="rounded-lg border border-fb-line px-3 py-2 text-sm" />
       </div>
       <div>
-        <label class="mb-1 block text-xs text-fb-secondary">To</label>
+        <label class="mb-1 block text-xs text-fb-secondary">{{ t('common.to') }}</label>
         <input v-model="filters.date_to" type="date" class="rounded-lg border border-fb-line px-3 py-2 text-sm" />
       </div>
       <div>
-        <label class="mb-1 block text-xs text-fb-secondary">Method</label>
+        <label class="mb-1 block text-xs text-fb-secondary">{{ t('expenses.method') }}</label>
         <select v-model="filters.method" class="rounded-lg border border-fb-line px-3 py-2 text-sm">
-          <option value="">All</option>
-          <option v-for="m in METHODS" :key="m.value" :value="m.value">{{ m.label }}</option>
+          <option value="">{{ t('common.all') }}</option>
+          <option v-for="m in METHODS" :key="m.value" :value="m.value">{{ t(m.label) }}</option>
         </select>
       </div>
       <div class="min-w-[180px] flex-1">
-        <label class="mb-1 block text-xs text-fb-secondary">Search</label>
+        <label class="mb-1 block text-xs text-fb-secondary">{{ t('common.search') }}</label>
         <input v-model="filters.q" type="search" class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm" @keydown.enter="loadRows" />
       </div>
-      <button type="button" class="rounded-lg border border-fb-line px-4 py-2 text-sm" @click="loadRows">Apply</button>
+      <button type="button" class="rounded-lg border border-fb-line px-4 py-2 text-sm" @click="loadRows">{{ t('common.apply') }}</button>
     </div>
 
     <div class="overflow-hidden rounded-xl border border-fb-line bg-fb-card">
-      <div v-if="loading" class="p-8 text-center text-fb-secondary">Loading…</div>
-      <div v-else-if="!rows.length" class="p-8 text-center text-fb-icon">No payments</div>
+      <div v-if="loading" class="p-8 text-center text-fb-secondary">{{ t('common.loading') }}</div>
+      <div v-else-if="!rows.length" class="p-8 text-center text-fb-icon">{{ t('payments.empty') }}</div>
       <table v-else class="w-full text-base">
         <thead class="border-b bg-fb-canvas">
           <tr>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Date</th>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Name</th>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Sum</th>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Period</th>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Method</th>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Teacher</th>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Comment</th>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Creator</th>
-            <th class="px-5 py-4 text-right font-semibold text-fb-secondary">Чек</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('common.date') }}</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('months.student') }}</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('common.amount') }}</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('common.period') }}</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('expenses.method') }}</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('schedule.teacher') }}</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('common.comment') }}</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('finance.creator') }}</th>
+            <th class="px-5 py-4 text-right font-semibold text-fb-secondary">{{ t('payments.receipt') }}</th>
           </tr>
         </thead>
         <tbody>
@@ -517,7 +534,7 @@ watch(
               <template v-if="isRefund(row)">−{{ formatMoney(row.sum) }}</template>
               <template v-else>{{ formatMoney(row.sum) }}</template>
               <span v-if="row.discount_amount" class="ml-1 block text-[11px] font-medium text-amber-700">
-                скидка {{ formatMoney(row.discount_amount) }}
+                {{ t('payHint.discount', { amount: formatMoney(row.discount_amount) }) }}
               </span>
             </td>
             <td class="px-5 py-4">
@@ -525,22 +542,22 @@ watch(
                 v-if="isRefund(row)"
                 class="inline-flex items-center rounded-full bg-rose-100 px-2.5 py-0.5 text-xs font-semibold text-rose-700"
               >
-                Возврат
+                {{ t('txType.refund') }}
               </span>
               <template v-else>
                 <span class="inline-flex items-center rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-fb-blue">
-                  {{ row.months_covered ?? 1 }} mo
+                  {{ t('receipt.months', { count: row.months_covered ?? 1 }) }}
                 </span>
                 <span
                   v-if="row.refunded_amount"
                   class="ml-1 inline-flex items-center rounded-full bg-rose-50 px-2 py-0.5 text-xs font-medium text-rose-700"
-                  title="Столько денег этой оплаты возвращено; месяцы, которые она закрывала, пересчитаны"
+                  :title="t('payments.refundedHint')"
                 >
-                  возврат {{ formatMoney(row.refunded_amount) }}
+                  {{ t('payments.refundedShort', { amount: formatMoney(row.refunded_amount) }) }}
                 </span>
               </template>
             </td>
-            <td class="px-5 py-4">{{ row.method_pay }}</td>
+            <td class="px-5 py-4">{{ payMethodLabel(row.method, row.method_pay) }}</td>
             <td class="px-5 py-4">{{ row.teacher }}</td>
             <td class="px-5 py-4">{{ row.comment || '—' }}</td>
             <td class="px-5 py-4">{{ row.creator }}</td>
@@ -548,12 +565,12 @@ watch(
               <button
                 v-if="!isRefund(row)"
                 type="button"
-                title="Печать квитанции"
+                :title="t('payments.printReceipt')"
                 class="inline-flex items-center gap-1 rounded-lg border border-fb-line bg-white px-2.5 py-1 text-xs font-medium text-fb-secondary shadow-sm hover:border-fb-blue hover:text-fb-blue transition-colors"
                 @click="printRowById(row.id)"
               >
                 <span>🖨️</span>
-                <span>Чек</span>
+                <span>{{ t('payments.receipt') }}</span>
               </button>
             </td>
           </tr>
@@ -566,7 +583,7 @@ watch(
           :disabled="loadingMore"
           @click="loadMore"
         >
-          {{ loadingMore ? 'Загрузка…' : 'Показать ещё' }}
+          {{ loadingMore ? t('common.loading') : t('common.showMore') }}
         </button>
       </div>
     </div>
@@ -576,22 +593,22 @@ watch(
       <div class="drawer-panel-fb max-w-lg">
         <div class="flex items-center justify-between border-b px-6 py-4">
           <h2 class="text-lg font-semibold">{{ panelTitle }}</h2>
-          <button type="button" @click="closePanel">✕</button>
+          <button type="button" :aria-label="t('common.close')" @click="closePanel">✕</button>
         </div>
-        <div v-if="panelLoading" class="p-6 text-fb-secondary">Loading…</div>
+        <div v-if="panelLoading" class="p-6 text-fb-secondary">{{ t('common.loading') }}</div>
         <form v-else class="flex flex-1 flex-col overflow-hidden" @submit.prevent="submitForm">
           <div class="flex-1 space-y-4 overflow-y-auto p-6">
             <p v-if="isRefund(detailRow)" class="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-800">
-              Это возврат денег по оплате #{{ detailRow?.reverses_payment_id }}.
+              {{ t('payments.isRefundOf', { id: detailRow?.reverses_payment_id ?? '' }) }}
             </p>
             <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Student</label>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('months.student') }}</label>
               <div v-if="!detailRow" class="relative">
                 <input
                   v-model="studentSearchQuery"
                   type="text"
                   required
-                  placeholder="Начните вводить имя и выберите ученика из списка…"
+                  :placeholder="t('payments.studentPlaceholder')"
                   class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none"
                   @focus="showStudentDropdown = true"
                   @input="showStudentDropdown = true; form.student_name = studentSearchQuery; form.student_id = null; selectedStudent = null"
@@ -612,12 +629,12 @@ watch(
                       <span v-if="s.group" class="ml-2 text-xs text-fb-secondary">({{ s.group }})</span>
                     </div>
                     <span v-if="s.course_price" class="text-xs font-semibold text-fb-blue">
-                      {{ s.course_price.toLocaleString() }} UZS/mo
+                      {{ t('payments.perMonth', { amount: formatMoney(s.course_price) }) }}
                     </span>
                   </button>
                 </div>
                 <p v-if="studentSearchQuery && !form.student_id" class="mt-1 text-xs text-amber-700">
-                  Выберите ученика из выпадающего списка.
+                  {{ t('payments.chooseFromList') }}
                 </p>
               </div>
               <input
@@ -628,7 +645,7 @@ watch(
               />
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Дата оплаты</label>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('payments.date') }}</label>
               <input
                 v-model="form.payment_date"
                 type="date"
@@ -642,14 +659,14 @@ watch(
               <label class="mb-1 block text-sm font-medium text-fb-secondary">
                 {{
                   detailRow?.months_auto
-                    ? 'Months closed (посчитано по сумме)'
+                    ? t('payments.monthsClosedAuto')
                     : editingRow
-                      ? 'Months (сумма не меняется)'
-                      : 'Months (подставит сумму)'
+                      ? t('payments.monthsEditing')
+                      : t('payments.monthsNew')
                 }}
               </label>
               <p v-if="detailRow?.months_auto && detailRow?.month_price === 0" class="mb-1 text-xs text-amber-700">
-                Деньги в копилке: у ученика нет группы с ценой курса. Добавьте его в группу — месяцы засчитаются сами.
+                {{ t('payments.moneyWaiting') }}
               </p>
               <input
                 v-model.number="form.months_covered"
@@ -662,24 +679,24 @@ watch(
               />
             </div>
             <div v-if="!isRefund(detailRow)">
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Скидка (сумма)</label>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('payments.discount') }}</label>
               <input
                 v-model.number="form.discount"
                 type="number"
                 min="0"
                 step="1"
-                placeholder="Нет скидки"
+                :placeholder="t('payments.noDiscount')"
                 :readonly="isReadOnly"
                 class="w-full rounded-lg border px-3 py-2 text-sm read-only:bg-fb-canvas focus:border-fb-blue focus:outline-none"
                 @input="refillAmount"
               />
               <p v-if="!detailRow" class="mt-1 text-[11px] text-fb-secondary">
-                Заполняйте только когда скидка нужна. Не больше цены оплачиваемых месяцев.
+                {{ t('payments.discountHint') }}
               </p>
             </div>
             <div>
               <label class="mb-1 block text-sm font-medium text-fb-secondary">
-                {{ isRefund(detailRow) ? 'Сумма возврата' : 'Amount (Сумма)' }}
+                {{ isRefund(detailRow) ? t('payments.refundAmount') : t('common.amount') }}
               </label>
               <input
                 v-model.number="form.amount"
@@ -699,21 +716,21 @@ watch(
                 :date="form.payment_date"
               />
               <p v-if="detailRow && !isRefund(detailRow) && detailRow.refunded_total" class="mt-1 text-xs text-rose-700">
-                По этой оплате уже возвращено {{ formatMoney(detailRow.refunded_total) }} сум.
+                {{ t('payments.alreadyRefunded', { amount: formatMoney(detailRow.refunded_total) }) }}
               </p>
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Method</label>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('expenses.method') }}</label>
               <select v-model="form.method" :disabled="isReadOnly" class="w-full rounded-lg border px-3 py-2 text-sm">
-                <option v-for="m in METHODS" :key="m.value" :value="m.value">{{ m.label }}</option>
+                <option v-for="m in METHODS" :key="m.value" :value="m.value">{{ t(m.label) }}</option>
               </select>
             </div>
             <div v-if="detailRow && !isRefund(detailRow)">
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Teacher</label>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('schedule.teacher') }}</label>
               <input v-model="form.teacher_name" :readonly="isReadOnly" class="w-full rounded-lg border px-3 py-2 text-sm read-only:bg-fb-canvas focus:border-fb-blue focus:outline-none" />
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Comment</label>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('common.comment') }}</label>
               <textarea v-model="form.comment" :readonly="isReadOnly" rows="3" class="w-full rounded-lg border px-3 py-2 text-sm read-only:bg-fb-canvas focus:border-fb-blue focus:outline-none" />
             </div>
             <p v-if="formError" class="text-sm text-fb-danger">{{ formError }}</p>
@@ -727,7 +744,7 @@ watch(
                 @click="printPayment(detailRow)"
               >
                 <span>🖨️</span>
-                <span>Печать чека</span>
+                <span>{{ t('payments.printReceipt') }}</span>
               </button>
               <button
                 v-if="detailRow.student_id && !isRefund(detailRow)"
@@ -736,18 +753,18 @@ watch(
                 @click="openPaymentLink(detailRow)"
               >
                 <span>💳</span>
-                <span>Ссылка</span>
+                <span>{{ t('payments.link') }}</span>
               </button>
-              <button v-if="canWriteFinance" type="button" class="rounded-lg bg-fb-blue px-5 py-2 text-sm text-white" @click="startEdit">Edit</button>
+              <button v-if="canWriteFinance" type="button" class="rounded-lg bg-fb-blue px-5 py-2 text-sm text-white" @click="startEdit">{{ t('common.edit') }}</button>
               <button
                 v-if="canWriteFinance && !isRefund(detailRow) && (detailRow.refundable ?? 0) > 0"
                 type="button"
                 class="rounded-lg border border-rose-300 px-4 py-2 text-sm font-medium text-rose-700 hover:bg-rose-50"
                 @click="openRefund"
               >
-                Вернуть деньги
+                {{ t('payments.refundTitle') }}
               </button>
-              <button v-if="canDeletePayment" type="button" class="rounded-lg border border-red-300 px-5 py-2 text-sm text-fb-danger" :disabled="deleting" @click="deleteRow">Delete</button>
+              <button v-if="canDeletePayment" type="button" class="rounded-lg border border-red-300 px-5 py-2 text-sm text-fb-danger" :disabled="deleting" @click="deleteRow">{{ t('common.delete') }}</button>
             </template>
             <template v-else>
               <button
@@ -757,13 +774,13 @@ watch(
                 @click="openPaymentLink(selectedStudent)"
               >
                 <span>💳</span>
-                <span>Ссылка</span>
+                <span>{{ t('payments.link') }}</span>
               </button>
               <button type="submit" class="rounded-lg bg-fb-blue px-5 py-2 text-sm text-white" :disabled="saving">
-                {{ saving ? 'Saving…' : editingRow ? 'Save' : 'Create' }}
+                {{ saving ? t('common.saving') : editingRow ? t('common.save') : t('payments.takePayment') }}
               </button>
             </template>
-            <button type="button" class="rounded-lg border px-5 py-2 text-sm" @click="closePanel">Cancel</button>
+            <button type="button" class="rounded-lg border px-5 py-2 text-sm" @click="closePanel">{{ t('common.cancel') }}</button>
           </div>
         </form>
       </div>
@@ -773,12 +790,12 @@ watch(
     <div v-if="refundModal.show" class="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
       <div class="w-full max-w-md overflow-hidden rounded-2xl bg-fb-card shadow-2xl">
         <div class="border-b border-fb-line px-6 py-4">
-          <h2 class="text-lg font-semibold text-rose-700">Вернуть деньги</h2>
-          <p class="text-sm text-fb-secondary">{{ detailRow?.student_name }} · оплата {{ formatMoney(detailRow?.sum ?? 0) }} сум</p>
+          <h2 class="text-lg font-semibold text-rose-700">{{ t('payments.refundTitle') }}</h2>
+          <p class="text-sm text-fb-secondary">{{ detailRow?.student_name }} · {{ t('payments.paymentOf', { amount: formatMoney(detailRow?.sum ?? 0) }) }}</p>
         </div>
         <div class="space-y-3 px-6 py-5">
           <div>
-            <label class="mb-1 block text-sm font-medium text-fb-secondary">Сумма возврата</label>
+            <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('payments.refundAmount') }}</label>
             <input
               v-model.number="refundModal.amount"
               type="number"
@@ -786,28 +803,28 @@ watch(
               step="1"
               class="w-full rounded-lg border border-fb-line px-3 py-2 focus:border-fb-blue focus:outline-none"
             />
-            <p class="mt-1 text-[11px] text-fb-secondary">Можно вернуть до {{ formatMoney(detailRow?.refundable ?? 0) }} сум.</p>
+            <p class="mt-1 text-[11px] text-fb-secondary">{{ t('payments.refundUpTo', { amount: formatMoney(detailRow?.refundable ?? 0) }) }}</p>
           </div>
           <div>
-            <label class="mb-1 block text-sm font-medium text-fb-secondary">Причина (обязательно)</label>
+            <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('dashboard.reasonRequired') }}</label>
             <textarea
               v-model="refundModal.reason"
               rows="3"
               class="w-full rounded-lg border border-fb-line px-3 py-2 focus:border-fb-blue focus:outline-none"
-              placeholder="Например: ученик ушёл, возвращаем неиспользованный месяц"
+              :placeholder="t('payments.refundReasonPlaceholder')"
             />
           </div>
           <p v-if="refundModal.error" class="text-sm text-fb-danger">{{ refundModal.error }}</p>
         </div>
         <div class="flex justify-end gap-3 border-t border-fb-line px-6 py-4">
-          <button type="button" class="rounded-lg border border-fb-line px-5 py-2 text-sm" @click="refundModal.show = false">Отмена</button>
+          <button type="button" class="rounded-lg border border-fb-line px-5 py-2 text-sm" @click="refundModal.show = false">{{ t('common.cancel') }}</button>
           <button
             type="button"
             class="rounded-lg bg-rose-600 px-5 py-2 text-sm font-medium text-white hover:bg-rose-700 disabled:opacity-50"
             :disabled="refundModal.saving"
             @click="confirmRefund"
           >
-            {{ refundModal.saving ? 'Сохраняю…' : 'Вернуть' }}
+            {{ refundModal.saving ? t('common.saving') : t('payments.refundButton') }}
           </button>
         </div>
       </div>

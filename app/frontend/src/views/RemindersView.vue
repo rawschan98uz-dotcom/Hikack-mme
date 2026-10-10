@@ -8,6 +8,10 @@ import { hasCreateFlag, routeWithoutCreate, studentRoute } from '../utils/crossL
 import { onCardsReturn } from '../utils/cardStack';
 import { useAuthStore } from '../stores/auth';
 import { PERM } from '../utils/rbac';
+import { t, type MessageKey } from '../i18n';
+import { reminderStatusLabel } from '../i18n/labels';
+import { confirmDialog, toast } from '../ui/feedback';
+import { apiErrorMessage } from '../utils/apiError';
 
 interface Assignee {
   id: number;
@@ -61,10 +65,10 @@ const assignees = ref<Assignee[]>([]);
 const editingReminder = ref<ReminderRow | null>(null);
 const detailReminder = ref<ReminderRow | null>(null);
 
-const tabs: { key: ReminderTab; label: string }[] = [
-  { key: 'overdue', label: 'Просрочено' },
-  { key: 'today', label: 'Сегодня' },
-  { key: 'future', label: 'Предстоит' },
+const tabs: { key: ReminderTab; label: MessageKey }[] = [
+  { key: 'overdue', label: 'reminderStatus.overdue' },
+  { key: 'today', label: 'reminderStatus.today' },
+  { key: 'future', label: 'reminderStatus.future' },
 ];
 
 function getLocalDateStr() {
@@ -76,18 +80,6 @@ const form = reactive({
   details: '',
   due_date: getLocalDateStr(),
   assigned_to_id: '' as number | '',
-});
-
-const confirmModal = reactive({
-  show: false,
-  title: '',
-  message: '',
-  onConfirm: null as (() => void) | null,
-});
-
-const alertModal = reactive({
-  show: false,
-  message: '',
 });
 
 const canWriteReminders = computed(() => auth.can(PERM.REMINDERS_WRITE));
@@ -111,9 +103,9 @@ const writeOffModal = reactive({
 });
 
 const panelTitle = computed(() => {
-  if (editingReminder.value) return 'Edit reminder';
-  if (detailReminder.value) return 'Reminder details';
-  return 'Add reminder';
+  if (editingReminder.value) return t('reminders.editTitle');
+  if (detailReminder.value) return t('reminders.detailTitle');
+  return t('reminders.addTitle');
 });
 
 const isReadOnly = computed(() => Boolean(detailReminder.value && !editingReminder.value));
@@ -220,30 +212,29 @@ function buildPayload() {
 async function submitReminder() {
   formError.value = '';
   if (!form.title.trim()) {
-    formError.value = 'Enter a title';
+    formError.value = t('reminders.titleRequired');
     return;
   }
   if (!form.due_date) {
-    formError.value = 'Select a due date';
+    formError.value = t('reminders.dueRequired');
     return;
   }
 
   saving.value = true;
   try {
     const payload = buildPayload();
+    const wasEditing = Boolean(editingReminder.value);
     if (editingReminder.value) {
       await client.patch(`/reminders/${editingReminder.value.id}`, payload);
     } else {
       await client.post('/reminders', payload);
     }
     closePanel();
+    toast.success(wasEditing ? t('toast.saved') : t('reminders.created'));
     await loadReminders();
     notifyRemindersChanged();
-  } catch (err: any) {
-    formError.value =
-      err.response?.data?.message ||
-      err.response?.data?.error ||
-      (editingReminder.value ? 'Could not update reminder' : 'Could not create reminder');
+  } catch (err: unknown) {
+    formError.value = apiErrorMessage(err, t('errors.saveFailed'));
   } finally {
     saving.value = false;
   }
@@ -265,7 +256,7 @@ async function confirmWriteOff() {
   if (!writeOffModal.reminder) return;
   const reason = writeOffModal.reason.trim();
   if (reason.length < 3) {
-    writeOffModal.error = 'Укажите причину (минимум 3 символа).';
+    writeOffModal.error = t('dashboard.reasonMin3');
     return;
   }
   writeOffModal.show = false;
@@ -278,43 +269,34 @@ async function completeReminder(reminder: ReminderRow, writeOffReason = '') {
   try {
     await client.post(`/reminders/${reminder.id}/complete`, writeOffReason ? { write_off_reason: writeOffReason } : {});
     closePanel();
+    toast.success(writeOffReason ? t('dashboard.writtenOff') : t('dashboard.reminderDone'));
     await loadReminders();
     notifyRemindersChanged();
-  } catch (err: any) {
-    alertModal.message =
-      err.response?.data?.message ||
-      err.response?.data?.error ||
-      'Could not complete reminder';
-    alertModal.show = true;
+  } catch (err: unknown) {
+    toast.error(apiErrorMessage(err, t('dashboard.reminderDoneFailed')));
   } finally {
     completing.value = false;
   }
 }
 
-function requestDeleteReminder() {
+async function requestDeleteReminder() {
   if (!detailReminder.value) return;
-  confirmModal.title = 'Delete reminder';
-  confirmModal.message = `Are you sure you want to delete "${detailReminder.value.title}"?`;
-  confirmModal.onConfirm = executeDeleteReminder;
-  confirmModal.show = true;
-}
-
-async function executeDeleteReminder() {
-  if (!detailReminder.value) return;
-  confirmModal.show = false;
+  const ok = await confirmDialog({
+    title: t('reminders.deleteConfirm', { title: detailReminder.value.title }),
+    message: t('confirm.cannotUndo'),
+    danger: true,
+  });
+  if (!ok || !detailReminder.value) return;
 
   deleting.value = true;
   try {
     await client.delete(`/reminders/${detailReminder.value.id}`);
     closePanel();
+    toast.success(t('toast.deleted'));
     await loadReminders();
     notifyRemindersChanged();
-  } catch (err: any) {
-    alertModal.message =
-      err.response?.data?.message ||
-      err.response?.data?.error ||
-      'Could not delete reminder';
-    alertModal.show = true;
+  } catch (err: unknown) {
+    toast.error(apiErrorMessage(err, t('errors.deleteFailed')));
   } finally {
     deleting.value = false;
   }
@@ -355,20 +337,20 @@ onMounted(async () => {
 <template>
   <div class="space-y-4">
     <div class="flex flex-wrap items-center justify-between gap-3">
-      <h1 class="text-xl font-semibold text-fb-text">Reminders</h1>
+      <h1 class="text-xl font-semibold text-fb-text">{{ t('nav.reminders') }}</h1>
       <button
         v-if="canWriteReminders"
         type="button"
         class="rounded-lg bg-fb-blue px-4 py-2 text-sm font-medium text-white hover:bg-fb-blue-dark"
         @click="openCreatePanel"
       >
-        ADD NEW
+        {{ t('common.addNew') }}
       </button>
     </div>
 
     <div v-if="pinned.length" class="rounded-xl border-2 border-rose-300 bg-rose-50 p-4">
       <h2 class="mb-3 text-[15px] font-semibold text-rose-800">
-        ⚠️ Ушли, не заплатив — {{ pinned.length }}. Позвоните и решите вопрос.
+        ⚠️ {{ t('dashboard.unpaidLeavers', { count: pinned.length }) }}. {{ t('reminders.callAndSolve') }}
       </h2>
       <ul class="space-y-2">
         <li
@@ -376,13 +358,13 @@ onMounted(async () => {
           :key="item.id"
           class="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-rose-200 bg-white px-4 py-3"
         >
-          <div class="min-w-0 cursor-pointer" title="Открыть карточку ученика" @click="openReminder(item)">
+          <div class="min-w-0 cursor-pointer" :title="t('dashboard.openStudentCard')" @click="openReminder(item)">
             <p class="text-sm font-semibold text-fb-text">{{ item.title }}</p>
             <p class="mt-0.5 whitespace-pre-line text-xs text-fb-secondary">{{ item.details }}</p>
             <p v-if="item.locked" class="mt-1 text-xs font-semibold text-rose-700">
-              Осталось оплатить: {{ item.debt_months }} мес.<span v-if="item.debt_amount"> (≈ {{ formatMoney(item.debt_amount) }} сум)</span>
+              {{ t('dashboard.leftToPay', { months: t('receipt.months', { count: item.debt_months ?? 0 }) }) }}<span v-if="item.debt_amount"> (≈ {{ t('common.sumAmount', { amount: formatMoney(item.debt_amount) }) }})</span>
             </p>
-            <p v-else class="mt-1 text-xs font-semibold text-emerald-700">✓ Долг оплачен — можно закрыть</p>
+            <p v-else class="mt-1 text-xs font-semibold text-emerald-700">✓ {{ t('dashboard.debtPaidCanClose') }}</p>
           </div>
           <div class="flex shrink-0 gap-2">
             <button
@@ -391,7 +373,7 @@ onMounted(async () => {
               class="rounded-lg border border-fb-line px-3 py-1.5 text-xs font-medium text-fb-blue hover:bg-fb-hover"
               @click="router.push(studentRoute(item.student_id))"
             >
-              Открыть ученика
+              {{ t('dashboard.openStudent') }}
             </button>
             <button
               v-if="auth.isCeo && item.locked"
@@ -400,7 +382,7 @@ onMounted(async () => {
               :disabled="completing"
               @click="writeOffReminder(item)"
             >
-              Списать долг
+              {{ t('dashboard.writeOffDebt') }}
             </button>
             <button
               v-if="canWriteReminders"
@@ -408,10 +390,10 @@ onMounted(async () => {
               class="rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-medium text-white"
               :class="item.locked ? 'cursor-not-allowed opacity-35' : 'shadow-md ring-2 ring-rose-300 hover:bg-rose-700'"
               :disabled="item.locked || completing"
-              :title="item.locked ? 'Сначала примите оплату в карточке ученика' : 'Долг оплачен — закрыть напоминание'"
+              :title="item.locked ? t('dashboard.takePaymentFirst') : t('dashboard.debtPaidClose')"
               @click="completeReminder(item)"
             >
-              Решено
+              {{ t('dashboard.resolved') }}
             </button>
           </div>
         </li>
@@ -429,23 +411,23 @@ onMounted(async () => {
           : 'border-transparent text-fb-secondary hover:text-fb-secondary'"
         @click="activeTab = tab.key"
       >
-        {{ tab.label }} ({{ buckets[tab.key]?.length ?? 0 }})
+        {{ t(tab.label) }} ({{ buckets[tab.key]?.length ?? 0 }})
       </button>
     </div>
 
     <div class="overflow-hidden rounded-xl border border-fb-line bg-fb-card">
-      <div v-if="loading" class="p-8 text-center text-fb-secondary">Loading…</div>
+      <div v-if="loading" class="p-8 text-center text-fb-secondary">{{ t('common.loading') }}</div>
       <div v-else-if="!rows.length" class="p-8 text-center text-fb-icon">
-        No reminders in this tab
+        {{ t('reminders.emptyTab') }}
       </div>
       <table v-else class="w-full text-base">
         <thead class="border-b border-fb-line bg-fb-canvas">
           <tr>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Title</th>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Details</th>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Due date</th>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Status</th>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Assigned to</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('reminders.title') }}</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('reminders.details') }}</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('reminders.dueDate') }}</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('common.status') }}</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('reminders.assignedTo') }}</th>
             <th class="px-5 py-4" />
           </tr>
         </thead>
@@ -464,14 +446,14 @@ onMounted(async () => {
                 class="ml-2 text-xs font-medium text-fb-blue hover:underline"
                 @click.stop="router.push(studentRoute(row.student_id))"
               >
-                Открыть ученика
+                {{ t('dashboard.openStudent') }}
               </button>
             </td>
             <td class="px-5 py-4 whitespace-pre-line text-fb-secondary">{{ row.details || '—' }}</td>
             <td class="px-5 py-4 text-fb-secondary">{{ row.due_date }}</td>
             <td class="px-5 py-4">
               <span class="rounded-full px-2 py-0.5 text-xs capitalize" :class="statusClass(row.status)">
-                {{ row.status_label }}
+                {{ reminderStatusLabel(row.status, row.status_label) }}
               </span>
             </td>
             <td class="px-5 py-4 text-fb-secondary">{{ row.assigned_to }}</td>
@@ -483,7 +465,7 @@ onMounted(async () => {
                 :disabled="completing"
                 @click.stop="completeReminder(row)"
               >
-                ✓ Выполнено
+                ✓ {{ t('reminderStatus.done') }}
               </button>
             </td>
           </tr>
@@ -496,15 +478,15 @@ onMounted(async () => {
       <div class="drawer-panel-fb max-w-lg">
         <div class="flex items-center justify-between border-b border-fb-line px-6 py-4">
           <h2 class="text-lg font-semibold text-fb-text">{{ panelTitle }}</h2>
-          <button type="button" class="text-fb-icon hover:text-fb-secondary" @click="closePanel">✕</button>
+          <button type="button" class="text-fb-icon hover:text-fb-secondary" :aria-label="t('common.close')" @click="closePanel">✕</button>
         </div>
 
-        <div v-if="panelLoading" class="flex-1 p-6 text-fb-secondary">Loading…</div>
+        <div v-if="panelLoading" class="flex-1 p-6 text-fb-secondary">{{ t('common.loading') }}</div>
 
         <form v-else class="flex flex-1 flex-col overflow-hidden" @submit.prevent="submitReminder">
           <div class="flex-1 space-y-4 overflow-y-auto p-6">
             <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Title</label>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('reminders.title') }}</label>
               <input
                 v-model="form.title"
                 type="text"
@@ -516,7 +498,7 @@ onMounted(async () => {
             </div>
 
             <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Details</label>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('reminders.details') }}</label>
               <textarea
                 v-model="form.details"
                 rows="4"
@@ -526,7 +508,7 @@ onMounted(async () => {
             </div>
 
             <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Due date</label>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('reminders.dueDate') }}</label>
               <input
                 v-model="form.due_date"
                 type="date"
@@ -537,13 +519,13 @@ onMounted(async () => {
             </div>
 
             <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Assigned to</label>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('reminders.assignedTo') }}</label>
               <select
                 v-model="form.assigned_to_id"
                 :disabled="isReadOnly"
                 class="w-full rounded-lg border border-fb-line px-3 py-2 disabled:bg-fb-canvas"
               >
-                <option value="">— Общее (видит весь офис) —</option>
+                <option value="">— {{ t('reminders.shared') }} —</option>
                 <option
                   v-if="form.assigned_to_id !== '' && !assignees.some((p) => p.id === form.assigned_to_id)"
                   :value="form.assigned_to_id"
@@ -560,12 +542,12 @@ onMounted(async () => {
               v-if="detailReminder"
               class="rounded-lg border border-fb-line bg-fb-canvas px-4 py-3 text-sm text-fb-secondary"
             >
-              Status:
+              {{ t('common.status') }}:
               <span
                 class="ml-2 rounded-full px-2 py-0.5 text-xs capitalize"
                 :class="statusClass(detailReminder.status)"
               >
-                {{ detailReminder.status_label }}
+                {{ reminderStatusLabel(detailReminder.status, detailReminder.status_label) }}
               </span>
             </div>
 
@@ -575,7 +557,7 @@ onMounted(async () => {
           <div class="flex flex-wrap gap-2 border-t border-fb-line px-6 py-4">
             <template v-if="isReadOnly && detailReminder">
               <p v-if="detailReminder.locked" class="w-full text-xs text-rose-700">
-                Долг не оплачен: закрыть, изменить или удалить нельзя. Примите оплату в карточке ученика.
+                {{ t('reminders.lockedHint') }}
               </p>
               <button
                 v-if="canWriteReminders"
@@ -584,7 +566,7 @@ onMounted(async () => {
                 :disabled="detailReminder.locked"
                 @click="startEdit"
               >
-                Edit
+                {{ t('common.edit') }}
               </button>
               <button
                 v-if="canComplete(detailReminder)"
@@ -593,7 +575,7 @@ onMounted(async () => {
                 :disabled="completing || detailReminder.locked"
                 @click="completeReminder(detailReminder)"
               >
-                Task done
+                {{ t('reminderStatus.done') }}
               </button>
               <button
                 v-if="auth.isCeo && detailReminder.locked"
@@ -602,7 +584,7 @@ onMounted(async () => {
                 :disabled="completing"
                 @click="writeOffReminder(detailReminder)"
               >
-                Списать долг
+                {{ t('dashboard.writeOffDebt') }}
               </button>
               <button
                 v-if="canWriteReminders"
@@ -611,7 +593,7 @@ onMounted(async () => {
                 :disabled="deleting || detailReminder.locked"
                 @click="requestDeleteReminder"
               >
-                Delete
+                {{ t('common.delete') }}
               </button>
             </template>
             <template v-else>
@@ -621,7 +603,7 @@ onMounted(async () => {
                 class="rounded-lg bg-fb-blue px-5 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
                 :disabled="saving"
               >
-                {{ saving ? 'Saving…' : editingReminder ? 'Save' : 'Create' }}
+                {{ saving ? t('common.saving') : editingReminder ? t('common.save') : t('common.create') }}
               </button>
             </template>
             <button
@@ -629,38 +611,10 @@ onMounted(async () => {
               class="rounded-lg border border-fb-line px-5 py-2 text-sm font-medium text-fb-secondary"
               @click="closePanel"
             >
-              Cancel
+              {{ t('common.cancel') }}
             </button>
           </div>
         </form>
-      </div>
-    </div>
-
-    <!-- Confirm modal -->
-    <div v-if="confirmModal.show" class="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
-      <div class="bg-fb-card rounded-2xl shadow-2xl max-w-sm w-full overflow-hidden">
-        <div class="px-6 py-4 border-b border-fb-line">
-          <h2 class="text-lg font-semibold text-fb-text">{{ confirmModal.title }}</h2>
-        </div>
-        <div class="px-6 py-5">
-          <p class="text-[15px] text-fb-secondary">{{ confirmModal.message }}</p>
-        </div>
-        <div class="px-6 py-4 border-t border-fb-line flex justify-end gap-3">
-          <button
-            type="button"
-            class="rounded-lg border border-fb-line px-5 py-2 text-sm font-medium text-fb-secondary hover:bg-fb-hover"
-            @click="confirmModal.show = false"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            class="rounded-lg bg-fb-danger px-5 py-2 text-sm font-medium text-white hover:opacity-90"
-            @click="confirmModal.onConfirm?.()"
-          >
-            Delete
-          </button>
-        </div>
       </div>
     </div>
 
@@ -668,21 +622,21 @@ onMounted(async () => {
     <div v-if="writeOffModal.show" class="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
       <div class="w-full max-w-md overflow-hidden rounded-2xl bg-fb-card shadow-2xl">
         <div class="border-b border-fb-line px-6 py-4">
-          <h2 class="text-lg font-semibold text-rose-700">Списать долг без оплаты?</h2>
+          <h2 class="text-lg font-semibold text-rose-700">{{ t('dashboard.writeOffTitle') }}</h2>
         </div>
         <div class="space-y-3 px-6 py-5">
           <p class="text-[15px] font-medium text-fb-text">{{ writeOffModal.reminder?.title }}</p>
           <p v-if="writeOffModal.reminder?.debt_months" class="text-sm text-fb-secondary">
-            Будет списано: {{ writeOffModal.reminder.debt_months }} мес.<span v-if="writeOffModal.reminder.debt_amount">
-              (≈ {{ formatMoney(writeOffModal.reminder.debt_amount) }} сум)</span>.
-            Долг исчезнет из отчётов, в отчёте «Ушедшие» останется пометка «Списано» с причиной.
+            {{ t('dashboard.willWriteOff', { months: t('receipt.months', { count: writeOffModal.reminder.debt_months }) }) }}<span v-if="writeOffModal.reminder.debt_amount">
+              (≈ {{ t('common.sumAmount', { amount: formatMoney(writeOffModal.reminder.debt_amount) }) }})</span>.
+            {{ t('dashboard.writeOffHint') }}
           </p>
-          <label class="block text-sm font-medium text-fb-secondary">Причина (обязательно)</label>
+          <label class="block text-sm font-medium text-fb-secondary">{{ t('dashboard.reasonRequired') }}</label>
           <textarea
             v-model="writeOffModal.reason"
             rows="3"
             class="w-full rounded-lg border border-fb-line px-3 py-2 focus:border-fb-blue focus:outline-none"
-            placeholder="Например: переехал в другой город, связаться не удалось"
+            :placeholder="t('dashboard.reasonPlaceholder')"
           />
           <p v-if="writeOffModal.error" class="text-sm text-fb-danger">{{ writeOffModal.error }}</p>
         </div>
@@ -692,7 +646,7 @@ onMounted(async () => {
             class="rounded-lg border border-fb-line px-5 py-2 text-sm font-medium text-fb-secondary hover:bg-fb-hover"
             @click="writeOffModal.show = false"
           >
-            Отмена
+            {{ t('common.cancel') }}
           </button>
           <button
             type="button"
@@ -700,31 +654,11 @@ onMounted(async () => {
             :disabled="completing"
             @click="confirmWriteOff"
           >
-            Списать
+            {{ t('dashboard.writeOff') }}
           </button>
         </div>
       </div>
     </div>
 
-    <!-- Alert modal -->
-    <div v-if="alertModal.show" class="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
-      <div class="bg-fb-card rounded-2xl shadow-2xl max-w-sm w-full overflow-hidden">
-        <div class="px-6 py-4 border-b border-fb-line">
-          <h2 class="text-lg font-semibold text-fb-danger">Error</h2>
-        </div>
-        <div class="px-6 py-5">
-          <p class="text-[15px] text-fb-secondary">{{ alertModal.message }}</p>
-        </div>
-        <div class="px-6 py-4 border-t border-fb-line flex justify-end">
-          <button
-            type="button"
-            class="rounded-lg bg-fb-blue px-6 py-2 text-sm font-medium text-white hover:opacity-90"
-            @click="alertModal.show = false"
-          >
-            OK
-          </button>
-        </div>
-      </div>
-    </div>
   </div>
 </template>

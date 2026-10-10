@@ -18,6 +18,10 @@ import {
   teacherRoute,
 } from '../utils/crossLinks';
 import { onCardsReturn, pathWithoutCards } from '../utils/cardStack';
+import { t, type MessageKey } from '../i18n';
+import { groupDaysLabel, serverLabel } from '../i18n/labels';
+import { confirmDialog, toast } from '../ui/feedback';
+import { apiErrorMessage } from '../utils/apiError';
 
 interface Branch {
   id: number;
@@ -105,52 +109,60 @@ type SortKey =
 
 interface ColumnDef {
   key: SortKey | 'actions';
-  label: string;
+  label: MessageKey;
   sortable: boolean;
 }
 
 const DAYS_OPTIONS = [
-  { value: 1, label: 'Нечётные дни' },
-  { value: 2, label: 'Чётные дни' },
-  { value: 3, label: 'Выходные' },
-  { value: 4, label: 'Каждый день' },
-  { value: 5, label: 'Свои дни' },
+  { value: 1, label: 'groupDays.1' as MessageKey },
+  { value: 2, label: 'groupDays.2' as MessageKey },
+  { value: 3, label: 'groupDays.3' as MessageKey },
+  { value: 4, label: 'groupDays.4' as MessageKey },
+  { value: 5, label: 'groupDays.5' as MessageKey },
 ] as const;
 
 const CUSTOM_DAYS = 5;
 
 /** 0 = Monday … 6 = Sunday (same as backend). */
 const WEEKDAY_OPTIONS = [
-  { value: 0, label: 'Пн' },
-  { value: 1, label: 'Вт' },
-  { value: 2, label: 'Ср' },
-  { value: 3, label: 'Чт' },
-  { value: 4, label: 'Пт' },
-  { value: 5, label: 'Сб' },
-  { value: 6, label: 'Вс' },
+  { value: 0, label: 'weekday.mon' as MessageKey },
+  { value: 1, label: 'weekday.tue' as MessageKey },
+  { value: 2, label: 'weekday.wed' as MessageKey },
+  { value: 3, label: 'weekday.thu' as MessageKey },
+  { value: 4, label: 'weekday.fri' as MessageKey },
+  { value: 5, label: 'weekday.sat' as MessageKey },
+  { value: 6, label: 'weekday.sun' as MessageKey },
 ] as const;
 
-const STATUS_FILTER_OPTIONS: { value: number; label: string }[] = [
-  { value: 2, label: 'Активные группы' },
-  { value: 3, label: 'В архиве' },
-];
+const STATUS_FILTER_OPTIONS = computed(() => [
+  { value: 2, label: t('groups.activeGroups') },
+  { value: 3, label: t('groupStatus.3') },
+]);
 
 const STATUS_FORM_OPTIONS = [
-  { value: 2, label: 'Активная' },
-  { value: 3, label: 'В архиве' },
+  { value: 2, label: 'groupStatus.2' as MessageKey },
+  { value: 3, label: 'groupStatus.3' as MessageKey },
 ] as const;
 
+/** "Свои дни" shows the real weekdays ("Пн, Ср, Пт"); the other kinds by name. */
+function daysText(group: { days: number; weekdays?: number[]; days_label: string }) {
+  if (group.days === CUSTOM_DAYS && group.weekdays?.length) {
+    return WEEKDAY_OPTIONS.filter((wd) => group.weekdays!.includes(wd.value)).map((wd) => t(wd.label)).join(', ');
+  }
+  return groupDaysLabel(group.days, group.days_label);
+}
+
 const TABLE_COLUMNS: ColumnDef[] = [
-  { key: 'name', label: 'Group', sortable: true },
-  { key: 'courseName', label: 'Course', sortable: true },
-  { key: 'teacher', label: 'Teacher', sortable: true },
-  { key: 'daysText', label: 'Days', sortable: true },
-  { key: 'trainingDates', label: 'Training dates', sortable: true },
-  { key: 'weekOfStudy', label: 'Week of study', sortable: true },
-  { key: 'room', label: 'Room', sortable: true },
-  { key: 'tagsText', label: 'Tags', sortable: true },
-  { key: 'students', label: 'Students', sortable: true },
-  { key: 'actions', label: 'Actions', sortable: false },
+  { key: 'name', label: 'schedule.group', sortable: true },
+  { key: 'courseName', label: 'schedule.course', sortable: true },
+  { key: 'teacher', label: 'schedule.teacher', sortable: true },
+  { key: 'daysText', label: 'groups.days', sortable: true },
+  { key: 'trainingDates', label: 'groups.trainingDates', sortable: true },
+  { key: 'weekOfStudy', label: 'groups.weekOfStudy', sortable: true },
+  { key: 'room', label: 'groups.room', sortable: true },
+  { key: 'tagsText', label: 'nav.tags', sortable: true },
+  { key: 'students', label: 'nav.students', sortable: true },
+  { key: 'actions', label: 'common.actions', sortable: false },
 ];
 
 const COLUMN_STORAGE_KEY = 'groups-visible-columns';
@@ -235,8 +247,8 @@ const courseFilterOptions = computed(() =>
 const tagFilterOptions = computed(() => tags.value.map((tag) => ({ value: tag.id, label: tag.name })));
 
 const daysFilterOptions = computed(() => [
-  { value: '', label: 'All days' },
-  ...DAYS_OPTIONS.map((option) => ({ value: option.value, label: option.label })),
+  { value: '', label: t('groups.allDays') },
+  ...DAYS_OPTIONS.map((option) => ({ value: option.value, label: t(option.label) })),
 ]);
 
 const filteredRooms = computed(() => {
@@ -264,20 +276,8 @@ const hasActiveFilters = computed(
 const canExportGroups = computed(() => auth.can(PERM.GROUPS_EXPORT));
 const canWriteGroups = computed(() => auth.can(PERM.GROUPS_WRITE));
 
-// Custom confirm/alert modal state (replaces window.confirm / window.alert)
-const confirmModal = reactive({
-  show: false,
-  title: '',
-  message: '',
-  onConfirm: null as (() => void) | null,
-});
-const alertModal = reactive({
-  show: false,
-  message: '',
-});
-
 const panelTitle = computed(() =>
-  editingGroup.value ? 'Edit group' : detailGroup.value ? 'Group details' : 'New group',
+  editingGroup.value ? t('groups.editTitle') : detailGroup.value ? t('groups.detailTitle') : t('groups.addTitle'),
 );
 
 const isReadOnly = computed(() => Boolean(detailGroup.value && !editingGroup.value));
@@ -289,13 +289,13 @@ const tableRows = computed(() => {
     courseName: row.course?.name ?? '—',
     teacher: row.teacher ?? '—',
     teacher_id: row.teacher_id,
-    daysText: row.days_label,
+    daysText: daysText(row),
     trainingDates: row.training_dates ?? '—',
-    weekOfStudy: row.week_of_study_label ?? '—',
+    weekOfStudy: row.week_of_study ? t('groups.week', { n: row.week_of_study }) : (row.week_of_study_label ?? '—'),
     room: row.room ?? '—',
     tagsText: row.tags.length ? row.tags.map((tag) => tag.name).join(', ') : '—',
     students: row.students_count,
-    statusText: row.status_label,
+    statusText: serverLabel(row.status_label),
   }));
 
   const sorted = [...mapped].sort((left, right) => {
@@ -529,61 +529,54 @@ function buildPayload() {
 async function submitGroup() {
   formError.value = '';
   if (!form.name.trim()) {
-    formError.value = 'Enter group name';
+    formError.value = t('groups.nameRequired');
     return;
   }
   if (!form.branch_id) {
-    formError.value = 'Select a branch';
+    formError.value = t('groups.branchRequired');
     return;
   }
   if (form.days === CUSTOM_DAYS && !form.weekdays.length) {
-    formError.value = 'Select lesson weekdays';
+    formError.value = t('groups.weekdaysRequired');
     return;
   }
 
   saving.value = true;
   try {
     const payload = buildPayload();
+    const wasEditing = Boolean(editingGroup.value);
     if (editingGroup.value) {
       await client.patch(`/groups/${editingGroup.value.id}`, payload);
     } else {
       await client.post('/groups', payload);
     }
     closePanel();
+    toast.success(wasEditing ? t('toast.saved') : t('groups.created'));
     await loadGroups();
-  } catch (err: any) {
-    formError.value =
-      err.response?.data?.message ||
-      err.response?.data?.error ||
-      (editingGroup.value ? 'Could not update group' : 'Could not create group');
+  } catch (err: unknown) {
+    formError.value = apiErrorMessage(err, t('errors.saveFailed'));
   } finally {
     saving.value = false;
   }
 }
 
-function requestDeleteGroup() {
+async function requestDeleteGroup() {
   if (!detailGroup.value) return;
-  confirmModal.title = 'Delete group';
-  confirmModal.message = `Are you sure you want to delete group "${detailGroup.value.name}"?`;
-  confirmModal.onConfirm = executeDeleteGroup;
-  confirmModal.show = true;
-}
-
-async function executeDeleteGroup() {
-  if (!detailGroup.value) return;
-  confirmModal.show = false;
+  const ok = await confirmDialog({
+    title: t('groups.deleteConfirm', { name: detailGroup.value.name }),
+    message: t('groups.deleteHint'),
+    danger: true,
+  });
+  if (!ok || !detailGroup.value) return;
 
   deleting.value = true;
   try {
     await client.delete(`/groups/${detailGroup.value.id}`);
     closePanel();
+    toast.success(t('toast.deleted'));
     await loadGroups();
-  } catch (err: any) {
-    alertModal.message =
-      err.response?.data?.message ||
-      err.response?.data?.error ||
-      'Could not delete group';
-    alertModal.show = true;
+  } catch (err: unknown) {
+    toast.error(apiErrorMessage(err, t('groups.deleteFailed')));
   } finally {
     deleting.value = false;
   }
@@ -593,7 +586,7 @@ function exportCsv() {
   const columns = activeColumns.value.filter((column) => column.key !== 'actions');
   downloadCsv(
     'groups.csv',
-    columns.map((column) => column.label),
+    columns.map((column) => t(column.label)),
     tableRows.value.map((row) =>
       columns.map((column) => row[column.key as SortKey]),
     ),
@@ -689,11 +682,11 @@ onMounted(async () => {
     <template v-if="!isCard">
     <div class="flex flex-wrap items-center justify-between gap-3">
       <div class="flex flex-wrap items-baseline gap-3">
-        <h1>Groups</h1>
-        <span class="text-sm text-fb-secondary">Quantity — {{ quantity }}</span>
+        <h1>{{ t('nav.groups') }}</h1>
+        <span class="text-sm text-fb-secondary">{{ t('archive.quantity', { count: quantity }) }}</span>
       </div>
       <button v-if="canWriteGroups" type="button" class="btn-fb-primary uppercase tracking-wide" @click="openCreatePanel">
-        Add new
+        {{ t('common.addNew') }}
       </button>
     </div>
 
@@ -701,28 +694,28 @@ onMounted(async () => {
       <FilterSelect
         v-model="filters.status"
         :options="STATUS_FILTER_OPTIONS"
-        placeholder="Active groups"
+        :placeholder="t('groups.activeGroups')"
         class="min-w-[150px]"
       />
       <FilterMultiSelect
         v-model="filters.teacher_ids"
         :options="teacherFilterOptions"
-        placeholder="Teachers"
+        :placeholder="t('nav.teachers')"
       />
       <FilterMultiSelect
         v-model="filters.course_ids"
         :options="courseFilterOptions"
-        placeholder="Courses"
+        :placeholder="t('nav.courses')"
       />
-      <FilterSelect v-model="filters.days" :options="daysFilterOptions" placeholder="Days" />
-      <FilterMultiSelect v-model="filters.tag_ids" :options="tagFilterOptions" placeholder="Tags" />
-      <FilterDatePicker v-model="filters.start_date" placeholder="Start date" />
-      <FilterDatePicker v-model="filters.end_date" placeholder="End date" />
+      <FilterSelect v-model="filters.days" :options="daysFilterOptions" :placeholder="t('groups.days')" />
+      <FilterMultiSelect v-model="filters.tag_ids" :options="tagFilterOptions" :placeholder="t('nav.tags')" />
+      <FilterDatePicker v-model="filters.start_date" :placeholder="t('archive.startDate')" />
+      <FilterDatePicker v-model="filters.end_date" :placeholder="t('archive.endDate')" />
       <button
         type="button"
         class="filter-clear-fb"
         :class="{ 'opacity-40': !hasActiveFilters }"
-        title="Clear filters"
+        :title="t('common.resetFilters')"
         :disabled="!hasActiveFilters"
         @click="clearFilters"
       >
@@ -744,24 +737,24 @@ onMounted(async () => {
               clip-rule="evenodd"
             />
           </svg>
-          Filters
+          {{ t('common.filters') }}
         </button>
         <div
           v-if="showFiltersPanel"
           class="absolute right-0 top-[calc(100%+8px)] z-30 w-72 rounded-xl border border-fb-line bg-fb-card p-4 shadow-lg"
         >
-          <label class="mb-1 block text-xs font-medium text-fb-secondary">Branch</label>
+          <label class="mb-1 block text-xs font-medium text-fb-secondary">{{ t('common.branch') }}</label>
           <select v-model="filters.branch_id" class="mb-3 w-full rounded-lg border border-fb-line px-3 py-2 text-sm">
-            <option value="">All branches</option>
+            <option value="">{{ t('common.allBranches') }}</option>
             <option v-for="branch in branches" :key="branch.id" :value="branch.id">
               {{ branch.name }}
             </option>
           </select>
-          <label class="mb-1 block text-xs font-medium text-fb-secondary">Search</label>
+          <label class="mb-1 block text-xs font-medium text-fb-secondary">{{ t('common.search') }}</label>
           <input
             v-model="filters.q"
             type="search"
-            placeholder="Group or course name"
+            :placeholder="t('groups.searchPlaceholder')"
             class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm"
           />
         </div>
@@ -776,7 +769,7 @@ onMounted(async () => {
               clip-rule="evenodd"
             />
           </svg>
-          Columns
+          {{ t('groups.columns') }}
         </button>
         <div
           v-if="showColumnsPanel"
@@ -788,7 +781,7 @@ onMounted(async () => {
             class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-sm hover:bg-fb-hover"
           >
             <input v-model="visibleColumns[column.key]" type="checkbox" class="rounded border-fb-line text-fb-blue" />
-            {{ column.label }}
+            {{ t(column.label) }}
           </label>
         </div>
       </div>
@@ -797,7 +790,7 @@ onMounted(async () => {
         v-if="canExportGroups"
         type="button"
         class="groups-toolbar-btn-fb"
-        title="Export"
+        :title="t('common.export')"
         @click="exportCsv"
       >
         <svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
@@ -812,8 +805,8 @@ onMounted(async () => {
     </div>
 
     <div class="overflow-hidden rounded-xl border border-fb-line bg-fb-card">
-      <div v-if="loading" class="p-8 text-center text-fb-secondary">Loading…</div>
-      <div v-else-if="!tableRows.length" class="p-8 text-center text-fb-icon">No groups</div>
+      <div v-if="loading" class="p-8 text-center text-fb-secondary">{{ t('common.loading') }}</div>
+      <div v-else-if="!tableRows.length" class="p-8 text-center text-fb-icon">{{ t('groups.empty') }}</div>
       <div v-else class="overflow-x-auto">
         <table class="table-fb min-w-full">
           <thead>
@@ -825,12 +818,12 @@ onMounted(async () => {
                   class="sortable-th-fb"
                   @click="toggleSort(column.key as SortKey)"
                 >
-                  {{ column.label }}
+                  {{ t(column.label) }}
                   <span class="text-xs text-fb-icon">
                     {{ sortKey === column.key ? (sortDir === 'asc' ? '↑' : '↓') : '↕' }}
                   </span>
                 </button>
-                <span v-else>{{ column.label }}</span>
+                <span v-else>{{ t(column.label) }}</span>
               </th>
             </tr>
           </thead>
@@ -867,14 +860,14 @@ onMounted(async () => {
                     class="text-sm text-fb-blue hover:underline"
                     @click="openCard(row.id)"
                   >
-                    Open
+                    {{ t('common.open') }}
                   </button>
                   <button
                     type="button"
                     class="text-sm text-fb-blue hover:underline"
                     @click="goStudents(row.id)"
                   >
-                    Students
+                    {{ t('nav.students') }}
                   </button>
                 </div>
               </td>
@@ -889,17 +882,17 @@ onMounted(async () => {
       <div class="drawer-panel-fb">
         <div class="flex items-center justify-between border-b border-fb-line px-6 py-4">
           <h2 class="text-lg font-semibold text-fb-text">{{ panelTitle }}</h2>
-          <button type="button" class="text-fb-icon hover:text-fb-secondary" @click="closePanel">✕</button>
+          <button type="button" class="text-fb-icon hover:text-fb-secondary" :aria-label="t('common.close')" @click="closePanel">✕</button>
         </div>
 
-        <div v-if="panelLoading" class="flex-1 p-6 text-fb-secondary">Loading…</div>
+        <div v-if="panelLoading" class="flex-1 p-6 text-fb-secondary">{{ t('common.loading') }}</div>
 
         <form v-else class="flex flex-1 flex-col overflow-hidden" @submit.prevent="submitGroup">
           <div class="flex-1 overflow-y-auto p-6">
           <!-- Key facts at a glance (an existing group) -->
           <div v-if="detailGroup" class="mb-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
             <div class="fact-tile-fb">
-              <div class="fact-label">Учитель</div>
+              <div class="fact-label">{{ t('schedule.teacher') }}</div>
               <div class="fact-value">
                 <button v-if="detailGroup.teacher_id" type="button" class="text-left text-fb-blue hover:underline" @click="goTeacher(detailGroup)">
                   {{ detailGroup.teacher }}
@@ -908,16 +901,16 @@ onMounted(async () => {
               </div>
             </div>
             <div class="fact-tile-fb">
-              <div class="fact-label">Расписание</div>
+              <div class="fact-label">{{ t('schedule.title') }}</div>
               <div class="fact-value">
-                {{ detailGroup.days_label }}
+                {{ daysText(detailGroup) }}
                 <span v-if="detailGroup.lesson_start_time" class="whitespace-nowrap">
                   · {{ detailGroup.lesson_start_time }}–{{ detailGroup.lesson_end_time }}
                 </span>
               </div>
             </div>
             <div class="fact-tile-fb">
-              <div class="fact-label">Курс и цена в месяц</div>
+              <div class="fact-label">{{ t('groups.coursePrice') }}</div>
               <div class="fact-value">
                 {{ detailGroup.course?.name || '—' }}
                 <span v-if="!isTeacher && detailGroup.course?.price" class="whitespace-nowrap text-base font-semibold text-fb-secondary">
@@ -926,15 +919,15 @@ onMounted(async () => {
               </div>
             </div>
             <div class="fact-tile-fb">
-              <div class="fact-label">Учеников</div>
+              <div class="fact-label">{{ t('nav.students') }}</div>
               <div class="fact-value">{{ detailGroup.students?.length ?? detailGroup.students_count ?? 0 }}</div>
             </div>
             <div v-if="detailGroup.debtors_count !== undefined" class="fact-tile-fb">
-              <div class="fact-label">Должников</div>
+              <div class="fact-label">{{ t('nav.debtors') }}</div>
               <div class="fact-value" :class="detailGroup.debtors_count ? 'text-red-700' : 'text-emerald-700'">
                 {{ detailGroup.debtors_count }}
                 <span v-if="detailGroup.debt_total" class="whitespace-nowrap text-base font-semibold">
-                  · {{ detailGroup.debt_total.toLocaleString('ru-RU') }} сум
+                  · {{ t('common.sumAmount', { amount: detailGroup.debt_total.toLocaleString('ru-RU') }) }}
                 </span>
               </div>
             </div>
@@ -943,7 +936,7 @@ onMounted(async () => {
           <div class="grid items-start gap-6" :class="detailGroup?.students?.length ? 'xl:grid-cols-5' : ''">
           <div class="grid content-start gap-4 md:grid-cols-2" :class="detailGroup?.students?.length ? 'xl:col-span-3' : '2xl:grid-cols-3'">
             <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Group name</label>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('groups.name') }}</label>
               <input
                 v-model="form.name"
                 type="text"
@@ -954,7 +947,7 @@ onMounted(async () => {
             </div>
 
             <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Branch</label>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('common.branch') }}</label>
               <select
                 v-model="form.branch_id"
                 :disabled="isReadOnly"
@@ -967,13 +960,13 @@ onMounted(async () => {
             </div>
 
             <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Course</label>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('schedule.course') }}</label>
               <select
                 v-model="form.course_id"
                 :disabled="isReadOnly"
                 class="w-full rounded-lg border border-fb-line px-3 py-2 disabled:bg-fb-canvas"
               >
-                <option value="">— No course —</option>
+                <option value="">— {{ t('groups.noCourse') }} —</option>
                 <option v-for="course in courses" :key="course.id" :value="course.id">
                   {{ course.name }}
                 </option>
@@ -981,13 +974,13 @@ onMounted(async () => {
             </div>
 
             <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Teacher</label>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('schedule.teacher') }}</label>
               <select
                 v-model="form.teacher_id"
                 :disabled="isReadOnly"
                 class="w-full rounded-lg border border-fb-line px-3 py-2 disabled:bg-fb-canvas"
               >
-                <option value="">— No teacher —</option>
+                <option value="">— {{ t('teacherAtt.noTeacher') }} —</option>
                 <option v-for="teacher in teachers" :key="teacher.id" :value="teacher.id">
                   {{ teacher.name }}
                 </option>
@@ -995,13 +988,13 @@ onMounted(async () => {
             </div>
 
             <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Room</label>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('groups.room') }}</label>
               <select
                 v-model="form.room_id"
                 :disabled="isReadOnly"
                 class="w-full rounded-lg border border-fb-line px-3 py-2 disabled:bg-fb-canvas"
               >
-                <option value="">— No room —</option>
+                <option value="">— {{ t('groups.noRoom') }} —</option>
                 <option v-for="room in filteredRooms" :key="room.id" :value="room.id">
                   {{ room.name }}
                 </option>
@@ -1009,11 +1002,11 @@ onMounted(async () => {
             </div>
 
             <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Tags</label>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('nav.tags') }}</label>
               <div v-if="isReadOnly" class="rounded-lg border border-fb-line bg-fb-canvas px-3 py-2 text-sm min-h-[40px]">
                 {{ form.tag_ids.length
-                  ? tags.filter(t => form.tag_ids.includes(t.id)).map(t => t.name).join(', ')
-                  : '— No tags —' }}
+                  ? tags.filter((tag) => form.tag_ids.includes(tag.id)).map((tag) => tag.name).join(', ')
+                  : `— ${t('groups.noTags')} —` }}
               </div>
               <div v-else class="relative">
                 <button
@@ -1022,9 +1015,9 @@ onMounted(async () => {
                   @click="showTagsDropdown = !showTagsDropdown"
                 >
                   <span v-if="form.tag_ids.length" class="truncate">
-                    {{ tags.filter(t => form.tag_ids.includes(t.id)).map(t => t.name).join(', ') }}
+                    {{ tags.filter((tag) => form.tag_ids.includes(tag.id)).map((tag) => tag.name).join(', ') }}
                   </span>
-                  <span v-else class="text-fb-icon">Select tags…</span>
+                  <span v-else class="text-fb-icon">{{ t('groups.selectTags') }}</span>
                   <svg class="h-4 w-4 shrink-0 text-fb-icon" viewBox="0 0 20 20" fill="currentColor">
                     <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
                   </svg>
@@ -1046,40 +1039,40 @@ onMounted(async () => {
                     />
                     {{ tag.name }}
                   </label>
-                  <div v-if="!tags.length" class="px-3 py-2 text-sm text-fb-icon">No tags available</div>
+                  <div v-if="!tags.length" class="px-3 py-2 text-sm text-fb-icon">{{ t('tags.empty') }}</div>
                 </div>
               </div>
             </div>
 
             <div class="grid grid-cols-2 gap-3">
               <div>
-                <label class="mb-1 block text-sm font-medium text-fb-secondary">Days</label>
+                <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('groups.days') }}</label>
                 <select
                   v-model="form.days"
                   :disabled="isReadOnly"
                   class="w-full rounded-lg border border-fb-line px-3 py-2 disabled:bg-fb-canvas"
                 >
                   <option v-for="option in DAYS_OPTIONS" :key="option.value" :value="option.value">
-                    {{ option.label }}
+                    {{ t(option.label) }}
                   </option>
                 </select>
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium text-fb-secondary">Status</label>
+                <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('common.status') }}</label>
                 <select
                   v-model="form.status"
                   :disabled="isReadOnly"
                   class="w-full rounded-lg border border-fb-line px-3 py-2 disabled:bg-fb-canvas"
                 >
                   <option v-for="option in STATUS_FORM_OPTIONS" :key="option.value" :value="option.value">
-                    {{ option.label }}
+                    {{ t(option.label) }}
                   </option>
                 </select>
               </div>
             </div>
 
             <div v-if="form.days === CUSTOM_DAYS" class="col-span-full">
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Lesson weekdays</label>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('groups.lessonWeekdays') }}</label>
               <div class="flex flex-wrap gap-2">
                 <label
                   v-for="wd in WEEKDAY_OPTIONS"
@@ -1087,14 +1080,14 @@ onMounted(async () => {
                   class="flex items-center gap-1 rounded-lg border border-fb-line px-2 py-1 text-sm"
                 >
                   <input v-model="form.weekdays" type="checkbox" :value="wd.value" :disabled="isReadOnly" />
-                  {{ wd.label }}
+                  {{ t(wd.label) }}
                 </label>
               </div>
             </div>
 
             <div class="grid grid-cols-2 gap-3">
               <div>
-                <label class="mb-1 block text-sm font-medium text-fb-secondary">Start time</label>
+                <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('groups.startTime') }}</label>
                 <input
                   v-model="form.lesson_start_time"
                   type="time"
@@ -1103,7 +1096,7 @@ onMounted(async () => {
                 />
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium text-fb-secondary">End time</label>
+                <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('groups.endTime') }}</label>
                 <input
                   v-model="form.lesson_end_time"
                   type="time"
@@ -1115,7 +1108,7 @@ onMounted(async () => {
 
             <div class="grid grid-cols-2 gap-3">
               <div>
-                <label class="mb-1 block text-sm font-medium text-fb-secondary">Training start</label>
+                <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('groups.trainingStart') }}</label>
                 <input
                   v-model="form.group_start_date"
                   type="date"
@@ -1124,7 +1117,7 @@ onMounted(async () => {
                 />
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium text-fb-secondary">Training end</label>
+                <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('groups.trainingEnd') }}</label>
                 <input
                   v-model="form.group_end_date"
                   type="date"
@@ -1135,30 +1128,30 @@ onMounted(async () => {
             </div>
 
             <p class="col-span-full text-xs text-fb-secondary">
-              «Training end» — только план: после этой даты уроки отмечаются как обычно, группу закрывает человек.
+              {{ t('groups.trainingEndHint') }}
             </p>
           </div>
 
             <div v-if="detailGroup?.students?.length" class="rounded-xl border border-fb-line xl:col-span-2">
               <div class="flex items-center justify-between border-b border-fb-line px-4 py-3">
                 <h3 class="text-base font-semibold text-fb-text">
-                  Ученики ({{ detailGroup.students.length }})
+                  {{ t('nav.students') }} ({{ detailGroup.students.length }})
                 </h3>
                 <button
                   type="button"
                   class="text-sm font-medium text-fb-blue hover:underline"
                   @click="goStudents(detailGroup.id)"
                 >
-                  All students →
+                  {{ t('leftReport.allStudents') }} →
                 </button>
               </div>
               <table class="w-full text-left text-sm">
                 <thead class="bg-fb-canvas text-xs font-semibold uppercase tracking-wider text-fb-secondary">
                   <tr>
-                    <th class="px-4 py-2">Ученик</th>
-                    <th class="px-4 py-2">Телефон</th>
-                    <th class="px-4 py-2">Статус</th>
-                    <th v-if="detailGroup.debtors_count !== undefined" class="px-4 py-2 text-right">Долг</th>
+                    <th class="px-4 py-2">{{ t('months.student') }}</th>
+                    <th class="px-4 py-2">{{ t('common.phone') }}</th>
+                    <th class="px-4 py-2">{{ t('common.status') }}</th>
+                    <th v-if="detailGroup.debtors_count !== undefined" class="px-4 py-2 text-right">{{ t('groups.debt') }}</th>
                   </tr>
                 </thead>
                 <tbody class="divide-y divide-fb-line">
@@ -1173,10 +1166,10 @@ onMounted(async () => {
                       </button>
                     </td>
                     <td class="whitespace-nowrap px-4 py-2 text-fb-secondary">{{ student.phone || '—' }}</td>
-                    <td class="px-4 py-2 text-fb-secondary">{{ student.status_label }}</td>
+                    <td class="px-4 py-2 text-fb-secondary">{{ serverLabel(student.status_label) }}</td>
                     <td v-if="detailGroup.debtors_count !== undefined" class="whitespace-nowrap px-4 py-2 text-right font-semibold" :class="student.debt_amount ? 'text-red-700' : 'text-fb-secondary'">
                       <template v-if="student.debt_amount">{{ student.debt_amount.toLocaleString('ru-RU') }}</template>
-                      <template v-else-if="student.is_debtor">просрочено</template>
+                      <template v-else-if="student.is_debtor">{{ t('groups.overdue') }}</template>
                       <template v-else>—</template>
                     </td>
                   </tr>
@@ -1196,7 +1189,7 @@ onMounted(async () => {
                 class="rounded-lg bg-fb-blue px-5 py-2 text-sm font-medium text-white hover:opacity-90"
                 @click="startEdit"
               >
-                Edit
+                {{ t('common.edit') }}
               </button>
               <button
                 v-if="canWriteGroups"
@@ -1205,7 +1198,7 @@ onMounted(async () => {
                 :disabled="deleting"
                 @click="requestDeleteGroup"
               >
-                Delete
+                {{ t('common.delete') }}
               </button>
             </template>
             <template v-else>
@@ -1214,7 +1207,7 @@ onMounted(async () => {
                 class="rounded-lg bg-fb-blue px-5 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
                 :disabled="saving"
               >
-                {{ saving ? 'Saving…' : editingGroup ? 'Save' : 'Create' }}
+                {{ saving ? t('common.saving') : editingGroup ? t('common.save') : t('common.create') }}
               </button>
             </template>
             <button
@@ -1222,60 +1215,12 @@ onMounted(async () => {
               class="rounded-lg border border-fb-line px-5 py-2 text-sm font-medium text-fb-secondary"
               @click="closePanel"
             >
-              Cancel
+              {{ t('common.cancel') }}
             </button>
           </div>
         </form>
       </div>
     </div>
 
-    <!-- Confirm modal -->
-    <div v-if="confirmModal.show" class="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
-      <div class="bg-fb-card rounded-2xl shadow-2xl max-w-sm w-full overflow-hidden">
-        <div class="px-6 py-4 border-b border-fb-line">
-          <h2 class="text-lg font-semibold text-fb-text">{{ confirmModal.title }}</h2>
-        </div>
-        <div class="px-6 py-5">
-          <p class="text-[15px] text-fb-secondary">{{ confirmModal.message }}</p>
-        </div>
-        <div class="px-6 py-4 border-t border-fb-line flex justify-end gap-3">
-          <button
-            type="button"
-            class="rounded-lg border border-fb-line px-5 py-2 text-sm font-medium text-fb-secondary hover:bg-fb-hover"
-            @click="confirmModal.show = false"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            class="rounded-lg bg-fb-danger px-5 py-2 text-sm font-medium text-white hover:opacity-90"
-            @click="confirmModal.onConfirm?.()"
-          >
-            Delete
-          </button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Alert modal -->
-    <div v-if="alertModal.show" class="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
-      <div class="bg-fb-card rounded-2xl shadow-2xl max-w-sm w-full overflow-hidden">
-        <div class="px-6 py-4 border-b border-fb-line">
-          <h2 class="text-lg font-semibold text-fb-danger">Error</h2>
-        </div>
-        <div class="px-6 py-5">
-          <p class="text-[15px] text-fb-secondary">{{ alertModal.message }}</p>
-        </div>
-        <div class="px-6 py-4 border-t border-fb-line flex justify-end">
-          <button
-            type="button"
-            class="rounded-lg bg-fb-blue px-6 py-2 text-sm font-medium text-white hover:opacity-90"
-            @click="alertModal.show = false"
-          >
-            OK
-          </button>
-        </div>
-      </div>
-    </div>
   </div>
 </template>

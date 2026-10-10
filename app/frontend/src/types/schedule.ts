@@ -1,3 +1,5 @@
+import type { MessageKey } from '../i18n';
+
 export interface ScheduleRow {
   id: number;
   name: string;
@@ -15,20 +17,20 @@ export interface ScheduleRow {
 export type ScheduleTab = 'odd' | 'even' | 'other';
 export type ScheduleLayout = 'horizontal' | 'vertical';
 
-export const SCHEDULE_TABS: { key: ScheduleTab; label: string }[] = [
-  { key: 'odd', label: 'Нечётные дни' },
-  { key: 'even', label: 'Чётные дни' },
-  { key: 'other', label: 'Свои дни' },
+export const SCHEDULE_TABS: { key: ScheduleTab; label: MessageKey }[] = [
+  { key: 'odd', label: 'schedule.oddDays' },
+  { key: 'even', label: 'schedule.evenDays' },
+  { key: 'other', label: 'schedule.otherDays' },
 ];
 
 export const SCHEDULE_WEEKDAYS = [
-  { value: 1, label: 'Mon.' },
-  { value: 2, label: 'Tue.' },
-  { value: 3, label: 'Wed.' },
-  { value: 4, label: 'Thu.' },
-  { value: 5, label: 'Fri.' },
-  { value: 6, label: 'Sat.' },
-  { value: 0, label: 'Sun.' },
+  { value: 1, label: 'weekday.mon' },
+  { value: 2, label: 'weekday.tue' },
+  { value: 3, label: 'weekday.wed' },
+  { value: 4, label: 'weekday.thu' },
+  { value: 5, label: 'weekday.fri' },
+  { value: 6, label: 'weekday.sat' },
+  { value: 0, label: 'weekday.sun' },
 ] as const;
 
 /** Group.Days values that appear on each weekday (Other tab). */

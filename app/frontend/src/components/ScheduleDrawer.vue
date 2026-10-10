@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router';
 
 import { useSchedule } from '../composables/useSchedule';
 import { groupRoute } from '../utils/crossLinks';
+import { t } from '../i18n';
 import SchedulePanel from './SchedulePanel.vue';
 
 const open = ref(false);
@@ -42,8 +43,8 @@ function onSelectGroup(groupId: number) {
       type="button"
       class="schedule-fab"
       :class="{ 'schedule-fab--open': open }"
-      title="Schedule"
-      aria-label="Open schedule"
+      :title="t('schedule.title')"
+      :aria-label="t('schedule.open')"
       @click="toggleDrawer"
     >
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -56,7 +57,7 @@ function onSelectGroup(groupId: number) {
       <aside
         v-if="open"
         class="schedule-drawer"
-        aria-label="Group schedule"
+        :aria-label="t('schedule.groupSchedule')"
       >
         <SchedulePanel
           :rows="rows"

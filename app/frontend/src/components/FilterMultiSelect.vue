@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 
+import { t } from '../i18n';
+
 export interface FilterOption {
   value: number;
   label: string;
@@ -14,7 +16,7 @@ const props = withDefaults(
     maxVisibleTags?: number;
   }>(),
   {
-    placeholder: 'Select',
+    placeholder: undefined,
     maxVisibleTags: 1,
   },
 );
@@ -89,7 +91,7 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocumentClick));
             + {{ hiddenCount }}
           </span>
         </template>
-        <span v-else class="text-sm text-fb-icon">{{ placeholder }}</span>
+        <span v-else class="text-sm text-fb-icon">{{ placeholder || t('common.select') }}</span>
       </span>
       <svg
         class="h-4 w-4 shrink-0 text-fb-icon transition-transform"

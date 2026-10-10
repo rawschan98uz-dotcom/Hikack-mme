@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue';
 
 import client, { type ApiEnvelope } from '../api/client';
+import { t, type MessageKey } from '../i18n';
 
 interface MyRecord {
   date: string;
@@ -23,12 +24,19 @@ const LATE = 2;
 const ABSENT = 0;
 
 type Period = 'all' | '30' | '7';
-const PERIODS: { key: Period; label: string }[] = [
-  { key: 'all', label: 'Всё' },
-  { key: '30', label: '30 дней' },
-  { key: '7', label: '7 дней' },
+const PERIODS: { key: Period; label: MessageKey }[] = [
+  { key: 'all', label: 'myAtt.periodAll' },
+  { key: '30', label: 'myAtt.period30' },
+  { key: '7', label: 'myAtt.period7' },
 ];
-const WEEKDAY_LABELS = ['Пн', '', 'Ср', '', 'Пт', '', 'Вс'];
+const WEEKDAY_KEYS: (MessageKey | '')[] = ['weekday.mon', '', 'weekday.wed', '', 'weekday.fri', '', 'weekday.sun'];
+
+function statusLabel(r: MyRecord) {
+  if (r.status === PRESENT) return t('checkin.statusPresent');
+  if (r.status === LATE) return t('checkin.statusLate');
+  if (r.status === ABSENT) return t('checkin.statusAbsent');
+  return r.status_label;
+}
 
 const data = ref<MyAttendance | null>(null);
 const loading = ref(true);
@@ -81,12 +89,12 @@ const stats = computed(() => {
 });
 
 const tiles = computed(() => [
-  { label: 'Уроков отмечено', value: stats.value.total },
-  { label: 'Вовремя', value: stats.value.present },
-  { label: 'Опоздания', value: stats.value.late },
-  { label: 'Пропуски', value: stats.value.absent },
-  { label: 'Дней с уроками', value: stats.value.days },
-  { label: 'Вовремя, %', value: `${stats.value.onTimePct}%` },
+  { label: t('myAtt.lessonsMarked'), value: stats.value.total },
+  { label: t('myAtt.onTime'), value: stats.value.present },
+  { label: t('myAtt.lates'), value: stats.value.late },
+  { label: t('myAtt.absences'), value: stats.value.absent },
+  { label: t('myAtt.daysWithLessons'), value: stats.value.days },
+  { label: t('myAtt.onTimePct'), value: `${stats.value.onTimePct}%` },
 ]);
 
 const recordsByDay = computed(() => {
@@ -126,8 +134,8 @@ const weeks = computed<Cell[][]>(() => {
       else if (dayRecords.length) level = 'present';
       const dayLabel = key.split('-').reverse().join('.');
       const title = dayRecords.length
-        ? `${dayLabel}\n${dayRecords.map((r) => `${r.group} · ${r.status_label} ${r.time}`).join('\n')}`
-        : `${dayLabel} · нет отметки`;
+        ? `${dayLabel}\n${dayRecords.map((r) => `${r.group} · ${statusLabel(r)} ${r.time}`).join('\n')}`
+        : `${dayLabel} · ${t('myAtt.noMark').toLowerCase()}`;
       week.push({ key, inRange, level, title });
       cursor = addDays(cursor, 1);
     }
@@ -160,8 +168,8 @@ onMounted(load);
 <template>
   <div class="space-y-4">
     <div>
-      <h1 class="text-xl font-semibold text-fb-text">Моя посещаемость</h1>
-      <p class="text-sm text-fb-secondary">Ваши отметки «Я пришёл» по урокам</p>
+      <h1 class="text-xl font-semibold text-fb-text">{{ t('nav.myAttendance') }}</h1>
+      <p class="text-sm text-fb-secondary">{{ t('myAtt.subtitle') }}</p>
     </div>
 
     <div class="max-w-3xl rounded-2xl border border-fb-line bg-fb-card p-4 sm:p-5">
@@ -175,12 +183,12 @@ onMounted(load);
             :class="period === p.key ? 'bg-fb-card font-semibold text-fb-text shadow-sm' : 'text-fb-secondary hover:text-fb-text'"
             @click="period = p.key"
           >
-            {{ p.label }}
+            {{ t(p.label) }}
           </button>
         </div>
       </div>
 
-      <div v-if="loading" class="py-10 text-center text-sm text-fb-secondary">Загрузка…</div>
+      <div v-if="loading" class="py-10 text-center text-sm text-fb-secondary">{{ t('common.loading') }}</div>
       <template v-else>
         <div class="grid grid-cols-2 gap-2 sm:grid-cols-3">
           <div v-for="tile in tiles" :key="tile.label" class="rounded-lg bg-fb-canvas px-3 py-2">
@@ -191,8 +199,8 @@ onMounted(load);
 
         <div class="mt-4 flex gap-1 overflow-x-auto pb-1">
           <div class="mr-1 flex shrink-0 flex-col gap-1">
-            <span v-for="(label, i) in WEEKDAY_LABELS" :key="i" class="flex h-4 items-center text-[10px] leading-none text-fb-secondary">
-              {{ label }}
+            <span v-for="(label, i) in WEEKDAY_KEYS" :key="i" class="flex h-4 items-center text-[10px] leading-none text-fb-secondary">
+              {{ label ? t(label) : '' }}
             </span>
           </div>
           <div v-for="(week, wi) in weeks" :key="wi" class="flex shrink-0 flex-col gap-1">
@@ -207,13 +215,13 @@ onMounted(load);
         </div>
 
         <div class="mt-3 flex flex-wrap gap-4 text-xs text-fb-secondary">
-          <span class="flex items-center gap-1.5"><span class="h-3 w-3 rounded-[3px] bg-emerald-500" />Вовремя</span>
-          <span class="flex items-center gap-1.5"><span class="h-3 w-3 rounded-[3px] bg-amber-400" />Опоздал</span>
-          <span class="flex items-center gap-1.5"><span class="h-3 w-3 rounded-[3px] bg-red-500" />Не был</span>
-          <span class="flex items-center gap-1.5"><span class="h-3 w-3 rounded-[3px] bg-fb-line" />Нет отметки</span>
+          <span class="flex items-center gap-1.5"><span class="h-3 w-3 rounded-[3px] bg-emerald-500" />{{ t('myAtt.onTime') }}</span>
+          <span class="flex items-center gap-1.5"><span class="h-3 w-3 rounded-[3px] bg-amber-400" />{{ t('checkin.statusLate') }}</span>
+          <span class="flex items-center gap-1.5"><span class="h-3 w-3 rounded-[3px] bg-red-500" />{{ t('checkin.statusAbsent') }}</span>
+          <span class="flex items-center gap-1.5"><span class="h-3 w-3 rounded-[3px] bg-fb-line" />{{ t('myAtt.noMark') }}</span>
         </div>
         <p v-if="!periodRecords.length" class="mt-3 text-sm text-fb-secondary">
-          За этот период отметок нет. Отметиться можно на главной странице кнопкой «Я пришёл».
+          {{ t('myAtt.empty') }}
         </p>
       </template>
     </div>

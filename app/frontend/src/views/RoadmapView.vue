@@ -1,18 +1,22 @@
 <script setup lang="ts">
-const milestones = [
-  { status: 'done', title: 'CRM core', detail: 'Leads, students, groups, teachers' },
-  { status: 'done', title: 'Finance module', detail: 'Payments, expenses, salaries, debtors' },
-  { status: 'done', title: 'Reports', detail: 'Leads & conversion, attendance, left students' },
-  { status: 'progress', title: 'Settings & office', detail: 'Courses, rooms, holidays, archive, staff' },
-  { status: 'planned', title: 'Mobile app sync', detail: 'Teacher and parent mobile apps' },
-  { status: 'planned', title: 'AI assistant', detail: 'Smart reminders and lead scoring' },
-  { status: 'planned', title: 'Integrations hub', detail: 'VoIP, SMS gateways, payment systems' },
-];
+import { computed } from 'vue';
+
+import { t } from '../i18n';
+
+const milestones = computed(() => [
+  { status: 'done', title: t('roadmap.crmTitle'), detail: t('roadmap.crmDetail') },
+  { status: 'done', title: t('roadmap.financeTitle'), detail: t('roadmap.financeDetail') },
+  { status: 'done', title: t('roadmap.reportsTitle'), detail: t('roadmap.reportsDetail') },
+  { status: 'progress', title: t('roadmap.settingsTitle'), detail: t('roadmap.settingsDetail') },
+  { status: 'planned', title: t('roadmap.mobileTitle'), detail: t('roadmap.mobileDetail') },
+  { status: 'planned', title: t('roadmap.aiTitle'), detail: t('roadmap.aiDetail') },
+  { status: 'planned', title: t('roadmap.integrationsTitle'), detail: t('roadmap.integrationsDetail') },
+]);
 
 function statusLabel(status: string) {
-  if (status === 'done') return 'Released';
-  if (status === 'progress') return 'In progress';
-  return 'Planned';
+  if (status === 'done') return t('roadmap.released');
+  if (status === 'progress') return t('roadmap.inProgress');
+  return t('roadmap.planned');
 }
 
 function statusClass(status: string) {
@@ -25,9 +29,9 @@ function statusClass(status: string) {
 <template>
   <div class="space-y-6">
     <div>
-      <h1 class="text-xl font-semibold text-fb-text">Roadmap</h1>
+      <h1 class="text-xl font-semibold text-fb-text">{{ t('nav.roadmap') }}</h1>
       <p class="mt-2 max-w-2xl text-sm text-fb-secondary">
-        План развития и будущие обновления платформы HiJack LMS.
+        {{ t('roadmap.subtitle') }}
       </p>
     </div>
 

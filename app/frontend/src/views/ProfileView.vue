@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
 
+import { locale, localeOptions, t, tMaybe } from '../i18n';
 import { useAuthStore } from '../stores/auth';
+import { toast } from '../ui/feedback';
+import { apiErrorMessage } from '../utils/apiError';
 
 const auth = useAuthStore();
 const loading = ref(true);
@@ -18,7 +21,8 @@ const form = reactive({
 });
 
 const profile = computed(() => auth.user);
-const displayName = computed(() => profile.value?.first_name || profile.value?.name || 'Profile');
+const displayName = computed(() => profile.value?.first_name || profile.value?.name || t('profile.title'));
+const roleLabel = computed(() => (profile.value ? tMaybe(`roles.${profile.value.role}`, profile.value.role_label) : ''));
 const userInitial = computed(() => (displayName.value[0] ?? 'U').toUpperCase());
 
 function fillForm() {
@@ -44,11 +48,11 @@ function closeEdit() {
 async function saveProfile() {
   formError.value = '';
   if (!form.first_name.trim()) {
-    formError.value = 'Enter first name';
+    formError.value = t('errors.enterName');
     return;
   }
   if (!form.phone.trim()) {
-    formError.value = 'Enter phone number';
+    formError.value = t('errors.enterPhone');
     return;
   }
 
@@ -71,8 +75,9 @@ async function saveProfile() {
     }
     await auth.updateProfile(payload);
     closeEdit();
-  } catch {
-    formError.value = 'Could not save profile. Check phone is unique.';
+    toast.success(t('toast.saved'));
+  } catch (err: unknown) {
+    formError.value = apiErrorMessage(err, t('profile.saveFailed'));
   } finally {
     saving.value = false;
   }
@@ -92,12 +97,12 @@ onMounted(async () => {
     <div>
       <h1 class="text-[32px] font-normal text-fb-text">{{ displayName }}</h1>
       <div class="mt-4 inline-block border-b-[3px] border-fb-blue pb-2 text-[13px] font-semibold uppercase tracking-wide text-fb-blue">
-        Profile
+        {{ t('profile.title') }}
       </div>
     </div>
 
     <div v-if="loading" class="rounded-xl border border-fb-line bg-fb-card p-10 text-center text-fb-secondary">
-      Loading…
+      {{ t('common.loading') }}
     </div>
 
     <div v-else-if="profile" class="relative rounded-xl border border-fb-line bg-fb-card px-8 py-10 shadow-sm">
@@ -105,7 +110,7 @@ onMounted(async () => {
         <button
           type="button"
           class="flex h-11 w-11 items-center justify-center rounded-full bg-fb-blue text-white hover:opacity-90"
-          title="Company"
+          :title="t('profile.company')"
         >
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z" />
@@ -115,7 +120,7 @@ onMounted(async () => {
         <button
           type="button"
           class="flex h-11 w-11 items-center justify-center rounded-full bg-fb-blue text-white hover:opacity-90"
-          title="Edit profile"
+          :title="t('profile.edit')"
           @click="openEdit"
         >
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -137,24 +142,24 @@ onMounted(async () => {
 
       <div class="grid max-w-xl gap-6 text-[16px]">
         <div>
-          <p class="mb-1 text-fb-icon">Phone</p>
+          <p class="mb-1 text-fb-icon">{{ t('common.phone') }}</p>
           <p class="text-fb-text">{{ profile.phone_formatted || profile.phone }}</p>
         </div>
 
         <div>
-          <p class="mb-1 text-fb-icon">Job title</p>
+          <p class="mb-1 text-fb-icon">{{ t('profile.jobTitle') }}</p>
           <p class="text-fb-text">{{ profile.job_title || '—' }}</p>
         </div>
 
         <div>
-          <p class="mb-2 text-fb-icon">Roles</p>
+          <p class="mb-2 text-fb-icon">{{ t('profile.roles') }}</p>
           <span class="inline-block rounded-full border border-fb-danger px-4 py-1 text-[14px] font-medium text-fb-danger">
-            {{ profile.role_label }}
+            {{ roleLabel }}
           </span>
         </div>
 
         <div>
-          <p class="mb-2 text-fb-icon">Branches</p>
+          <p class="mb-2 text-fb-icon">{{ t('profile.branches') }}</p>
           <div class="flex flex-wrap gap-2">
             <span
               v-for="branch in profile.branches"
@@ -166,14 +171,31 @@ onMounted(async () => {
             <span v-if="!profile.branches.length" class="text-fb-text">—</span>
           </div>
         </div>
+
+        <div>
+          <p class="mb-2 text-fb-icon">{{ t('layout.language') }}</p>
+          <div class="flex flex-wrap gap-2">
+            <button
+              v-for="option in localeOptions"
+              :key="option.code"
+              type="button"
+              class="rounded-full border px-4 py-1 text-[14px] font-medium"
+              :class="locale === option.code ? 'border-fb-blue bg-fb-hover text-fb-blue' : 'border-fb-line text-fb-secondary hover:border-fb-blue hover:text-fb-blue'"
+              :aria-pressed="locale === option.code"
+              @click="locale = option.code"
+            >
+              {{ option.label }}
+            </button>
+          </div>
+        </div>
       </div>
     </div>
 
     <div v-if="showEdit" class="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4">
       <div class="modal-panel-fb max-w-lg">
         <div class="flex items-center justify-between border-b border-fb-line px-6 py-4">
-          <h2 class="text-xl font-semibold text-fb-text">Edit profile</h2>
-          <button type="button" class="text-2xl leading-none text-fb-icon hover:text-fb-secondary" @click="closeEdit">
+          <h2 class="text-xl font-semibold text-fb-text">{{ t('profile.edit') }}</h2>
+          <button type="button" class="text-2xl leading-none text-fb-icon hover:text-fb-secondary" :aria-label="t('common.close')" @click="closeEdit">
             ×
           </button>
         </div>
@@ -181,7 +203,7 @@ onMounted(async () => {
         <form class="space-y-4 px-6 py-5" @submit.prevent="saveProfile">
           <div class="grid grid-cols-2 gap-4">
             <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">First name</label>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('common.firstName') }}</label>
               <input
                 v-model="form.first_name"
                 type="text"
@@ -190,7 +212,7 @@ onMounted(async () => {
               />
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Last name</label>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('common.lastName') }}</label>
               <input
                 v-model="form.last_name"
                 type="text"
@@ -200,7 +222,7 @@ onMounted(async () => {
           </div>
 
           <div>
-            <label class="mb-1 block text-sm font-medium text-fb-secondary">Phone</label>
+            <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('common.phone') }}</label>
             <input
               v-model="form.phone"
               type="tel"
@@ -210,21 +232,21 @@ onMounted(async () => {
           </div>
 
           <div>
-            <label class="mb-1 block text-sm font-medium text-fb-secondary">Job title</label>
+            <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('profile.jobTitle') }}</label>
             <input
               v-model="form.job_title"
               type="text"
-              placeholder="e.g. Founder"
+              :placeholder="t('profile.jobTitlePlaceholder')"
               class="w-full rounded-lg border border-fb-line px-3 py-2 focus:border-fb-blue focus:outline-none"
             />
           </div>
 
           <div>
-            <label class="mb-1 block text-sm font-medium text-fb-secondary">New password (optional)</label>
+            <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('profile.newPassword') }}</label>
             <input
               v-model="form.password"
               type="password"
-              placeholder="Leave blank to keep current"
+              :placeholder="t('profile.newPasswordPlaceholder')"
               class="w-full rounded-lg border border-fb-line px-3 py-2 focus:border-fb-blue focus:outline-none"
             />
           </div>
@@ -237,14 +259,14 @@ onMounted(async () => {
               class="rounded-lg border border-fb-line px-5 py-2 text-sm text-fb-secondary hover:bg-fb-canvas"
               @click="closeEdit"
             >
-              Cancel
+              {{ t('common.cancel') }}
             </button>
             <button
               type="submit"
               class="rounded-lg bg-fb-blue px-5 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
               :disabled="saving"
             >
-              {{ saving ? 'Saving…' : 'Save' }}
+              {{ saving ? t('common.saving') : t('common.save') }}
             </button>
           </div>
         </form>

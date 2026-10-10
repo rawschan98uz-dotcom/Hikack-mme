@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 
+import { t } from '../i18n';
+import { useAuthStore } from '../stores/auth';
+
 export interface ReceiptPayment {
   id: number;
   date: string;
@@ -24,7 +27,7 @@ const props = withDefaults(
     companyAddress?: string;
   }>(),
   {
-    companyName: 'HiJack LMS Educational Center',
+    companyName: '',
     companyPhone: '',
     companyAddress: '',
   },
@@ -34,12 +37,18 @@ const emit = defineEmits<{
   'update:open': [value: boolean];
 }>();
 
+const auth = useAuthStore();
+// The receipt carries the learning center's real name
+const shownCompanyName = computed(
+  () => props.companyName || auth.user?.company?.name || t('receipt.defaultCompany'),
+);
+
 const methodLabel = computed(() => {
   const m = (props.payment?.method_pay || props.payment?.method || '').toLowerCase();
-  if (m === 'cash') return 'Наличные (Cash)';
-  if (m === 'card') return 'Банковская карта (Card)';
-  if (m === 'transfer') return 'Банковский перевод (Transfer)';
-  return props.payment?.method_pay || props.payment?.method || 'Наличные';
+  if (m === 'cash') return t('receipt.methodCash');
+  if (m === 'card') return t('receipt.methodCard');
+  if (m === 'transfer') return t('receipt.methodTransfer');
+  return props.payment?.method_pay || props.payment?.method || t('receipt.methodCash');
 });
 
 const formattedAmount = computed(() => {
@@ -67,7 +76,7 @@ function printReceipt() {
       <div class="mb-4 flex items-center justify-between border-b border-fb-line pb-3 no-print">
         <div class="flex items-center gap-2 text-sm font-semibold text-fb-text">
           <span class="text-lg">🧾</span>
-          <span>Квитанция об оплате</span>
+          <span>{{ t('receipt.title') }}</span>
         </div>
         <div class="flex items-center gap-2">
           <button
@@ -76,11 +85,12 @@ function printReceipt() {
             @click="printReceipt"
           >
             <span>🖨️</span>
-            <span>Печать</span>
+            <span>{{ t('common.print') }}</span>
           </button>
           <button
             type="button"
             class="rounded-lg p-1.5 text-fb-secondary hover:bg-fb-canvas hover:text-fb-text transition-colors"
+            :aria-label="t('common.close')"
             @click="close"
           >
             ✕
@@ -93,74 +103,74 @@ function printReceipt() {
         <!-- Header -->
         <div class="border-b-2 border-gray-800 pb-4 text-center">
           <h2 class="text-lg font-bold tracking-tight text-gray-900 uppercase">
-            {{ companyName || 'Учебный Центр' }}
+            {{ shownCompanyName }}
           </h2>
           <div v-if="companyAddress || companyPhone" class="mt-1 text-xs text-gray-600 space-x-2">
             <span v-if="companyAddress">{{ companyAddress }}</span>
             <span v-if="companyAddress && companyPhone">•</span>
-            <span v-if="companyPhone">Тел: {{ companyPhone }}</span>
+            <span v-if="companyPhone">{{ t('receipt.tel', { phone: companyPhone }) }}</span>
           </div>
           <div class="mt-2 text-xs font-bold uppercase tracking-widest text-emerald-700">
-            Квитанция к приходному ордеру № {{ payment.id }}
+            {{ t('receipt.number', { id: payment.id }) }}
           </div>
         </div>
 
         <!-- Meta Grid -->
         <div class="mt-4 space-y-2.5 text-xs">
           <div class="flex justify-between py-1 border-b border-gray-100">
-            <span class="text-gray-500">Дата и время:</span>
+            <span class="text-gray-500">{{ t('receipt.dateTime') }}</span>
             <span class="font-medium">{{ payment.date }}</span>
           </div>
           <div class="flex justify-between py-1 border-b border-gray-100">
-            <span class="text-gray-500">Плательщик (Ученик):</span>
+            <span class="text-gray-500">{{ t('receipt.payer') }}</span>
             <span class="font-bold text-gray-900 text-sm">{{ payment.student_name }}</span>
           </div>
           <div v-if="payment.teacher || payment.teacher_name" class="flex justify-between py-1 border-b border-gray-100">
-            <span class="text-gray-500">Преподаватель:</span>
+            <span class="text-gray-500">{{ t('receipt.teacher') }}</span>
             <span class="font-medium">{{ payment.teacher || payment.teacher_name }}</span>
           </div>
           <div class="flex justify-between py-1 border-b border-gray-100">
-            <span class="text-gray-500">Оплаченный период:</span>
+            <span class="text-gray-500">{{ t('receipt.period') }}</span>
             <span class="font-semibold text-fb-blue">
-              {{ payment.months_covered ?? 1 }} мес.
+              {{ t('receipt.months', { count: payment.months_covered ?? 1 }) }}
             </span>
           </div>
           <div class="flex justify-between py-1 border-b border-gray-100">
-            <span class="text-gray-500">Форма оплаты:</span>
+            <span class="text-gray-500">{{ t('receipt.method') }}</span>
             <span class="font-medium">{{ methodLabel }}</span>
           </div>
           <div v-if="payment.comment" class="flex justify-between py-1 border-b border-gray-100">
-            <span class="text-gray-500">Назначение / Примечание:</span>
+            <span class="text-gray-500">{{ t('receipt.purpose') }}</span>
             <span class="italic text-gray-700">{{ payment.comment }}</span>
           </div>
         </div>
 
         <!-- Total Box -->
         <div class="mt-5 rounded-lg bg-gray-50 p-3.5 text-center border border-gray-200">
-          <div class="text-[11px] font-medium uppercase tracking-wider text-gray-500">Сумма к оплате</div>
+          <div class="text-[11px] font-medium uppercase tracking-wider text-gray-500">{{ t('receipt.amount') }}</div>
           <div class="mt-0.5 text-2xl font-black text-gray-900">
-            {{ formattedAmount }} <span class="text-sm font-semibold">UZS</span>
+            {{ formattedAmount }} <span class="text-sm font-semibold">{{ t('common.sum') }}</span>
           </div>
         </div>
 
         <!-- Footer / Signatures -->
         <div class="mt-6 pt-3 border-t border-gray-200 grid grid-cols-2 gap-4 text-xs">
           <div>
-            <div class="text-gray-500">Кассир / Администратор:</div>
-            <div class="mt-1 font-medium">{{ payment.creator || 'Администратор' }}</div>
+            <div class="text-gray-500">{{ t('receipt.cashier') }}</div>
+            <div class="mt-1 font-medium">{{ payment.creator || t('roles.administrator') }}</div>
             <div class="mt-4 border-b border-gray-400 w-32" />
-            <div class="text-[10px] text-gray-400 mt-0.5">(подпись)</div>
+            <div class="text-[10px] text-gray-400 mt-0.5">({{ t('receipt.signature') }})</div>
           </div>
           <div class="text-right flex flex-col items-end">
-            <div class="text-gray-500">М.П. (Место печати)</div>
+            <div class="text-gray-500">{{ t('receipt.stampPlace') }}</div>
             <div class="mt-3 h-10 w-20 rounded-full border border-dashed border-gray-300 flex items-center justify-center text-[10px] text-gray-400">
-              Печать
+              {{ t('receipt.stamp') }}
             </div>
           </div>
         </div>
 
         <div class="mt-4 text-center text-[10px] text-gray-400">
-          Спасибо за обучение! Сохраняйте квитанцию до окончания оплаченного периода.
+          {{ t('receipt.thanks') }}
         </div>
       </div>
     </div>

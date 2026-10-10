@@ -1,8 +1,9 @@
 ﻿<script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 
 import client, { type ApiEnvelope } from '../api/client';
 import DataTable from '../components/DataTable.vue';
+import { t } from '../i18n';
 
 interface SmsRow {
   phone: string;
@@ -14,12 +15,12 @@ interface SmsRow {
 const rows = ref<SmsRow[]>([]);
 const loading = ref(true);
 
-const columns = [
-  { key: 'phone', label: 'Phone' },
-  { key: 'message', label: 'Message' },
-  { key: 'status', label: 'Status' },
-  { key: 'sent_at', label: 'Sent at' },
-];
+const columns = computed(() => [
+  { key: 'phone', label: t('common.phone') },
+  { key: 'message', label: t('misc.message') },
+  { key: 'status', label: t('common.status') },
+  { key: 'sent_at', label: t('misc.sentAt') },
+]);
 
 onMounted(async () => {
   try {
@@ -33,7 +34,7 @@ onMounted(async () => {
 
 <template>
   <div class="space-y-4">
-    <h1 class="text-xl font-semibold text-fb-text">Sent SMS log</h1>
+    <h1 class="text-xl font-semibold text-fb-text">{{ t('misc.smsLog') }}</h1>
     <DataTable :columns="columns" :rows="rows" :loading="loading" />
   </div>
 </template>

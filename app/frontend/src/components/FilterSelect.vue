@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 
+import { t } from '../i18n';
+
 export interface FilterSelectOption {
   value: string | number;
   label: string;
@@ -13,7 +15,7 @@ const props = withDefaults(
     placeholder?: string;
   }>(),
   {
-    placeholder: 'Select',
+    placeholder: undefined,
   },
 );
 
@@ -53,7 +55,7 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocumentClick));
       @click.stop="open = !open"
     >
       <span class="truncate text-sm" :class="selectedLabel ? 'text-fb-text' : 'text-fb-icon'">
-        {{ selectedLabel || placeholder }}
+        {{ selectedLabel || placeholder || t('common.select') }}
       </span>
       <svg
         class="h-4 w-4 shrink-0 text-fb-icon transition-transform"

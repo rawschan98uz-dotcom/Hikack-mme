@@ -2,6 +2,7 @@
 import { ref } from 'vue';
 import { useRouter } from 'vue-router';
 
+import { locale, localeOptions, t } from '../i18n';
 import { useAuthStore } from '../stores/auth';
 
 const auth = useAuthStore();
@@ -26,13 +27,27 @@ async function submit() {
       class="w-full max-w-md rounded-xl border border-fb-line bg-fb-card p-8 shadow-fb-card space-y-5"
       @submit.prevent="submit"
     >
+      <div class="flex justify-center gap-1" role="group" :aria-label="t('layout.language')">
+        <button
+          v-for="option in localeOptions"
+          :key="option.code"
+          type="button"
+          class="rounded-full px-3 py-1 text-sm"
+          :class="locale === option.code ? 'bg-fb-hover font-semibold text-fb-blue' : 'text-fb-secondary hover:bg-fb-canvas'"
+          :aria-pressed="locale === option.code"
+          @click="locale = option.code"
+        >
+          {{ option.label }}
+        </button>
+      </div>
+
       <div class="text-center">
         <h1 class="text-2xl font-bold text-fb-blue">Hi Jack LMS</h1>
-        <p class="text-sm text-fb-secondary mt-1">Sign in — your role depends on the account</p>
+        <p class="text-sm text-fb-secondary mt-1">{{ t('login.subtitle') }}</p>
       </div>
 
       <div>
-        <label class="block text-sm font-medium text-fb-secondary mb-1">Phone</label>
+        <label class="block text-sm font-medium text-fb-secondary mb-1">{{ t('common.phone') }}</label>
         <input
           v-model="phone"
           type="tel"
@@ -44,7 +59,7 @@ async function submit() {
       </div>
 
       <div>
-        <label class="block text-sm font-medium text-fb-secondary mb-1">Password</label>
+        <label class="block text-sm font-medium text-fb-secondary mb-1">{{ t('login.password') }}</label>
         <input
           v-model="password"
           type="password"
@@ -62,7 +77,7 @@ async function submit() {
         class="w-full rounded-lg bg-fb-blue hover:bg-fb-blue-dark text-white font-semibold py-2.5 disabled:opacity-60"
         :disabled="auth.loading"
       >
-        {{ auth.loading ? 'Signing in…' : 'Sign in' }}
+        {{ auth.loading ? t('login.signingIn') : t('login.signIn') }}
       </button>
     </form>
   </div>

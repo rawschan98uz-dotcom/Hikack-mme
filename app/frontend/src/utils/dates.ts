@@ -4,6 +4,8 @@
  * Tashkent computer it is always one day earlier.
  */
 
+import { intlLocale } from '../i18n';
+
 const TASHKENT = 'Asia/Tashkent';
 
 /** Today in Tashkent as YYYY-MM-DD (the business works on Tashkent time whatever the PC clock says). */
@@ -27,4 +29,12 @@ export function dateToIso(d: Date): string {
   const month = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${d.getFullYear()}-${month}-${day}`;
+}
+
+/** "2026-09" → "Сентябрь 2026" / "Sentabr, 2026" / "September 2026" in the interface language. */
+export function formatMonthTitle(yearMonth: string): string {
+  const [year, month] = yearMonth.split('-').map(Number);
+  if (!year || !month) return yearMonth;
+  const text = new Date(year, month - 1, 1).toLocaleDateString(intlLocale(), { month: 'long', year: 'numeric' });
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }

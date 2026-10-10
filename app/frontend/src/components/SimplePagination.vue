@@ -2,7 +2,7 @@
   <div v-if="show" class="flex items-center justify-between mt-4 px-4">
     <!-- Информация -->
     <span class="text-sm text-gray-600">
-      Показано {{ shownCount }} из {{ totalCount }}
+      {{ t('pagination.shownOf', { shown: shownCount, total: totalCount }) }}
     </span>
 
     <!-- Кнопки -->
@@ -12,7 +12,7 @@
         @click="$emit('prev')"
         class="px-3 py-1 text-sm border rounded hover:bg-gray-100"
       >
-        ← Назад
+        ← {{ t('common.prev') }}
       </button>
 
       <button
@@ -20,7 +20,7 @@
         @click="$emit('next')"
         class="px-3 py-1 text-sm border rounded hover:bg-gray-100"
       >
-        Ещё {{ remaining }} →
+        {{ t('pagination.more', { count: remaining }) }} →
       </button>
     </div>
   </div>
@@ -28,6 +28,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import { t } from '../i18n'
 
 const props = defineProps<{
   totalCount: number

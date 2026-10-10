@@ -3,6 +3,9 @@ import { todayIso } from '../utils/dates';
 import { computed, onMounted, reactive, ref } from 'vue';
 
 import client, { type ApiEnvelope } from '../api/client';
+import { t } from '../i18n';
+import { confirmDialog, toast } from '../ui/feedback';
+import { apiErrorMessage } from '../utils/apiError';
 
 interface Branch {
   id: number;
@@ -40,7 +43,7 @@ const form = reactive({
 
 const isReadOnly = computed(() => Boolean(detailRow.value && !editingRow.value));
 const panelTitle = computed(() =>
-  editingRow.value ? 'Edit holiday' : detailRow.value ? 'Holiday details' : 'Add holiday',
+  editingRow.value ? t('holidays.editTitle') : detailRow.value ? t('holidays.detailTitle') : t('holidays.addTitle'),
 );
 
 const filteredRows = computed(() => {
@@ -116,7 +119,7 @@ function closePanel() {
 async function submitForm() {
   formError.value = '';
   if (!form.name.trim() || !form.date || !form.branch_id) {
-    formError.value = 'Name, date and branch are required';
+    formError.value = t('holidays.required');
     return;
   }
   saving.value = true;
@@ -127,27 +130,38 @@ async function submitForm() {
       branch_id: form.branch_id,
       affects_payment: form.affects_payment,
     };
+    const wasEditing = Boolean(editingRow.value);
     if (editingRow.value) {
       await client.patch(`/holidays/${editingRow.value.id}`, payload);
     } else {
       await client.post('/holidays', payload);
     }
     closePanel();
+    toast.success(wasEditing ? t('toast.saved') : t('toast.created'));
     await loadRows();
-  } catch {
-    formError.value = 'Could not save';
+  } catch (err: unknown) {
+    formError.value = apiErrorMessage(err, t('errors.saveFailed'));
   } finally {
     saving.value = false;
   }
 }
 
 async function deleteRow() {
-  if (!detailRow.value || !window.confirm('Delete this holiday?')) return;
+  if (!detailRow.value) return;
+  const ok = await confirmDialog({
+    title: t('holidays.deleteConfirm', { name: detailRow.value.name }),
+    message: t('confirm.cannotUndo'),
+    danger: true,
+  });
+  if (!ok || !detailRow.value) return;
   deleting.value = true;
   try {
     await client.delete(`/holidays/${detailRow.value.id}`);
     closePanel();
+    toast.success(t('toast.deleted'));
     await loadRows();
+  } catch (err: unknown) {
+    toast.error(apiErrorMessage(err, t('errors.deleteFailed')));
   } finally {
     deleting.value = false;
   }
@@ -162,9 +176,9 @@ onMounted(async () => {
 <template>
   <div class="space-y-4">
     <div class="flex items-center justify-between">
-      <h1 class="text-xl font-semibold text-fb-text">Holidays</h1>
+      <h1 class="text-xl font-semibold text-fb-text">{{ t('nav.holidays') }}</h1>
       <button type="button" class="rounded-lg bg-fb-blue px-4 py-2 text-sm font-medium text-white" @click="openCreate">
-        ADD NEW
+        {{ t('common.addNew') }}
       </button>
     </div>
 
@@ -175,7 +189,7 @@ onMounted(async () => {
         :class="activeTab === 'upcoming' ? 'border-fb-blue font-medium text-fb-blue' : 'border-transparent text-fb-secondary'"
         @click="activeTab = 'upcoming'"
       >
-        Upcoming
+        {{ t('holidays.upcoming') }}
       </button>
       <button
         type="button"
@@ -183,20 +197,20 @@ onMounted(async () => {
         :class="activeTab === 'past' ? 'border-fb-blue font-medium text-fb-blue' : 'border-transparent text-fb-secondary'"
         @click="activeTab = 'past'"
       >
-        Past
+        {{ t('holidays.past') }}
       </button>
     </div>
 
     <div class="overflow-hidden rounded-xl border border-fb-line bg-fb-card">
-      <div v-if="loading" class="p-8 text-center text-fb-secondary">Loading…</div>
-      <div v-else-if="!filteredRows.length" class="p-8 text-center text-fb-icon">No holidays</div>
+      <div v-if="loading" class="p-8 text-center text-fb-secondary">{{ t('common.loading') }}</div>
+      <div v-else-if="!filteredRows.length" class="p-8 text-center text-fb-icon">{{ t('holidays.empty') }}</div>
       <table v-else class="w-full text-base">
         <thead class="border-b bg-fb-canvas">
           <tr>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Name</th>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Date</th>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Branch</th>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Affects payment</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('common.name') }}</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('common.date') }}</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('common.branch') }}</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('holidays.affectsPayment') }}</th>
           </tr>
         </thead>
         <tbody>
@@ -204,7 +218,7 @@ onMounted(async () => {
             <td class="px-5 py-4">{{ row.name }}</td>
             <td class="px-5 py-4">{{ row.date }}</td>
             <td class="px-5 py-4">{{ row.branch }}</td>
-            <td class="px-5 py-4">{{ row.affects_payment ? 'Yes' : 'No' }}</td>
+            <td class="px-5 py-4">{{ row.affects_payment ? t('common.yes') : t('common.no') }}</td>
           </tr>
         </tbody>
       </table>
@@ -215,40 +229,40 @@ onMounted(async () => {
       <div class="drawer-panel-fb max-w-lg">
         <div class="flex items-center justify-between border-b px-6 py-4">
           <h2 class="text-lg font-semibold">{{ panelTitle }}</h2>
-          <button type="button" @click="closePanel">✕</button>
+          <button type="button" :aria-label="t('common.close')" @click="closePanel">✕</button>
         </div>
-        <div v-if="panelLoading" class="p-6 text-fb-secondary">Loading…</div>
+        <div v-if="panelLoading" class="p-6 text-fb-secondary">{{ t('common.loading') }}</div>
         <form v-else class="flex flex-1 flex-col overflow-hidden" @submit.prevent="submitForm">
           <div class="flex-1 space-y-4 overflow-y-auto p-6">
             <div>
-              <label class="mb-1 block text-sm font-medium">Name</label>
+              <label class="mb-1 block text-sm font-medium">{{ t('common.name') }}</label>
               <input v-model="form.name" :readonly="isReadOnly" required class="w-full rounded-lg border px-3 py-2 read-only:bg-fb-canvas" />
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium">Date</label>
+              <label class="mb-1 block text-sm font-medium">{{ t('common.date') }}</label>
               <input v-model="form.date" type="date" :readonly="isReadOnly" required class="w-full rounded-lg border px-3 py-2 read-only:bg-fb-canvas" />
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium">Branch</label>
+              <label class="mb-1 block text-sm font-medium">{{ t('common.branch') }}</label>
               <select v-model="form.branch_id" :disabled="isReadOnly" class="w-full rounded-lg border px-3 py-2">
                 <option v-for="b in branches" :key="b.id" :value="b.id">{{ b.name }}</option>
               </select>
             </div>
             <label class="flex items-center gap-2 text-sm">
               <input v-model="form.affects_payment" type="checkbox" :disabled="isReadOnly" />
-              Affects payment
+              {{ t('holidays.affectsPayment') }}
             </label>
             <p v-if="formError" class="text-sm text-fb-danger">{{ formError }}</p>
           </div>
           <div class="flex gap-2 border-t px-6 py-4">
             <template v-if="isReadOnly && detailRow">
-              <button type="button" class="rounded-lg bg-fb-blue px-5 py-2 text-sm text-white" @click="startEdit">Edit</button>
-              <button type="button" class="rounded-lg border border-red-300 px-5 py-2 text-sm text-fb-danger" :disabled="deleting" @click="deleteRow">Delete</button>
+              <button type="button" class="rounded-lg bg-fb-blue px-5 py-2 text-sm text-white" @click="startEdit">{{ t('common.edit') }}</button>
+              <button type="button" class="rounded-lg border border-red-300 px-5 py-2 text-sm text-fb-danger" :disabled="deleting" @click="deleteRow">{{ t('common.delete') }}</button>
             </template>
             <button v-else type="submit" class="rounded-lg bg-fb-blue px-5 py-2 text-sm text-white" :disabled="saving">
-              {{ saving ? 'Saving…' : editingRow ? 'Save' : 'Create' }}
+              {{ saving ? t('common.saving') : editingRow ? t('common.save') : t('common.create') }}
             </button>
-            <button type="button" class="rounded-lg border px-5 py-2 text-sm" @click="closePanel">Cancel</button>
+            <button type="button" class="rounded-lg border px-5 py-2 text-sm" @click="closePanel">{{ t('common.cancel') }}</button>
           </div>
         </form>
       </div>

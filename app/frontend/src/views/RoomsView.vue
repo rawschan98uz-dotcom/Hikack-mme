@@ -2,6 +2,9 @@
 import { computed, onMounted, reactive, ref } from 'vue';
 
 import client, { type ApiEnvelope } from '../api/client';
+import { t } from '../i18n';
+import { confirmDialog, toast } from '../ui/feedback';
+import { apiErrorMessage } from '../utils/apiError';
 
 interface Branch {
   id: number;
@@ -35,7 +38,7 @@ const form = reactive({
 
 const isReadOnly = computed(() => Boolean(detailRow.value && !editingRow.value));
 const panelTitle = computed(() =>
-  editingRow.value ? 'Edit room' : detailRow.value ? 'Room details' : 'Add room',
+  editingRow.value ? t('rooms.editTitle') : detailRow.value ? t('rooms.detailTitle') : t('rooms.addTitle'),
 );
 
 function resetForm() {
@@ -102,7 +105,7 @@ function closePanel() {
 async function submitForm() {
   formError.value = '';
   if (!form.name.trim() || !form.branch_id) {
-    formError.value = 'Name and branch are required';
+    formError.value = t('rooms.nameBranchRequired');
     return;
   }
   saving.value = true;
@@ -112,27 +115,38 @@ async function submitForm() {
       room_capacity: form.room_capacity,
       branch_id: form.branch_id,
     };
+    const wasEditing = Boolean(editingRow.value);
     if (editingRow.value) {
       await client.patch(`/room/${editingRow.value.id}`, payload);
     } else {
       await client.post('/room', payload);
     }
     closePanel();
+    toast.success(wasEditing ? t('toast.saved') : t('toast.created'));
     await loadRows();
-  } catch {
-    formError.value = 'Could not save';
+  } catch (err: unknown) {
+    formError.value = apiErrorMessage(err, t('errors.saveFailed'));
   } finally {
     saving.value = false;
   }
 }
 
 async function deleteRow() {
-  if (!detailRow.value || !window.confirm('Delete this room?')) return;
+  if (!detailRow.value) return;
+  const ok = await confirmDialog({
+    title: t('rooms.deleteConfirm', { name: detailRow.value.name }),
+    message: t('confirm.cannotUndo'),
+    danger: true,
+  });
+  if (!ok || !detailRow.value) return;
   deleting.value = true;
   try {
     await client.delete(`/room/${detailRow.value.id}`);
     closePanel();
+    toast.success(t('toast.deleted'));
     await loadRows();
+  } catch (err: unknown) {
+    toast.error(apiErrorMessage(err, t('errors.deleteFailed')));
   } finally {
     deleting.value = false;
   }
@@ -147,20 +161,20 @@ onMounted(async () => {
 <template>
   <div class="space-y-4">
     <div class="flex items-center justify-between">
-      <h1 class="text-xl font-semibold text-fb-text">Rooms</h1>
+      <h1 class="text-xl font-semibold text-fb-text">{{ t('nav.rooms') }}</h1>
       <button type="button" class="rounded-lg bg-fb-blue px-4 py-2 text-sm font-medium text-white" @click="openCreate">
-        ADD NEW
+        {{ t('common.addNew') }}
       </button>
     </div>
 
     <div class="overflow-hidden rounded-xl border border-fb-line bg-fb-card">
-      <div v-if="loading" class="p-8 text-center text-fb-secondary">Loading…</div>
+      <div v-if="loading" class="p-8 text-center text-fb-secondary">{{ t('common.loading') }}</div>
       <table v-else class="w-full text-base">
         <thead class="border-b bg-fb-canvas">
           <tr>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Name</th>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Capacity</th>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Branch</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('common.name') }}</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('rooms.capacity') }}</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('common.branch') }}</th>
           </tr>
         </thead>
         <tbody>
@@ -178,21 +192,21 @@ onMounted(async () => {
       <div class="drawer-panel-fb max-w-lg">
         <div class="flex items-center justify-between border-b px-6 py-4">
           <h2 class="text-lg font-semibold">{{ panelTitle }}</h2>
-          <button type="button" @click="closePanel">✕</button>
+          <button type="button" :aria-label="t('common.close')" @click="closePanel">✕</button>
         </div>
-        <div v-if="panelLoading" class="p-6 text-fb-secondary">Loading…</div>
+        <div v-if="panelLoading" class="p-6 text-fb-secondary">{{ t('common.loading') }}</div>
         <form v-else class="flex flex-1 flex-col overflow-hidden" @submit.prevent="submitForm">
           <div class="flex-1 space-y-4 overflow-y-auto p-6">
             <div>
-              <label class="mb-1 block text-sm font-medium">Name</label>
+              <label class="mb-1 block text-sm font-medium">{{ t('common.name') }}</label>
               <input v-model="form.name" :readonly="isReadOnly" required class="w-full rounded-lg border px-3 py-2 read-only:bg-fb-canvas" />
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium">Capacity</label>
+              <label class="mb-1 block text-sm font-medium">{{ t('rooms.capacity') }}</label>
               <input v-model.number="form.room_capacity" type="number" min="1" :readonly="isReadOnly" class="w-full rounded-lg border px-3 py-2 read-only:bg-fb-canvas" />
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium">Branch</label>
+              <label class="mb-1 block text-sm font-medium">{{ t('common.branch') }}</label>
               <select v-model="form.branch_id" :disabled="isReadOnly" class="w-full rounded-lg border px-3 py-2">
                 <option v-for="b in branches" :key="b.id" :value="b.id">{{ b.name }}</option>
               </select>
@@ -201,13 +215,13 @@ onMounted(async () => {
           </div>
           <div class="flex gap-2 border-t px-6 py-4">
             <template v-if="isReadOnly && detailRow">
-              <button type="button" class="rounded-lg bg-fb-blue px-5 py-2 text-sm text-white" @click="startEdit">Edit</button>
-              <button type="button" class="rounded-lg border border-red-300 px-5 py-2 text-sm text-fb-danger" :disabled="deleting" @click="deleteRow">Delete</button>
+              <button type="button" class="rounded-lg bg-fb-blue px-5 py-2 text-sm text-white" @click="startEdit">{{ t('common.edit') }}</button>
+              <button type="button" class="rounded-lg border border-red-300 px-5 py-2 text-sm text-fb-danger" :disabled="deleting" @click="deleteRow">{{ t('common.delete') }}</button>
             </template>
             <button v-else type="submit" class="rounded-lg bg-fb-blue px-5 py-2 text-sm text-white" :disabled="saving">
-              {{ saving ? 'Saving…' : editingRow ? 'Save' : 'Create' }}
+              {{ saving ? t('common.saving') : editingRow ? t('common.save') : t('common.create') }}
             </button>
-            <button type="button" class="rounded-lg border px-5 py-2 text-sm" @click="closePanel">Cancel</button>
+            <button type="button" class="rounded-lg border px-5 py-2 text-sm" @click="closePanel">{{ t('common.cancel') }}</button>
           </div>
         </form>
       </div>

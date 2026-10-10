@@ -2,6 +2,9 @@
 import { onMounted, ref } from 'vue';
 
 import client, { type ApiEnvelope } from '../api/client';
+import { t } from '../i18n';
+import { toast } from '../ui/feedback';
+import { apiErrorMessage } from '../utils/apiError';
 
 interface SettingsPayload {
   sms_enabled: boolean;
@@ -12,7 +15,6 @@ const smsEnabled = ref(false);
 const smsText = ref('');
 const loading = ref(true);
 const saving = ref(false);
-const message = ref('');
 
 async function load() {
   loading.value = true;
@@ -27,15 +29,14 @@ async function load() {
 
 async function save() {
   saving.value = true;
-  message.value = '';
   try {
     await client.post('/company/settings', {
       sms_enabled: smsEnabled.value,
       sms_advance_text: smsText.value,
     });
-    message.value = 'Saved';
-  } catch {
-    message.value = 'Save failed';
+    toast.success(t('toast.saved'));
+  } catch (err: unknown) {
+    toast.error(apiErrorMessage(err, t('errors.saveFailed')));
   } finally {
     saving.value = false;
   }
@@ -46,22 +47,21 @@ onMounted(load);
 
 <template>
   <div class="space-y-6">
-    <h1 class="text-xl font-semibold text-fb-text">Auto-SMS</h1>
-    <div v-if="loading" class="text-sm text-fb-secondary">Loading…</div>
+    <h1 class="text-xl font-semibold text-fb-text">{{ t('settings.autoSmsTitle') }}</h1>
+    <div v-if="loading" class="text-sm text-fb-secondary">{{ t('common.loading') }}</div>
     <form v-else class="max-w-2xl space-y-4 rounded-xl border border-fb-line bg-fb-card p-6" @submit.prevent="save">
       <label class="flex items-center gap-3 text-sm text-fb-secondary">
         <input v-model="smsEnabled" type="checkbox" class="rounded border-fb-line" />
-        Enable automatic SMS notifications
+        {{ t('settings.smsEnable') }}
       </label>
       <div>
-        <h2 class="mb-2 text-sm font-medium text-fb-secondary">SMS text: Advance payment notification</h2>
+        <h2 class="mb-2 text-sm font-medium text-fb-secondary">{{ t('settings.smsAdvanceText') }}</h2>
         <textarea v-model="smsText" class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm" rows="4" />
       </div>
       <div class="flex items-center gap-3">
         <button type="submit" class="rounded-lg bg-fb-blue px-4 py-2 text-sm font-medium text-white" :disabled="saving">
-          {{ saving ? 'Saving…' : 'Save' }}
+          {{ saving ? t('common.saving') : t('common.save') }}
         </button>
-        <span v-if="message" class="text-sm text-fb-secondary">{{ message }}</span>
       </div>
     </form>
   </div>

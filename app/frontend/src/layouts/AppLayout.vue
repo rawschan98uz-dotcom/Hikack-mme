@@ -10,6 +10,7 @@ import CardStack from '../components/CardStack.vue';
 import { firstFlyoutLink, filterNavSections, flyoutSectionForPath, navForRole, primaryNav, sectionForPath } from '../config/navigation';
 import { useAuthStore } from '../stores/auth';
 import { useLocaleStore, type LocaleCode } from '../stores/locale';
+import { t, tMaybe } from '../i18n';
 import { isHiddenForTeacher, PERM } from '../utils/rbac';
 import { withCreateQuery } from '../utils/crossLinks';
 import client, { type ApiEnvelope } from '../api/client';
@@ -23,8 +24,8 @@ const router = useRouter();
 
 const brandName = 'Hi Jack LMS';
 const userInitial = computed(() => (auth.user?.name?.[0] ?? 'U').toUpperCase());
-const userShortName = computed(() => auth.user?.first_name || auth.user?.name || 'User');
-const userRoleLabel = computed(() => auth.user?.role_label ?? '');
+const userShortName = computed(() => auth.user?.first_name || auth.user?.name || t('layout.user'));
+const userRoleLabel = computed(() => (auth.user ? tMaybe(`roles.${auth.user.role}`, auth.user.role_label ?? '') : ''));
 
 const openFlyoutId = ref<string | null>(null);
 const showQuickAdd = ref(false);
@@ -40,8 +41,8 @@ const showScheduleFab = computed(() => auth.can(PERM.GROUPS_VIEW));
 
 const quickAddItems = computed<QuickAddItem[]>(() => {
   const items: QuickAddItem[] = [
-    { label: 'Add student', icon: 'plus', ...withCreateQuery('/students') },
-    { label: 'Pay Student', icon: 'pay', ...withCreateQuery('/finance/payments') },
+    { label: t('layout.addStudent'), icon: 'plus', ...withCreateQuery('/students') },
+    { label: t('layout.payStudent'), icon: 'pay', ...withCreateQuery('/finance/payments') },
   ];
   return items.filter((item) => {
     if (item.path.startsWith('/finance')) return auth.can(PERM.PAYMENTS_WRITE);
@@ -54,14 +55,14 @@ const visibleNav = computed(() => navForRole(filterNavSections(primaryNav, (p) =
 
 const appGridItems = computed(() => {
   const items = [
-    { label: 'Dashboard', path: '/dashboard/default', permission: PERM.DASHBOARD_VIEW },
-    { label: 'Leads', path: '/leads', permission: PERM.LEADS_VIEW },
-    { label: 'Teachers', path: '/teachers', permission: PERM.TEACHERS_VIEW },
-    { label: 'Groups', path: '/groups', permission: PERM.GROUPS_VIEW },
-    { label: 'Students', path: '/students', permission: PERM.STUDENTS_VIEW },
-    { label: 'Finance', path: '/finance/payments', permission: PERM.PAYMENTS_VIEW },
-    { label: 'Reports', path: '/reports/conversion', permission: PERM.REPORTS_VIEW },
-    { label: 'Settings', path: '/auto-sms', permission: PERM.SETTINGS_INTEGRATIONS },
+    { label: t('nav.dashboard'), path: '/dashboard/default', permission: PERM.DASHBOARD_VIEW },
+    { label: t('nav.leads'), path: '/leads', permission: PERM.LEADS_VIEW },
+    { label: t('nav.teachers'), path: '/teachers', permission: PERM.TEACHERS_VIEW },
+    { label: t('nav.groups'), path: '/groups', permission: PERM.GROUPS_VIEW },
+    { label: t('nav.students'), path: '/students', permission: PERM.STUDENTS_VIEW },
+    { label: t('nav.finance'), path: '/finance/payments', permission: PERM.PAYMENTS_VIEW },
+    { label: t('nav.reports'), path: '/reports/conversion', permission: PERM.REPORTS_VIEW },
+    { label: t('nav.settings'), path: '/auto-sms', permission: PERM.SETTINGS_INTEGRATIONS },
   ];
   return items.filter((item) => auth.can(item.permission) && !(auth.role === 'teacher' && isHiddenForTeacher(item.path)));
 });
@@ -263,7 +264,7 @@ function logout() {
           </span>
 
           <span class="nav-sidebar-label">
-            {{ section.label }}
+            {{ t(section.label) }}
           </span>
         </button>
       </nav>
@@ -282,7 +283,7 @@ function logout() {
             v-if="child.type === 'header'"
             class="flex items-center gap-2 px-5 pt-4 pb-1 text-[13px] font-semibold uppercase tracking-wide text-fb-icon"
           >
-            <span>{{ child.label }}</span>
+            <span>{{ t(child.label) }}</span>
             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M6 9l6 6 6-6" />
             </svg>
@@ -296,7 +297,7 @@ function logout() {
               : 'text-fb-secondary hover:bg-fb-canvas hover:text-fb-text'"
           >
             <NavIcon :name="child.icon" :size="20" />
-            <span class="leading-snug">{{ child.label }}</span>
+            <span class="leading-snug">{{ t(child.label) }}</span>
           </RouterLink>
         </template>
       </nav>
@@ -342,7 +343,7 @@ function logout() {
             <input
               v-model="searchText"
               type="search"
-              placeholder="Search"
+              :placeholder="t('layout.searchPlaceholder')"
               class="h-12 w-full rounded-full border border-fb-line bg-fb-canvas pl-12 pr-5 text-[16px] text-fb-text placeholder:text-fb-icon focus:border-fb-blue/40 focus:outline-none focus:ring-2 focus:ring-fb-blue/10"
             />
           </form>
@@ -354,7 +355,7 @@ function logout() {
             <button
               type="button"
               class="min-w-[52px] rounded-full border border-fb-line px-3 py-1.5 text-[15px] font-normal lowercase text-fb-secondary hover:border-fb-line hover:text-fb-blue"
-              :title="`Language: ${localeStore.code}`"
+              :title="t('layout.language')"
               @click.stop="toggleLocaleMenu"
             >
               {{ localeStore.code }}
@@ -373,7 +374,7 @@ function logout() {
                   : 'text-fb-secondary hover:bg-fb-canvas hover:text-fb-blue'"
                 @click="selectLocale(option.code)"
               >
-                {{ option.code }} - {{ option.label }}
+                {{ option.label }}
               </button>
             </div>
           </div>
@@ -382,7 +383,7 @@ function logout() {
             <button
               type="button"
               class="icon-btn-fb"
-              title="Modules"
+              :title="t('layout.modules')"
               @click.stop="toggleAppGrid"
             >
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
@@ -411,7 +412,7 @@ function logout() {
           <button
             type="button"
             class="icon-btn-fb"
-            title="Fullscreen"
+            :title="t('layout.fullscreen')"
             @click="toggleFullscreen"
           >
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
@@ -423,7 +424,7 @@ function logout() {
             v-if="auth.can(PERM.REMINDERS_VIEW)"
             type="button"
             class="icon-btn-fb relative"
-            :title="reminderCount ? `Напоминания: ${reminderCount} (просрочено: ${reminderOverdue})` : 'Reminders'"
+            :title="reminderCount ? t('layout.remindersCount', { count: reminderCount, overdue: reminderOverdue }) : t('layout.reminders')"
             @click="goReminders"
           >
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
@@ -469,10 +470,10 @@ function logout() {
                 class="block w-full px-4 py-3 text-left text-[15px] text-fb-text hover:bg-fb-canvas"
                 @click="goAccount"
               >
-                Account
+                {{ t('layout.account') }}
               </button>
               <p v-if="userRoleLabel" class="px-4 py-2 text-xs text-fb-icon">
-                Role: {{ userRoleLabel }}
+                {{ t('layout.role', { role: userRoleLabel }) }}
               </p>
               <div class="mx-3 border-t border-fb-line" />
               <button
@@ -480,7 +481,7 @@ function logout() {
                 class="block w-full px-4 py-3 text-left text-[15px] text-fb-text hover:bg-fb-canvas"
                 @click="logout"
               >
-                Sign out
+                {{ t('layout.signOut') }}
               </button>
             </div>
           </div>

@@ -2,6 +2,8 @@
 import { onMounted, ref } from 'vue';
 
 import client, { type ApiEnvelope } from '../api/client';
+import { t } from '../i18n';
+import { apiErrorMessage } from '../utils/apiError';
 
 interface TodayLesson {
   group_id: number;
@@ -31,7 +33,7 @@ async function loadToday() {
     const { data } = await client.get<ApiEnvelope<TodayLesson[]>>('/teacher-attendance/today');
     lessons.value = data.data;
   } catch {
-    error.value = 'Не удалось загрузить уроки на сегодня';
+    error.value = t('checkin.loadFailed');
   } finally {
     loading.value = false;
   }
@@ -44,11 +46,17 @@ async function checkIn(lesson: TodayLesson) {
     await client.post('/teacher-attendance/self-checkin', { group_id: lesson.group_id });
     await loadToday();
   } catch (err: unknown) {
-    const data = (err as { response?: { data?: { message?: string } } })?.response?.data;
-    error.value = data?.message || 'Не удалось отметиться';
+    error.value = apiErrorMessage(err, t('checkin.failed'));
   } finally {
     busyGroupId.value = null;
   }
+}
+
+function statusLabel(lesson: TodayLesson) {
+  if (lesson.status === STATUS_LATE) return t('checkin.statusLate');
+  if (lesson.status === STATUS_ABSENT) return t('checkin.statusAbsent');
+  if (lesson.status === 1) return t('checkin.statusPresent');
+  return lesson.status_label;
 }
 
 function badgeClass(status: number | null) {
@@ -63,12 +71,12 @@ onMounted(loadToday);
 <template>
   <section class="border-b border-fb-line bg-fb-card px-5 py-4">
     <div class="mb-3 flex items-baseline justify-between gap-3">
-      <h2 class="text-[15px] font-semibold text-fb-text">Отметка присутствия</h2>
-      <span class="text-xs text-fb-secondary">Опоздание — позже 5 минут после начала урока</span>
+      <h2 class="text-[15px] font-semibold text-fb-text">{{ t('checkin.title') }}</h2>
+      <span class="text-xs text-fb-secondary">{{ t('checkin.lateRule') }}</span>
     </div>
 
-    <div v-if="loading" class="py-3 text-sm text-fb-secondary">Загрузка…</div>
-    <div v-else-if="!lessons.length" class="py-3 text-sm text-fb-secondary">Сегодня у вас нет уроков по расписанию.</div>
+    <div v-if="loading" class="py-3 text-sm text-fb-secondary">{{ t('common.loading') }}</div>
+    <div v-else-if="!lessons.length" class="py-3 text-sm text-fb-secondary">{{ t('checkin.noLessons') }}</div>
     <ul v-else class="divide-y divide-fb-line">
       <li v-for="lesson in lessons" :key="lesson.group_id" class="flex flex-wrap items-center justify-between gap-3 py-3">
         <div class="min-w-0">
@@ -83,7 +91,7 @@ onMounted(loadToday);
           class="rounded-full px-3 py-1 text-xs font-semibold"
           :class="badgeClass(lesson.status)"
         >
-          {{ lesson.status_label }} · {{ lesson.checked_at }}
+          {{ statusLabel(lesson) }} · {{ lesson.checked_at }}
         </span>
         <button
           v-else
@@ -92,7 +100,7 @@ onMounted(loadToday);
           :disabled="busyGroupId === lesson.group_id"
           @click="checkIn(lesson)"
         >
-          {{ busyGroupId === lesson.group_id ? 'Отмечаю…' : 'Я пришёл' }}
+          {{ busyGroupId === lesson.group_id ? t('checkin.checking') : t('checkin.iAmHere') }}
         </button>
       </li>
     </ul>

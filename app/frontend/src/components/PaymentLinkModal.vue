@@ -2,6 +2,9 @@
 import { ref, watch } from 'vue';
 
 import client, { type ApiEnvelope } from '../api/client';
+import { t } from '../i18n';
+import { toast } from '../ui/feedback';
+import { apiErrorMessage } from '../utils/apiError';
 
 export interface StudentPaymentLinkTarget {
   id: number;
@@ -84,7 +87,7 @@ async function loadLinks() {
     );
     linksData.value = data.data;
   } catch {
-    error.value = 'Не удалось загрузить ссылки на оплату';
+    error.value = t('payLink.loadFailed');
   } finally {
     loading.value = false;
   }
@@ -92,8 +95,9 @@ async function loadLinks() {
 
 function copyLink(url: string, type: string) {
   if (!url) return;
-  navigator.clipboard.writeText(url);
+  void navigator.clipboard.writeText(url);
   copiedType.value = type;
+  toast.success(t('common.copied'));
   setTimeout(() => {
     copiedType.value = '';
   }, 2000);
@@ -104,15 +108,16 @@ async function sendToTelegram() {
   sendingTg.value = true;
   tgMessage.value = '';
   try {
-    const { data } = await client.post<{ data: { message: string; sent: boolean } }>(
+    await client.post<{ data: { message: string; sent: boolean } }>(
       `/students/${props.student.id}/send-payment-link`,
       { amount: customAmount.value },
     );
     tgSuccess.value = true;
-    tgMessage.value = data.data.message || 'Ссылка успешно отправлена родителю!';
-  } catch (err: any) {
+    tgMessage.value = t('payLink.sentToParent');
+    toast.success(t('payLink.sentToParent'));
+  } catch (err: unknown) {
     tgSuccess.value = false;
-    tgMessage.value = err.response?.data?.message || err.response?.data?.error || 'Не удалось отправить ссылку в Telegram';
+    tgMessage.value = apiErrorMessage(err, t('payLink.sendFailed'));
   } finally {
     sendingTg.value = false;
   }
@@ -134,11 +139,11 @@ function close() {
         <div>
           <h3 class="text-base font-semibold text-fb-text flex items-center gap-2">
             <span>💳</span>
-            <span>Ссылка на онлайн-оплату</span>
+            <span>{{ t('payLink.title') }}</span>
           </h3>
           <p class="text-xs text-fb-secondary mt-0.5">{{ student.full_name }} • {{ student.phone }}</p>
         </div>
-        <button type="button" class="text-fb-secondary hover:text-fb-text" @click="close">✕</button>
+        <button type="button" class="text-fb-secondary hover:text-fb-text" :aria-label="t('common.close')" @click="close">✕</button>
       </div>
 
       <!-- Content -->
@@ -146,7 +151,7 @@ function close() {
         <!-- Controls: Period and Amount -->
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="mb-1 block text-xs font-medium text-fb-secondary">Период (месяцев)</label>
+            <label class="mb-1 block text-xs font-medium text-fb-secondary">{{ t('payLink.months') }}</label>
             <input
               v-model.number="months"
               type="number"
@@ -157,7 +162,7 @@ function close() {
             />
           </div>
           <div>
-            <label class="mb-1 block text-xs font-medium text-fb-secondary">Сумма к оплате (UZS)</label>
+            <label class="mb-1 block text-xs font-medium text-fb-secondary">{{ t('payLink.amount') }}</label>
             <input
               v-model.number="customAmount"
               type="number"
@@ -169,11 +174,11 @@ function close() {
         </div>
 
         <div v-if="student.course_price" class="text-[11px] text-fb-secondary">
-          Базовый тариф курса: {{ student.course_price.toLocaleString() }} UZS / месяц
+          {{ t('payLink.basePrice', { amount: student.course_price.toLocaleString('ru-RU') }) }}
         </div>
 
         <div v-if="loading" class="py-6 text-center text-xs text-fb-secondary">
-          Генерация ссылок…
+          {{ t('payLink.generating') }}
         </div>
         <div v-else-if="error" class="text-xs text-fb-danger text-center">
           {{ error }}
@@ -190,7 +195,7 @@ function close() {
                   class="rounded px-1.5 py-0.5 text-[10px] font-medium"
                   :class="linksData.click.configured ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'"
                 >
-                  {{ linksData.click.configured ? 'Активен' : 'Демо режим' }}
+                  {{ linksData.click.configured ? t('payLink.active') : t('payLink.demo') }}
                 </span>
               </div>
               <div class="flex items-center gap-2">
@@ -200,14 +205,14 @@ function close() {
                   rel="noopener"
                   class="text-[11px] font-medium text-fb-blue hover:underline"
                 >
-                  Открыть ↗
+                  {{ t('common.open') }} ↗
                 </a>
                 <button
                   type="button"
                   class="rounded-lg border border-fb-line bg-white px-2.5 py-1 text-xs font-medium text-fb-secondary hover:border-fb-blue hover:text-fb-blue"
                   @click="copyLink(linksData.click.url, 'click')"
                 >
-                  {{ copiedType === 'click' ? '✓ Скопировано' : 'Скопировать' }}
+                  {{ copiedType === 'click' ? `✓ ${t('common.copied')}` : t('common.copy') }}
                 </button>
               </div>
             </div>
@@ -226,7 +231,7 @@ function close() {
                   class="rounded px-1.5 py-0.5 text-[10px] font-medium"
                   :class="linksData.payme.configured ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'"
                 >
-                  {{ linksData.payme.configured ? 'Активен' : 'Демо режим' }}
+                  {{ linksData.payme.configured ? t('payLink.active') : t('payLink.demo') }}
                 </span>
               </div>
               <div class="flex items-center gap-2">
@@ -236,14 +241,14 @@ function close() {
                   rel="noopener"
                   class="text-[11px] font-medium text-fb-blue hover:underline"
                 >
-                  Открыть ↗
+                  {{ t('common.open') }} ↗
                 </a>
                 <button
                   type="button"
                   class="rounded-lg border border-fb-line bg-white px-2.5 py-1 text-xs font-medium text-fb-secondary hover:border-fb-blue hover:text-fb-blue"
                   @click="copyLink(linksData.payme.url, 'payme')"
                 >
-                  {{ copiedType === 'payme' ? '✓ Скопировано' : 'Скопировать' }}
+                  {{ copiedType === 'payme' ? `✓ ${t('common.copied')}` : t('common.copy') }}
                 </button>
               </div>
             </div>
@@ -262,7 +267,7 @@ function close() {
                   class="rounded px-1.5 py-0.5 text-[10px] font-medium"
                   :class="linksData.uzum.configured ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'"
                 >
-                  {{ linksData.uzum.configured ? 'Активен' : 'Демо режим' }}
+                  {{ linksData.uzum.configured ? t('payLink.active') : t('payLink.demo') }}
                 </span>
               </div>
               <div class="flex items-center gap-2">
@@ -272,14 +277,14 @@ function close() {
                   rel="noopener"
                   class="text-[11px] font-medium text-fb-blue hover:underline"
                 >
-                  Открыть ↗
+                  {{ t('common.open') }} ↗
                 </a>
                 <button
                   type="button"
                   class="rounded-lg border border-fb-line bg-white px-2.5 py-1 text-xs font-medium text-fb-secondary hover:border-fb-blue hover:text-fb-blue"
                   @click="copyLink(linksData.uzum.url, 'uzum')"
                 >
-                  {{ copiedType === 'uzum' ? '✓ Скопировано' : 'Скопировать' }}
+                  {{ copiedType === 'uzum' ? `✓ ${t('common.copied')}` : t('common.copy') }}
                 </button>
               </div>
             </div>
@@ -294,10 +299,10 @@ function close() {
           <div class="flex items-center justify-between">
             <div class="text-xs text-fb-secondary">
               <span v-if="student.parent_telegram" class="text-emerald-700 font-medium">
-                ✓ Telegram родителя: {{ student.parent_telegram }}
+                ✓ {{ t('payLink.parentTelegram', { tg: student.parent_telegram }) }}
               </span>
               <span v-else class="text-amber-700">
-                ⚠️ У ученика не указан Telegram родителя
+                ⚠️ {{ t('payLink.noParentTelegram') }}
               </span>
             </div>
             <button
@@ -307,7 +312,7 @@ function close() {
               @click="sendToTelegram"
             >
               <span>📲</span>
-              <span>{{ sendingTg ? 'Отправка…' : 'Отправить в Telegram' }}</span>
+              <span>{{ sendingTg ? t('common.sending') : t('payLink.sendTelegram') }}</span>
             </button>
           </div>
           <p
@@ -326,7 +331,7 @@ function close() {
           class="rounded-lg border border-fb-line px-4 py-2 text-sm font-medium text-fb-secondary hover:bg-fb-canvas"
           @click="close"
         >
-          Закрыть
+          {{ t('common.close') }}
         </button>
       </div>
     </div>

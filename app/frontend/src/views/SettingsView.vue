@@ -2,6 +2,9 @@
 import { computed, onMounted, ref } from 'vue';
 
 import client, { type ApiEnvelope } from '../api/client';
+import { t, type MessageKey } from '../i18n';
+import { toast } from '../ui/feedback';
+import { apiErrorMessage } from '../utils/apiError';
 
 interface SettingsData {
   name: string;
@@ -24,12 +27,31 @@ const settings = ref<SettingsData | null>(null);
 const activeTab = ref('General settings');
 const loading = ref(true);
 const saving = ref(false);
-const message = ref('');
 const copiedField = ref('');
+
+// Tab names come from the server in English; show them in the interface language
+const TAB_LABELS: Record<string, MessageKey> = {
+  'General settings': 'settingsTab.general',
+  'Payment methods': 'settingsTab.payment',
+  'Sign in': 'settingsTab.signIn',
+  'Lead form': 'settingsTab.leadForm',
+  Communication: 'settingsTab.communication',
+  Integrations: 'settingsTab.integrations',
+  Exams: 'settingsTab.exams',
+  Invoice: 'settingsTab.invoice',
+  'Accrual and payment': 'settingsTab.accrual',
+  'Landing page': 'settingsTab.landing',
+};
+
+function tabLabel(tab: string) {
+  const key = TAB_LABELS[tab];
+  return key ? t(key) : tab;
+}
 
 function copyText(val: string, label: string) {
   if (!val) return;
-  navigator.clipboard.writeText(val);
+  void navigator.clipboard.writeText(val);
+  toast.success(t('common.copied'));
   copiedField.value = label;
   setTimeout(() => {
     copiedField.value = '';
@@ -57,12 +79,11 @@ async function load() {
 async function save() {
   if (!settings.value) return;
   saving.value = true;
-  message.value = '';
   try {
     await client.post('/company/settings', settings.value);
-    message.value = 'Saved successfully';
-  } catch {
-    message.value = 'Save failed';
+    toast.success(t('toast.saved'));
+  } catch (err: unknown) {
+    toast.error(apiErrorMessage(err, t('errors.saveFailed')));
   } finally {
     saving.value = false;
   }
@@ -73,9 +94,9 @@ onMounted(load);
 
 <template>
   <div class="space-y-4">
-    <h1 class="text-xl font-semibold text-fb-text">Settings</h1>
+    <h1 class="text-xl font-semibold text-fb-text">{{ t('nav.settings') }}</h1>
 
-    <div v-if="loading" class="text-fb-secondary">Loading…</div>
+    <div v-if="loading" class="text-fb-secondary">{{ t('common.loading') }}</div>
 
     <template v-else-if="settings">
       <div class="flex flex-wrap gap-2 border-b border-fb-line pb-2">
@@ -87,27 +108,27 @@ onMounted(load);
           :class="activeTab === tab ? 'bg-fb-hover text-fb-blue font-medium' : 'text-fb-secondary hover:bg-fb-canvas'"
           @click="activeTab = tab"
         >
-          {{ tab }}
+          {{ tabLabel(tab) }}
         </button>
       </div>
 
       <!-- General settings tab -->
       <div v-if="activeTab === 'General settings'" class="bg-fb-card rounded-xl border border-fb-line p-6 space-y-4 max-w-xl">
         <div>
-          <label class="block text-sm font-medium text-fb-secondary mb-1">Center name</label>
+          <label class="block text-sm font-medium text-fb-secondary mb-1">{{ t('settings.centerName') }}</label>
           <input v-model="settings.name" class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none" />
         </div>
         <div>
-          <label class="block text-sm font-medium text-fb-secondary mb-1">Phone</label>
+          <label class="block text-sm font-medium text-fb-secondary mb-1">{{ t('common.phone') }}</label>
           <input v-model="settings.phone" class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none" />
         </div>
         <div>
-          <label class="block text-sm font-medium text-fb-secondary mb-1">Address</label>
+          <label class="block text-sm font-medium text-fb-secondary mb-1">{{ t('settings.address') }}</label>
           <input v-model="settings.address" class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none" />
         </div>
         <label class="flex items-center gap-2 text-sm text-fb-text">
           <input v-model="settings.sms_enabled" type="checkbox" class="rounded border-fb-line" />
-          SMS enabled
+          {{ t('settings.smsEnabled') }}
         </label>
         <div class="flex items-center gap-3 pt-2">
           <button
@@ -116,9 +137,8 @@ onMounted(load);
             :disabled="saving"
             @click="save"
           >
-            {{ saving ? 'Saving…' : 'Save' }}
+            {{ saving ? t('common.saving') : t('common.save') }}
           </button>
-          <span v-if="message" class="text-sm font-medium" :class="message.includes('success') ? 'text-emerald-600' : 'text-fb-secondary'">{{ message }}</span>
         </div>
       </div>
 
@@ -127,10 +147,10 @@ onMounted(load);
         <div>
           <h3 class="text-base font-semibold text-fb-text flex items-center gap-2">
             <span>💳</span>
-            <span>Интеграция с платежными системами (Click / Payme / Uzum)</span>
+            <span>{{ t('settings.paymentTitle') }}</span>
           </h3>
           <p class="text-xs text-fb-secondary mt-1">
-            Заполните данные мерчантов для автоматической генерации ссылок на оплату и автоматического приема платежей через вебхуки.
+            {{ t('settings.paymentHint') }}
           </p>
         </div>
 
@@ -142,29 +162,29 @@ onMounted(load);
               <span>Click Merchant</span>
             </span>
             <span v-if="settings.click_service_id && settings.click_merchant_id" class="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-800">
-              Подключен
+              {{ t('settings.connected') }}
             </span>
           </div>
           <div class="grid grid-cols-2 gap-3">
             <div>
               <label class="block text-xs font-medium text-fb-secondary mb-1">Service ID</label>
-              <input v-model="settings.click_service_id" placeholder="например: 12345" class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none" />
+              <input v-model="settings.click_service_id" :placeholder="t('settings.example', { value: '12345' })" class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none" />
             </div>
             <div>
               <label class="block text-xs font-medium text-fb-secondary mb-1">Merchant ID</label>
-              <input v-model="settings.click_merchant_id" placeholder="например: 67890" class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none" />
+              <input v-model="settings.click_merchant_id" :placeholder="t('settings.example', { value: '67890' })" class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none" />
             </div>
           </div>
           <div>
-            <label class="block text-xs font-medium text-fb-secondary mb-1">Secret Key (Секретный ключ)</label>
-            <input v-model="settings.click_secret_key" type="password" placeholder="Секретный ключ из кабинета Click" class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none" />
+            <label class="block text-xs font-medium text-fb-secondary mb-1">{{ t('settings.secretKey') }}</label>
+            <input v-model="settings.click_secret_key" type="password" :placeholder="t('settings.clickSecretPlaceholder')" class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none" />
           </div>
           <div class="rounded-lg bg-white border border-fb-line p-3 text-xs">
-            <span class="font-medium text-fb-secondary block mb-1">URL для Click Webhook (Prepare / Complete URL):</span>
+            <span class="font-medium text-fb-secondary block mb-1">{{ t('settings.clickWebhook') }}</span>
             <div class="flex items-center justify-between gap-2">
               <code class="text-[11px] text-fb-blue break-all font-mono">{{ clickWebhookUrl }}</code>
               <button type="button" class="shrink-0 text-fb-blue hover:underline font-medium text-xs" @click="copyText(clickWebhookUrl, 'click')">
-                {{ copiedField === 'click' ? 'Скопировано!' : 'Копировать' }}
+                {{ copiedField === 'click' ? t('common.copied') : t('common.copy') }}
               </button>
             </div>
           </div>
@@ -178,23 +198,23 @@ onMounted(load);
               <span>Payme Business</span>
             </span>
             <span v-if="settings.payme_merchant_id" class="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-800">
-              Подключен
+              {{ t('settings.connected') }}
             </span>
           </div>
           <div>
-            <label class="block text-xs font-medium text-fb-secondary mb-1">Merchant ID (Payme ID кассы)</label>
-            <input v-model="settings.payme_merchant_id" placeholder="ID кассы из Payme Business" class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none" />
+            <label class="block text-xs font-medium text-fb-secondary mb-1">{{ t('settings.paymeMerchant') }}</label>
+            <input v-model="settings.payme_merchant_id" :placeholder="t('settings.paymeMerchantPlaceholder')" class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none" />
           </div>
           <div>
-            <label class="block text-xs font-medium text-fb-secondary mb-1">Secret Key (Ключ кассы)</label>
-            <input v-model="settings.payme_secret_key" type="password" placeholder="Ключ кассы (пароль API) из Payme" class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none" />
+            <label class="block text-xs font-medium text-fb-secondary mb-1">{{ t('settings.paymeKey') }}</label>
+            <input v-model="settings.payme_secret_key" type="password" :placeholder="t('settings.paymeKeyPlaceholder')" class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none" />
           </div>
           <div class="rounded-lg bg-white border border-fb-line p-3 text-xs">
-            <span class="font-medium text-fb-secondary block mb-1">URL для Payme Webhook (JSON-RPC Endpoint):</span>
+            <span class="font-medium text-fb-secondary block mb-1">{{ t('settings.paymeWebhook') }}</span>
             <div class="flex items-center justify-between gap-2">
               <code class="text-[11px] text-fb-blue break-all font-mono">{{ paymeWebhookUrl }}</code>
               <button type="button" class="shrink-0 text-fb-blue hover:underline font-medium text-xs" @click="copyText(paymeWebhookUrl, 'payme')">
-                {{ copiedField === 'payme' ? 'Скопировано!' : 'Копировать' }}
+                {{ copiedField === 'payme' ? t('common.copied') : t('common.copy') }}
               </button>
             </div>
           </div>
@@ -208,12 +228,12 @@ onMounted(load);
               <span>Uzum Bank</span>
             </span>
             <span v-if="settings.uzum_merchant_id" class="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-800">
-              Подключен
+              {{ t('settings.connected') }}
             </span>
           </div>
           <div>
             <label class="block text-xs font-medium text-fb-secondary mb-1">Merchant ID / Service Code</label>
-            <input v-model="settings.uzum_merchant_id" placeholder="Идентификатор мерчанта Uzum" class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none" />
+            <input v-model="settings.uzum_merchant_id" :placeholder="t('settings.uzumPlaceholder')" class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none" />
           </div>
         </div>
 
@@ -224,14 +244,13 @@ onMounted(load);
             :disabled="saving"
             @click="save"
           >
-            {{ saving ? 'Сохранение…' : 'Сохранить настройки оплаты' }}
+            {{ saving ? t('common.saving') : t('settings.savePayment') }}
           </button>
-          <span v-if="message" class="text-sm font-medium" :class="message.includes('success') ? 'text-emerald-600' : 'text-fb-secondary'">{{ message }}</span>
         </div>
       </div>
 
       <div v-else class="bg-fb-card rounded-xl border border-fb-line p-8 text-fb-secondary">
-        Раздел «{{ activeTab }}» будет доступен в следующем обновлении.
+        {{ t('settings.tabSoon', { tab: tabLabel(activeTab) }) }}
       </div>
     </template>
   </div>

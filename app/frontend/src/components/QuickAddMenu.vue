@@ -2,6 +2,7 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
 
 import NavIcon from './NavIcon.vue';
+import { t } from '../i18n';
 
 export interface QuickAddMenuItem {
   label: string;
@@ -67,7 +68,7 @@ defineExpose({ close });
       type="button"
       class="quick-add-trigger flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-fb-line bg-fb-card p-0 text-fb-icon hover:border-fb-blue hover:text-fb-blue"
       :class="open ? 'is-open' : ''"
-      title="Quick add"
+      :title="t('layout.quickAdd')"
       aria-haspopup="menu"
       :aria-expanded="open"
       @click.stop="toggle"

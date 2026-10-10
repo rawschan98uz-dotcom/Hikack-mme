@@ -1,6 +1,7 @@
 import { computed, ref } from 'vue';
 
 import client, { type ApiEnvelope } from '../api/client';
+import { t } from '../i18n';
 import {
   DEFAULT_TIME_SLOTS,
   GROUP_DAYS_BY_WEEKDAY,
@@ -34,7 +35,7 @@ export function useSchedule(initialRows?: ScheduleRow[]) {
   );
 
   const scheduleLayoutLabel = computed(() =>
-    scheduleLayout.value === 'horizontal' ? 'Horizontal' : 'Vertical',
+    scheduleLayout.value === 'horizontal' ? t('schedule.horizontal') : t('schedule.vertical'),
   );
 
   const displayTimeSlots = computed(() => {

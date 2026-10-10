@@ -2,6 +2,7 @@ import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 
 import client, { type ApiEnvelope } from '../api/client';
+import { t } from '../i18n';
 import { hasPermission } from '../utils/rbac';
 
 export interface Company {
@@ -61,7 +62,7 @@ export const useAuthStore = defineStore('auth', () => {
       user.value = data.data.user;
       localStorage.setItem('access_token', data.data.access);
     } catch (e: unknown) {
-      error.value = 'Invalid phone or password';
+      error.value = t('login.invalid');
       throw e;
     } finally {
       loading.value = false;

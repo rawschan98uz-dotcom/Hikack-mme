@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 
+import { intlLocale, t } from '../i18n';
+
 const props = withDefaults(
   defineProps<{
     modelValue: string;
     placeholder?: string;
   }>(),
   {
-    placeholder: 'Select date',
+    placeholder: undefined,
   },
 );
 
@@ -19,10 +21,10 @@ const open = ref(false);
 const root = ref<HTMLElement | null>(null);
 const viewDate = ref(new Date());
 
-const weekdayLabels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
+const weekdayKeys = ['weekday.sun', 'weekday.mon', 'weekday.tue', 'weekday.wed', 'weekday.thu', 'weekday.fri', 'weekday.sat'] as const;
 
 const monthLabel = computed(() =>
-  viewDate.value.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
+  viewDate.value.toLocaleDateString(intlLocale(), { month: 'long', year: 'numeric' }),
 );
 
 const calendarCells = computed(() => {
@@ -136,7 +138,7 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocumentClick));
         />
       </svg>
       <span class="truncate text-sm" :class="modelValue ? 'text-fb-text' : 'text-fb-icon'">
-        {{ modelValue || placeholder }}
+        {{ modelValue || placeholder || t('common.selectDate') }}
       </span>
     </button>
 
@@ -154,7 +156,7 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocumentClick));
       </div>
 
       <div class="grid grid-cols-7 gap-1 text-center text-xs text-fb-secondary">
-        <span v-for="label in weekdayLabels" :key="label">{{ label }}</span>
+        <span v-for="key in weekdayKeys" :key="key">{{ t(key) }}</span>
       </div>
 
       <div class="mt-2 grid grid-cols-7 gap-1">

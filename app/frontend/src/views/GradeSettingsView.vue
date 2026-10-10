@@ -2,6 +2,9 @@
 import { onMounted, ref } from 'vue';
 
 import client, { type ApiEnvelope } from '../api/client';
+import { t } from '../i18n';
+import { toast } from '../ui/feedback';
+import { apiErrorMessage } from '../utils/apiError';
 
 interface GradeSettings {
   grade_pass_score: number;
@@ -11,7 +14,6 @@ interface GradeSettings {
 const settings = ref<GradeSettings>({ grade_pass_score: 70, grade_scale_max: 100 });
 const loading = ref(true);
 const saving = ref(false);
-const message = ref('');
 
 async function load() {
   loading.value = true;
@@ -28,12 +30,11 @@ async function load() {
 
 async function save() {
   saving.value = true;
-  message.value = '';
   try {
     await client.post('/company/settings', settings.value);
-    message.value = 'Saved';
-  } catch (err: any) {
-    message.value = err.response?.data?.message || 'Save failed';
+    toast.success(t('toast.saved'));
+  } catch (err: unknown) {
+    toast.error(apiErrorMessage(err, t('errors.saveFailed')));
   } finally {
     saving.value = false;
   }
@@ -44,23 +45,22 @@ onMounted(load);
 
 <template>
   <div class="space-y-6">
-    <h1 class="text-xl font-semibold text-fb-text">Grade settings</h1>
-    <div v-if="loading" class="text-sm text-fb-secondary">Loading…</div>
+    <h1 class="text-xl font-semibold text-fb-text">{{ t('settings.gradeTitle') }}</h1>
+    <div v-if="loading" class="text-sm text-fb-secondary">{{ t('common.loading') }}</div>
     <form v-else class="max-w-2xl space-y-4 rounded-xl border border-fb-line bg-fb-card p-6" @submit.prevent="save">
       <div>
-        <label class="mb-1 block text-sm font-medium text-fb-secondary">Passing score</label>
+        <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('settings.passScore') }}</label>
         <input v-model.number="settings.grade_pass_score" type="number" min="0" step="1" class="w-full rounded-lg border px-3 py-2" />
-        <p class="mt-1 text-xs text-fb-secondary">Minimum grade to pass (used in Rating reports).</p>
+        <p class="mt-1 text-xs text-fb-secondary">{{ t('settings.passScoreHint') }}</p>
       </div>
       <div>
-        <label class="mb-1 block text-sm font-medium text-fb-secondary">Maximum scale</label>
+        <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('settings.scaleMax') }}</label>
         <input v-model.number="settings.grade_scale_max" type="number" min="1" step="1" class="w-full rounded-lg border px-3 py-2" />
       </div>
       <div class="flex items-center gap-3">
         <button type="submit" class="rounded-lg bg-fb-blue px-4 py-2 text-sm font-medium text-white" :disabled="saving">
-          {{ saving ? 'Saving…' : 'Save' }}
+          {{ saving ? t('common.saving') : t('common.save') }}
         </button>
-        <span v-if="message" class="text-sm text-fb-secondary">{{ message }}</span>
       </div>
     </form>
   </div>

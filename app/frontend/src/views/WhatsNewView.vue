@@ -1,34 +1,22 @@
 <script setup lang="ts">
-const updates = [
-  {
-    date: '2026-06-10',
-    title: 'Cross-links between Students, Groups, and Teachers',
-    body: 'Click group or teacher names in tables and drawers to jump directly to the related record.',
-  },
-  {
-    date: '2026-06-10',
-    title: 'Settings: Archive, Forms, Tags, Roadmap',
-    body: 'Archive bulk actions, customizable Forms/Tags tables, and a Roadmap page with milestones.',
-  },
-  {
-    date: '2026-06-09',
-    title: 'Finance and Reports modules',
-    body: 'Payments, withdrawals, expenses, salaries, conversion, leads, left-students, and Workly reports.',
-  },
-  {
-    date: '2026-06-08',
-    title: 'HiJack LMS core release',
-    body: 'Django REST API + Vue frontend with comprehensive center management.',
-  },
-];
+import { computed } from 'vue';
+
+import { t } from '../i18n';
+
+const updates = computed(() => [
+  { date: '2026-06-10', title: t('news.crossLinksTitle'), body: t('news.crossLinksBody') },
+  { date: '2026-06-10', title: t('news.settingsTitle'), body: t('news.settingsBody') },
+  { date: '2026-06-09', title: t('news.financeTitle'), body: t('news.financeBody') },
+  { date: '2026-06-08', title: t('news.coreTitle'), body: t('news.coreBody') },
+]);
 </script>
 
 <template>
   <div class="space-y-6">
     <div>
-      <h1 class="text-[28px] font-normal text-fb-text">What's new</h1>
+      <h1 class="text-[28px] font-normal text-fb-text">{{ t('nav.whatsNew') }}</h1>
       <p class="mt-2 text-fb-secondary">
-        Release notes and system updates for HiJack LMS.
+        {{ t('news.subtitle') }}
       </p>
     </div>
 

@@ -1,38 +1,10 @@
 import { defineStore } from 'pinia';
-import { ref, watch } from 'vue';
 
-export const localeOptions = [
-  { code: 'en' as const, label: 'English' },
-  { code: 'ru' as const, label: 'Русский' },
-  { code: 'uz' as const, label: "O'zbekcha" },
-];
+import { locale, localeOptions, setLocale, type LocaleCode } from '../i18n';
 
-export type LocaleCode = (typeof localeOptions)[number]['code'];
+export { localeOptions, type LocaleCode };
 
-function readSavedLocale(): LocaleCode {
-  const saved = localStorage.getItem('ui_locale');
-  if (saved && localeOptions.some((option) => option.code === saved)) {
-    return saved as LocaleCode;
-  }
-  return 'en';
-}
-
+/** The interface language; the phrases themselves live in `src/i18n`. */
 export const useLocaleStore = defineStore('locale', () => {
-  const code = ref<LocaleCode>(readSavedLocale());
-
-  function setLocale(next: LocaleCode) {
-    code.value = next;
-    localStorage.setItem('ui_locale', next);
-    document.documentElement.lang = next;
-  }
-
-  watch(
-    code,
-    (value) => {
-      document.documentElement.lang = value;
-    },
-    { immediate: true },
-  );
-
-  return { code, setLocale, options: localeOptions };
+  return { code: locale, setLocale, options: localeOptions };
 });

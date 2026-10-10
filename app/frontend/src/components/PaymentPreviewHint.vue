@@ -7,6 +7,7 @@ import { onBeforeUnmount, ref, watch } from 'vue';
 
 import client, { type ApiEnvelope } from '../api/client';
 import { formatSum } from '../utils/wallet';
+import { t } from '../i18n';
 
 interface PreviewLine {
   period_start: string;
@@ -87,26 +88,26 @@ onBeforeUnmount(() => {
       {{ preview.discount_error }}
     </p>
     <div v-if="preview.closes.length" class="rounded-md bg-emerald-50 px-2 py-1.5 text-emerald-900">
-      <div class="font-medium">Эта оплата закроет:</div>
+      <div class="font-medium">{{ t('payHint.willClose') }}</div>
       <ul class="mt-0.5 space-y-0.5">
         <li v-for="line in preview.closes" :key="line.period_start">
           {{ day(line.period_start) }} — {{ day(line.period_end) }}:
           <strong>{{ formatSum(line.pays) }}</strong>
-          <span v-if="line.left_after"> из {{ formatSum(line.amount - line.paid_before) }}, останется {{ formatSum(line.left_after) }}</span>
-          <span v-else> — полностью</span>
-          <span v-if="line.discount"> (скидка {{ formatSum(line.discount) }})</span>
-          <span v-if="line.ahead" class="text-sky-800"> · вперёд</span>
+          <span v-if="line.left_after"> {{ t('payHint.partOf', { of: formatSum(line.amount - line.paid_before), left: formatSum(line.left_after) }) }}</span>
+          <span v-else> — {{ t('payHint.fully') }}</span>
+          <span v-if="line.discount"> ({{ t('payHint.discount', { amount: formatSum(line.discount) }) }})</span>
+          <span v-if="line.ahead" class="text-sky-800"> · {{ t('payHint.ahead') }}</span>
         </li>
       </ul>
       <div v-if="preview.debt_before" class="mt-1">
-        Долг сейчас {{ formatSum(preview.debt_before) }} → после оплаты
+        {{ t('payHint.debtNow', { amount: formatSum(preview.debt_before) }) }} → {{ t('payHint.afterPayment') }}
         <strong>{{ formatSum(preview.debt_after) }}</strong>
       </div>
     </div>
     <p v-if="preview.waiting" class="rounded-md bg-amber-50 px-2 py-1 text-amber-800">
-      {{ formatSum(preview.waiting) }} сум не на что зачислить — они останутся в копилке
-      <template v-if="!preview.month_price">(у ученика нет группы с ценой курса)</template>
-      <template v-else>(оплата больше чем на два года вперёд — проверьте сумму)</template>.
+      {{ t('payHint.waiting', { amount: formatSum(preview.waiting) }) }}
+      <template v-if="!preview.month_price">({{ t('payHint.noGroupPrice') }})</template>
+      <template v-else>({{ t('payHint.tooFarAhead') }})</template>.
     </p>
   </div>
 </template>

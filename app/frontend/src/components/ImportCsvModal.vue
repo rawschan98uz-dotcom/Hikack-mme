@@ -3,6 +3,9 @@ import { ref } from 'vue';
 
 import client, { type ApiEnvelope } from '../api/client';
 import { downloadTemplate } from '../utils/csvExport';
+import { apiErrorMessage } from '../utils/apiError';
+import { t } from '../i18n';
+import { toast } from '../ui/feedback';
 
 export interface ImportErrorRow {
   row: number;
@@ -112,7 +115,7 @@ function goBackToSelect() {
 
 async function analyzeFile() {
   if (!selectedFile.value) {
-    uploadError.value = 'Выберите Excel (.xlsx, .xls) или CSV файл для импорта';
+    uploadError.value = t('import.chooseFile');
     return;
   }
 
@@ -142,8 +145,8 @@ async function analyzeFile() {
         emit('imported');
       }
     }
-  } catch (err: any) {
-    uploadError.value = err?.response?.data?.message || 'Ошибка анализа файла. Проверьте формат файла.';
+  } catch (err: unknown) {
+    uploadError.value = apiErrorMessage(err, t('import.analyzeFailed'));
   } finally {
     analyzing.value = false;
   }
@@ -167,9 +170,10 @@ async function confirmImport() {
     step.value = 'success';
     if (data.data.created > 0) {
       emit('imported');
+      toast.success(t('import.doneToast', { count: data.data.created }));
     }
-  } catch (err: any) {
-    uploadError.value = err?.response?.data?.message || 'Ошибка сохранения данных в базу.';
+  } catch (err: unknown) {
+    uploadError.value = apiErrorMessage(err, t('import.saveFailed'));
   } finally {
     committing.value = false;
   }
@@ -188,15 +192,16 @@ async function confirmImport() {
       <div class="flex items-center justify-between border-b border-fb-line px-6 py-4 bg-fb-canvas/50">
         <div>
           <h2 class="text-lg font-semibold text-fb-text">
-            {{ step === 'preview' ? 'Предварительный просмотр перед загрузкой' : title }}
+            {{ step === 'preview' ? t('import.previewTitle') : title }}
           </h2>
           <p class="text-xs text-fb-secondary mt-0.5">
-            {{ step === 'select' ? 'Шаг 1 из 2: Выбор файла' : step === 'preview' ? 'Шаг 2 из 2: Проверка данных' : 'Завершено' }}
+            {{ step === 'select' ? t('import.step1') : step === 'preview' ? t('import.step2') : t('import.finished') }}
           </p>
         </div>
         <button
           type="button"
           class="flex h-8 w-8 items-center justify-center rounded-lg text-fb-icon hover:bg-fb-line hover:text-fb-text transition-colors"
+          :aria-label="t('common.close')"
           @click="close"
         >
           ✕
@@ -215,8 +220,8 @@ async function confirmImport() {
             <div class="flex items-center gap-3">
               <span class="text-xl">📥</span>
               <div class="text-xs">
-                <div class="font-medium text-fb-text">Нужен готовый образец?</div>
-                <div class="text-fb-secondary">Скачайте шаблон со всеми нужными полями</div>
+                <div class="font-medium text-fb-text">{{ t('import.needSample') }}</div>
+                <div class="text-fb-secondary">{{ t('import.needSampleHint') }}</div>
               </div>
             </div>
             <button
@@ -224,13 +229,13 @@ async function confirmImport() {
               class="inline-flex items-center gap-1.5 rounded-lg border border-fb-line bg-fb-card px-3 py-1.5 text-xs font-medium text-fb-blue shadow-sm hover:bg-fb-hover transition-colors"
               @click="downloadSample"
             >
-              Скачать шаблон CSV
+              {{ t('import.downloadTemplate') }}
             </button>
           </div>
 
           <div>
             <label class="mb-2 block text-sm font-medium text-fb-text">
-              Выберите файл таблицы (Excel .xlsx, .xls или .csv)
+              {{ t('import.fileLabel') }}
             </label>
             <div class="relative">
               <input
@@ -258,15 +263,15 @@ async function confirmImport() {
           <!-- Stats badges -->
           <div class="grid grid-cols-3 gap-3">
             <div class="rounded-xl border border-fb-line bg-fb-canvas/40 p-3 text-center">
-              <div class="text-xs text-fb-secondary">Всего найдено строк</div>
+              <div class="text-xs text-fb-secondary">{{ t('import.totalRows') }}</div>
               <div class="text-xl font-bold text-fb-text">{{ previewData.total }}</div>
             </div>
             <div class="rounded-xl border border-emerald-200 bg-emerald-50/60 p-3 text-center">
-              <div class="text-xs text-emerald-700 font-medium">Готовы к загрузке</div>
+              <div class="text-xs text-emerald-700 font-medium">{{ t('import.ready') }}</div>
               <div class="text-xl font-bold text-emerald-700">{{ previewData.valid }}</div>
             </div>
             <div class="rounded-xl border border-amber-200 bg-amber-50/60 p-3 text-center">
-              <div class="text-xs text-amber-700 font-medium">Ошибки / пропуски</div>
+              <div class="text-xs text-amber-700 font-medium">{{ t('import.errorsSkipped') }}</div>
               <div class="text-xl font-bold text-amber-700">{{ previewData.skipped }}</div>
             </div>
           </div>
@@ -274,7 +279,7 @@ async function confirmImport() {
           <div class="rounded-xl border border-sky-200 bg-sky-50/70 p-3 text-xs text-sky-800 flex items-start gap-2.5">
             <span class="text-base">💡</span>
             <div>
-              <strong>Проверьте результат:</strong> ниже показано, как система распознала и очистила данные. Номера телефонов приведены к единому стандарту, имена и фамилии разделены по ячейкам. Если всё корректно — нажмите кнопку <strong>«Подтвердить и загрузить в базу»</strong>.
+              <strong>{{ t('import.checkTitle') }}</strong> {{ t('import.checkText') }}
             </div>
           </div>
 
@@ -285,12 +290,12 @@ async function confirmImport() {
                 <thead class="sticky top-0 bg-fb-canvas text-fb-secondary uppercase tracking-wider font-semibold border-b border-fb-line">
                   <tr>
                     <th class="py-2.5 px-3 w-12 text-center">#</th>
-                    <th class="py-2.5 px-3">Статус</th>
-                    <th class="py-2.5 px-3">Распознанное ФИО</th>
-                    <th class="py-2.5 px-3">Телефон</th>
-                    <th class="py-2.5 px-3">Группа</th>
-                    <th class="py-2.5 px-3">Школа</th>
-                    <th class="py-2.5 px-3">Филиал</th>
+                    <th class="py-2.5 px-3">{{ t('common.status') }}</th>
+                    <th class="py-2.5 px-3">{{ t('import.parsedName') }}</th>
+                    <th class="py-2.5 px-3">{{ t('common.phone') }}</th>
+                    <th class="py-2.5 px-3">{{ t('schedule.group') }}</th>
+                    <th class="py-2.5 px-3">{{ t('import.school') }}</th>
+                    <th class="py-2.5 px-3">{{ t('common.branch') }}</th>
                   </tr>
                 </thead>
                 <tbody class="divide-y divide-fb-line bg-fb-card">
@@ -305,20 +310,20 @@ async function confirmImport() {
                         v-if="row.is_valid"
                         class="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-800"
                       >
-                        ✓ Готов
+                        ✓ {{ t('import.rowReady') }}
                       </span>
                       <span
                         v-else
                         class="inline-flex items-center gap-1 rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-medium text-red-800"
                         :title="row.message"
                       >
-                        ✕ {{ row.message || 'Ошибка' }}
+                        ✕ {{ row.message || t('import.rowError') }}
                       </span>
                     </td>
                     <td class="py-2.5 px-3 font-medium text-fb-text">
                       <div class="font-semibold">{{ row.full_name || '—' }}</div>
                       <div v-if="row.first_name && row.last_name" class="text-[10px] text-fb-secondary font-normal">
-                        Имя: {{ row.first_name }} | Фамилия: {{ row.last_name }}
+                        {{ t('common.firstName') }}: {{ row.first_name }} | {{ t('common.lastName') }}: {{ row.last_name }}
                       </div>
                     </td>
                     <td class="py-2.5 px-3 font-mono text-fb-text whitespace-nowrap">
@@ -350,15 +355,15 @@ async function confirmImport() {
             <div class="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-100 text-2xl text-emerald-700 shadow-sm">
               ✓
             </div>
-            <h3 class="text-xl font-bold text-fb-text">Импорт успешно завершен!</h3>
+            <h3 class="text-xl font-bold text-fb-text">{{ t('import.successTitle') }}</h3>
             <p class="text-sm text-fb-secondary max-w-sm mx-auto">
-              В базу данных успешно загружено <strong>{{ finalResult.created }}</strong> учеников.
-              <span v-if="finalResult.skipped > 0"> Пропущено строк: {{ finalResult.skipped }}.</span>
+              {{ t('import.created', { count: finalResult.created }) }}
+              <span v-if="finalResult.skipped > 0"> {{ t('import.skipped', { count: finalResult.skipped }) }}</span>
             </p>
 
             <div v-if="finalResult.credentials?.length" class="mt-4 rounded-xl border border-sky-200 bg-sky-50 p-4 text-left text-xs max-w-md mx-auto">
               <div class="font-semibold text-sky-900 mb-1.5">
-                Сгенерированные пароли — сохраните их сейчас, повторно они не показываются:
+                {{ t('import.passwords') }}
               </div>
               <ul class="space-y-1 text-sky-900 max-h-40 overflow-y-auto font-mono">
                 <li v-for="cred in finalResult.credentials" :key="cred.row">
@@ -368,10 +373,10 @@ async function confirmImport() {
             </div>
 
             <div v-if="finalResult.errors.length" class="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-left text-xs max-w-md mx-auto">
-              <div class="font-semibold text-amber-900 mb-1.5">Замечания по строкам:</div>
+              <div class="font-semibold text-amber-900 mb-1.5">{{ t('import.rowNotes') }}</div>
               <ul class="space-y-1 text-amber-800 max-h-32 overflow-y-auto">
                 <li v-for="(err, idx) in finalResult.errors" :key="idx">
-                  Строка {{ err.row }}: {{ err.message }}
+                  {{ t('import.rowN', { row: err.row }) }}: {{ err.message }}
                 </li>
               </ul>
             </div>
@@ -387,7 +392,7 @@ async function confirmImport() {
             class="rounded-xl border border-fb-line bg-fb-card px-4 py-2 text-sm font-medium text-fb-secondary hover:bg-fb-hover transition-colors"
             @click="close"
           >
-            Отмена
+            {{ t('common.cancel') }}
           </button>
           <button
             type="button"
@@ -396,7 +401,7 @@ async function confirmImport() {
             @click="analyzeFile"
           >
             <span v-if="analyzing" class="inline-block animate-spin">⏳</span>
-            {{ analyzing ? 'Анализ файла…' : 'Проверить и предпросмотр →' }}
+            {{ analyzing ? t('import.analyzing') : `${t('import.checkPreview')} →` }}
           </button>
         </template>
 
@@ -407,7 +412,7 @@ async function confirmImport() {
             :disabled="committing"
             @click="goBackToSelect"
           >
-            ← Выбрать другой файл
+            ← {{ t('import.otherFile') }}
           </button>
           <button
             type="button"
@@ -416,7 +421,7 @@ async function confirmImport() {
             @click="confirmImport"
           >
             <span v-if="committing" class="inline-block animate-spin">⏳</span>
-            {{ committing ? 'Загрузка в базу…' : `Подтвердить и загрузить в базу (${previewData?.valid ?? 0} уч.)` }}
+            {{ committing ? t('import.committing') : t('import.confirm', { count: previewData?.valid ?? 0 }) }}
           </button>
         </template>
 
@@ -427,7 +432,7 @@ async function confirmImport() {
               class="rounded-xl bg-fb-blue px-6 py-2 text-sm font-medium text-white shadow-sm hover:opacity-90 transition-colors"
               @click="close"
             >
-              Готово
+              {{ t('import.done') }}
             </button>
           </div>
         </template>

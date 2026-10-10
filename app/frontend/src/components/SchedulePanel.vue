@@ -2,6 +2,7 @@
 import { watch } from 'vue';
 
 import { useSchedule } from '../composables/useSchedule';
+import { t } from '../i18n';
 import { SCHEDULE_TABS, SCHEDULE_WEEKDAYS, type ScheduleRow } from '../types/schedule';
 
 const props = withDefaults(
@@ -51,11 +52,11 @@ function onSelectGroup(groupId: number) {
       v-if="showTitle"
       class="py-4 text-center text-[17px] font-normal text-fb-text"
     >
-      Schedule
+      {{ t('schedule.title') }}
     </h4>
 
     <div v-if="loading" class="py-12 text-center text-[15px] text-fb-icon">
-      Loading…
+      {{ t('common.loading') }}
     </div>
 
     <template v-else>
@@ -71,7 +72,7 @@ function onSelectGroup(groupId: number) {
                   : 'border-transparent text-fb-secondary hover:text-fb-text'"
                 @click="setScheduleTab(tab.key)"
               >
-                {{ tab.label }}
+                {{ t(tab.label) }}
               </button>
             </li>
           </ul>
@@ -115,7 +116,7 @@ function onSelectGroup(groupId: number) {
                 v-if="otherWeekday === day.value"
                 class="h-1.5 w-1.5 rounded-full bg-fb-blue"
               />
-              {{ day.label }}
+              {{ t(day.label) }}
             </button>
           </li>
         </ul>
@@ -131,16 +132,16 @@ function onSelectGroup(groupId: number) {
               <tr class="bg-fb-canvas">
                 <template v-if="filteredSchedule.length">
                   <th class="border border-fb-line px-3 py-2 text-left font-medium text-fb-secondary">
-                    Group
+                    {{ t('schedule.group') }}
                   </th>
                   <th class="border border-fb-line px-3 py-2 text-left font-medium text-fb-secondary">
-                    Time
+                    {{ t('common.time') }}
                   </th>
                   <th class="border border-fb-line px-3 py-2 text-left font-medium text-fb-secondary">
-                    Course
+                    {{ t('schedule.course') }}
                   </th>
                   <th class="border border-fb-line px-3 py-2 text-left font-medium text-fb-secondary">
-                    Teacher
+                    {{ t('schedule.teacher') }}
                   </th>
                 </template>
                 <th v-else class="h-9 border border-fb-line font-normal" />

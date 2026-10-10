@@ -1,6 +1,9 @@
+import type { MessageKey } from '../i18n';
+
+/** `label` is a phrase key — the menu is shown in the interface language. */
 export interface NavLink {
   type: 'link';
-  label: string;
+  label: MessageKey;
   to: string;
   icon: string;
   permission?: string;
@@ -8,14 +11,14 @@ export interface NavLink {
 
 export interface NavHeader {
   type: 'header';
-  label: string;
+  label: MessageKey;
 }
 
 export type NavFlyoutItem = NavLink | NavHeader;
 
 export interface NavSection {
   id: string;
-  label: string;
+  label: MessageKey;
   icon: string;
   to?: string;
   permission?: string;
@@ -63,7 +66,7 @@ import { PERM } from '../utils/rbac';
 export const primaryNav: NavSection[] = [
   {
     id: 'leads',
-    label: 'Leads',
+    label: 'nav.leads',
     icon: 'leads',
     to: '/leads',
     paths: ['/leads'],
@@ -71,7 +74,7 @@ export const primaryNav: NavSection[] = [
   },
   {
     id: 'teachers',
-    label: 'Teachers',
+    label: 'nav.teachers',
     icon: 'teachers',
     to: '/teachers',
     paths: ['/teachers'],
@@ -79,7 +82,7 @@ export const primaryNav: NavSection[] = [
   },
   {
     id: 'groups',
-    label: 'Groups',
+    label: 'nav.groups',
     icon: 'groups',
     to: '/groups',
     paths: ['/groups'],
@@ -87,7 +90,7 @@ export const primaryNav: NavSection[] = [
   },
   {
     id: 'students',
-    label: 'Students',
+    label: 'nav.students',
     icon: 'students',
     to: '/students',
     paths: ['/students'],
@@ -95,7 +98,7 @@ export const primaryNav: NavSection[] = [
   },
   {
     id: 'reminders',
-    label: 'Reminders',
+    label: 'nav.reminders',
     icon: 'reminders',
     to: '/reminders',
     paths: ['/reminders'],
@@ -103,7 +106,7 @@ export const primaryNav: NavSection[] = [
   },
   {
     id: 'rating',
-    label: 'Rating',
+    label: 'nav.rating',
     icon: 'rating',
     to: '/rating',
     paths: ['/rating'],
@@ -111,7 +114,7 @@ export const primaryNav: NavSection[] = [
   },
   {
     id: 'attendance',
-    label: 'Посещаемость учеников',
+    label: 'nav.studentAttendance',
     icon: 'attendance',
     to: '/attendance-reports',
     paths: ['/attendance-reports'],
@@ -119,7 +122,7 @@ export const primaryNav: NavSection[] = [
   },
   {
     id: 'teacher-attendance',
-    label: 'Посещаемость преподавателей',
+    label: 'nav.teacherAttendance',
     icon: 'attendance',
     to: '/teacher-attendance-reports',
     paths: ['/teacher-attendance-reports'],
@@ -127,35 +130,35 @@ export const primaryNav: NavSection[] = [
   },
   {
     id: 'finance',
-    label: 'Finance',
+    label: 'nav.finance',
     icon: 'finance',
     permission: PERM.PAYMENTS_VIEW,
     paths: ['/finance', '/students/debtors'],
     children: [
-      { type: 'link', label: 'All payments', to: '/finance/payments', icon: 'coins', permission: PERM.PAYMENTS_VIEW },
-      { type: 'link', label: 'Финансовый отчет (P&L)', to: '/finance/pnl', icon: 'reports', permission: PERM.FINANCE_COMPANY },
-      { type: 'link', label: 'Total Expenses', to: '/finance/cost', icon: 'expenses', permission: PERM.FINANCE_COMPANY },
-      { type: 'link', label: 'Salaries new', to: '/finance/new-salaries', icon: 'salaries', permission: PERM.FINANCE_VIEW },
-      { type: 'link', label: 'Withdraw', to: '/finance/withdraw', icon: 'coins', permission: PERM.FINANCE_COMPANY },
-      { type: 'link', label: 'Debtors', to: '/students/debtors', icon: 'debtors', permission: PERM.PAYMENTS_VIEW },
+      { type: 'link', label: 'nav.allPayments', to: '/finance/payments', icon: 'coins', permission: PERM.PAYMENTS_VIEW },
+      { type: 'link', label: 'nav.pnl', to: '/finance/pnl', icon: 'reports', permission: PERM.FINANCE_COMPANY },
+      { type: 'link', label: 'nav.expenses', to: '/finance/cost', icon: 'expenses', permission: PERM.FINANCE_COMPANY },
+      { type: 'link', label: 'nav.salaries', to: '/finance/new-salaries', icon: 'salaries', permission: PERM.FINANCE_VIEW },
+      { type: 'link', label: 'nav.withdraw', to: '/finance/withdraw', icon: 'coins', permission: PERM.FINANCE_COMPANY },
+      { type: 'link', label: 'nav.debtors', to: '/students/debtors', icon: 'debtors', permission: PERM.PAYMENTS_VIEW },
     ],
   },
   {
     id: 'reports',
-    label: 'Отчеты',
+    label: 'nav.reports',
     icon: 'reports',
     permission: PERM.REPORTS_VIEW,
     paths: ['/reports'],
     children: [
-      { type: 'link', label: 'Лиды и конверсия', to: '/reports/conversion', icon: 'conversion', permission: PERM.REPORTS_VIEW },
-      { type: 'link', label: 'Посещаемость учеников', to: '/reports/attendance', icon: 'attendance', permission: PERM.ATTENDANCE_VIEW },
-      { type: 'link', label: 'Ушедшие студенты', to: '/reports/left-students', icon: 'left-students', permission: PERM.PAYMENTS_VIEW },
-      { type: 'link', label: 'Месяцы учеников (долги)', to: '/reports/months', icon: 'reports', permission: PERM.PAYMENTS_VIEW },
+      { type: 'link', label: 'nav.leadConversion', to: '/reports/conversion', icon: 'conversion', permission: PERM.REPORTS_VIEW },
+      { type: 'link', label: 'nav.studentAttendance', to: '/reports/attendance', icon: 'attendance', permission: PERM.ATTENDANCE_VIEW },
+      { type: 'link', label: 'nav.leftStudents', to: '/reports/left-students', icon: 'left-students', permission: PERM.PAYMENTS_VIEW },
+      { type: 'link', label: 'nav.studentMonths', to: '/reports/months', icon: 'reports', permission: PERM.PAYMENTS_VIEW },
     ],
   },
   {
     id: 'settings',
-    label: 'Settings',
+    label: 'nav.settings',
     icon: 'settings',
     paths: [
       '/settings',
@@ -173,23 +176,23 @@ export const primaryNav: NavSection[] = [
       '/blog',
     ],
     children: [
-      { type: 'link', label: 'SMS settings', to: '/auto-sms', icon: 'auto-sms', permission: PERM.SETTINGS_INTEGRATIONS },
-      { type: 'link', label: 'VoIP settings', to: '/admin/voip', icon: 'voip', permission: PERM.SETTINGS_INTEGRATIONS },
-      { type: 'link', label: 'Grade', to: '/settings-grade', icon: 'grade', permission: PERM.SETTINGS_GRADE },
-      { type: 'header', label: 'CEO' },
-      { type: 'link', label: 'General settings', to: '/settings', icon: 'settings', permission: PERM.SETTINGS_COMPANY },
-      { type: 'link', label: 'Staff', to: '/staff/list', icon: 'staff', permission: PERM.STAFF_VIEW },
-      { type: 'link', label: 'Roadmap', to: '/roadmap', icon: 'roadmap', permission: PERM.SETTINGS_COMPANY },
-      { type: 'header', label: 'Office' },
-      { type: 'link', label: 'Courses', to: '/courses', icon: 'courses', permission: PERM.COURSES_VIEW },
-      { type: 'link', label: 'Rooms', to: '/rooms', icon: 'rooms', permission: PERM.ROOMS_VIEW },
-      { type: 'link', label: 'Holidays', to: '/holiday', icon: 'holidays', permission: PERM.HOLIDAYS_VIEW },
-      { type: 'link', label: 'Archive', to: '/archive/list', icon: 'archive', permission: PERM.ARCHIVE_VIEW },
-      { type: 'header', label: 'Forms' },
-      { type: 'link', label: 'Forms', to: '/form', icon: 'puzzle', permission: PERM.FORMS_VIEW },
-      { type: 'header', label: 'Blog' },
-      { type: 'link', label: 'Tags', to: '/tags', icon: 'tags', permission: PERM.TAGS_VIEW },
-      { type: 'link', label: "What's new", to: '/blog/news', icon: 'blog', permission: PERM.TAGS_VIEW },
+      { type: 'link', label: 'nav.smsSettings', to: '/auto-sms', icon: 'auto-sms', permission: PERM.SETTINGS_INTEGRATIONS },
+      { type: 'link', label: 'nav.voipSettings', to: '/admin/voip', icon: 'voip', permission: PERM.SETTINGS_INTEGRATIONS },
+      { type: 'link', label: 'nav.grade', to: '/settings-grade', icon: 'grade', permission: PERM.SETTINGS_GRADE },
+      { type: 'header', label: 'nav.headerCeo' },
+      { type: 'link', label: 'nav.generalSettings', to: '/settings', icon: 'settings', permission: PERM.SETTINGS_COMPANY },
+      { type: 'link', label: 'nav.staff', to: '/staff/list', icon: 'staff', permission: PERM.STAFF_VIEW },
+      { type: 'link', label: 'nav.roadmap', to: '/roadmap', icon: 'roadmap', permission: PERM.SETTINGS_COMPANY },
+      { type: 'header', label: 'nav.headerOffice' },
+      { type: 'link', label: 'nav.courses', to: '/courses', icon: 'courses', permission: PERM.COURSES_VIEW },
+      { type: 'link', label: 'nav.rooms', to: '/rooms', icon: 'rooms', permission: PERM.ROOMS_VIEW },
+      { type: 'link', label: 'nav.holidays', to: '/holiday', icon: 'holidays', permission: PERM.HOLIDAYS_VIEW },
+      { type: 'link', label: 'nav.archive', to: '/archive/list', icon: 'archive', permission: PERM.ARCHIVE_VIEW },
+      { type: 'header', label: 'nav.headerForms' },
+      { type: 'link', label: 'nav.forms', to: '/form', icon: 'puzzle', permission: PERM.FORMS_VIEW },
+      { type: 'header', label: 'nav.headerBlog' },
+      { type: 'link', label: 'nav.tags', to: '/tags', icon: 'tags', permission: PERM.TAGS_VIEW },
+      { type: 'link', label: 'nav.whatsNew', to: '/blog/news', icon: 'blog', permission: PERM.TAGS_VIEW },
     ],
   },
 ];
@@ -203,7 +206,7 @@ export function sectionForPath(path: string): NavSection | null {
     if (matchesSection(path, section)) return section;
   }
   if (matchesPath(path, '/dashboard')) {
-    return { id: 'dashboard', label: 'Dashboard', icon: 'dashboard', to: '/dashboard/default' };
+    return { id: 'dashboard', label: 'nav.dashboard', icon: 'dashboard', to: '/dashboard/default' };
   }
   return null;
 }
@@ -249,7 +252,7 @@ export function navForRole(sections: NavSection[], role: string): NavSection[] {
   if (role !== 'teacher') return sections;
   return sections
     .filter((section) => section.id !== 'students' && section.id !== 'reports')
-    .map((section) => (section.id === 'teacher-attendance' ? { ...section, label: 'Моя посещаемость' } : section));
+    .map((section) => (section.id === 'teacher-attendance' ? { ...section, label: 'nav.myAttendance' as const } : section));
 }
 
 export function filterNavSections(

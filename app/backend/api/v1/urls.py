@@ -1,6 +1,6 @@
 from django.urls import path
 
-from api.v1 import views, views_extended, views_import, views_misc, views_payments
+from api.v1 import views, views_extended, views_import, views_misc, views_payments, views_search, views_student_card
 
 urlpatterns = [
     path('company/subdomain/<slug:subdomain>', views.company_by_subdomain),
@@ -10,6 +10,7 @@ urlpatterns = [
     path('auth/me', views.auth_me),
     path('branch', views.branch_list),
     path('dashboard', views.dashboard),
+    path('search', views_search.global_search),
     path('schedule', views.schedule_list),
     path('groups', views.group_list),
     path('groups/<int:group_id>', views.group_detail),
@@ -17,6 +18,7 @@ urlpatterns = [
     path('students/import', views_import.student_import),
     path('students/<int:student_id>', views.student_detail),
     path('students/<int:student_id>/payments', views_extended.student_payments),
+    path('students/<int:student_id>/attendance', views_student_card.student_attendance),
     path('students/<int:student_id>/payment-preview', views_extended.payment_preview),
     path('students/<int:student_id>/payment-links', views_payments.student_payment_links),
     path('students/<int:student_id>/send-payment-link', views_payments.student_send_payment_link),

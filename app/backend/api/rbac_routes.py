@@ -17,6 +17,8 @@ ROUTE_RULES: list[tuple[tuple[str, ...], str, str | None]] = [
 
     (('GET',), r'^branch$', P.PERM_BRANCH_VIEW),
     (('GET',), r'^dashboard$', P.PERM_DASHBOARD_VIEW),
+    # Quick search: open to every signed-in user; the view checks each section's permission itself
+    (('GET',), r'^search$', None),
     (('GET',), r'^schedule$', P.PERM_GROUPS_VIEW),
 
     (('GET',), r'^groups$', P.PERM_GROUPS_VIEW),
@@ -30,6 +32,7 @@ ROUTE_RULES: list[tuple[tuple[str, ...], str, str | None]] = [
     (('POST',), r'^students/import$', P.PERM_STUDENTS_WRITE),
     (('GET',), r'^students/\d+$', P.PERM_STUDENTS_VIEW),
     (('GET',), r'^students/\d+/payments$', P.PERM_STUDENTS_VIEW),
+    (('GET',), r'^students/\d+/attendance$', P.PERM_STUDENTS_VIEW),
     (('POST',), r'^students/\d+/payment-preview$', P.PERM_PAYMENTS_WRITE),
     (('GET',), r'^students/\d+/payment-links$', P.PERM_STUDENTS_VIEW),
     (('POST',), r'^students/\d+/send-payment-link$', P.PERM_STUDENTS_WRITE),

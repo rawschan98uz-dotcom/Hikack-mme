@@ -7,6 +7,10 @@ import client, { type ApiEnvelope } from '../api/client';
 import { useAuthStore } from '../stores/auth';
 import { groupRoute, studentRoute, teacherRoute } from '../utils/crossLinks';
 import { downloadCsv } from '../utils/csvExport';
+import { t } from '../i18n';
+import { serverLabel } from '../i18n/labels';
+import { confirmDialog, toast } from '../ui/feedback';
+import { apiErrorMessage } from '../utils/apiError';
 
 interface Branch {
   id: number;
@@ -190,9 +194,9 @@ const form = reactive({
 });
 
 const panelTitle = computed(() => {
-  if (editingScore.value) return 'Edit grade';
-  if (detailScore.value) return 'Rating details';
-  return 'Add grade';
+  if (editingScore.value) return t('rating.editTitle');
+  if (detailScore.value) return t('rating.detailTitle');
+  return t('rating.addTitle');
 });
 
 const isReadOnly = computed(() => Boolean(detailScore.value && !editingScore.value));
@@ -222,7 +226,7 @@ async function loadPanelStudents(keepDate = false) {
     panelDate.value = data.data.date ?? '';
     panelStudents.value = data.data.students;
   } catch {
-    formError.value = 'Не удалось загрузить учеников группы';
+    formError.value = t('attendance.rosterLoadFailed');
   } finally {
     panelStudentsLoading.value = false;
   }
@@ -249,10 +253,10 @@ const brackets = computed(() => {
 
   const total = rows.value.length || 1;
   return [
-    { label: `Excellent (≥ ${Math.round(tier1Threshold)})`, count: tier1, percent: Math.round((tier1 / total) * 100), color: 'bg-emerald-500' },
-    { label: `Good (${Math.round(tier2Threshold)}–${Math.round(tier1Threshold) - 1})`, count: tier2, percent: Math.round((tier2 / total) * 100), color: 'bg-blue-500' },
-    { label: `Passing (${pass}–${Math.round(tier2Threshold) - 1})`, count: tier3, percent: Math.round((tier3 / total) * 100), color: 'bg-amber-500' },
-    { label: `Needs Attention (< ${pass})`, count: tier4, percent: Math.round((tier4 / total) * 100), color: 'bg-red-500' },
+    { label: `${t('rating.tierExcellent')} (≥ ${Math.round(tier1Threshold)})`, count: tier1, percent: Math.round((tier1 / total) * 100), color: 'bg-emerald-500' },
+    { label: `${t('rating.tierGood')} (${Math.round(tier2Threshold)}–${Math.round(tier1Threshold) - 1})`, count: tier2, percent: Math.round((tier2 / total) * 100), color: 'bg-blue-500' },
+    { label: `${t('rating.tierPassing')} (${pass}–${Math.round(tier2Threshold) - 1})`, count: tier3, percent: Math.round((tier3 / total) * 100), color: 'bg-amber-500' },
+    { label: `${t('rating.tierAttention')} (< ${pass})`, count: tier4, percent: Math.round((tier4 / total) * 100), color: 'bg-red-500' },
   ];
 });
 
@@ -413,12 +417,12 @@ function closePanel() {
 async function submitScore() {
   formError.value = '';
   if (!form.student_id || !form.group_id) {
-    formError.value = 'Select student and group';
+    formError.value = t('rating.studentGroupRequired');
     return;
   }
   const maxScale = summary.value.max_scale || 100;
   if (form.grade === '' || !Number.isInteger(form.grade) || form.grade < 0 || form.grade > maxScale) {
-    formError.value = `Оценка — целое число от 0 до ${maxScale}`;
+    formError.value = t('rating.gradeRange', { max: maxScale });
     return;
   }
 
@@ -435,11 +439,12 @@ async function submitScore() {
         lesson_date: panelDate.value,
       });
     }
+    const wasEditing = Boolean(editingScore.value);
     closePanel();
+    toast.success(wasEditing ? t('toast.saved') : t('rating.gradeAdded'));
     await Promise.all([loadRating(), loadGroupScores()]);
-  } catch (err: any) {
-    formError.value =
-      err.response?.data?.message || (editingScore.value ? 'Could not update grade' : 'Could not add grade');
+  } catch (err: unknown) {
+    formError.value = apiErrorMessage(err, t('errors.saveFailed'));
   } finally {
     saving.value = false;
   }
@@ -447,15 +452,21 @@ async function submitScore() {
 
 async function deleteScore() {
   if (!detailScore.value) return;
-  if (!window.confirm(`Delete grade for ${detailScore.value.name}?`)) return;
+  const ok = await confirmDialog({
+    title: t('rating.deleteConfirm', { name: detailScore.value.name }),
+    message: t('confirm.cannotUndo'),
+    danger: true,
+  });
+  if (!ok || !detailScore.value) return;
 
   deleting.value = true;
   try {
     await client.delete(`/scores/${detailScore.value.id}`);
     closePanel();
+    toast.success(t('toast.deleted'));
     await Promise.all([loadRating(), loadGroupScores()]);
-  } catch {
-    window.alert('Could not delete grade');
+  } catch (err: unknown) {
+    toast.error(apiErrorMessage(err, t('errors.deleteFailed')));
   } finally {
     deleting.value = false;
   }
@@ -499,7 +510,7 @@ async function loadBulkStudents() {
       reason_label: st.reason_label,
     }));
   } catch {
-    bulkError.value = 'Failed to load group students';
+    bulkError.value = t('attendance.rosterLoadFailed');
   } finally {
     bulkLoading.value = false;
   }
@@ -511,12 +522,12 @@ async function submitBulkScores() {
   // Empty box = not graded: only the typed grades are sent
   const graded = bulkStudents.value.filter((s) => s.can_grade && s.grade !== '');
   if (!graded.length) {
-    bulkError.value = 'Не введено ни одной оценки.';
+    bulkError.value = t('rating.noGrades');
     return;
   }
   const wrong = graded.find((s) => !Number.isInteger(s.grade) || Number(s.grade) < 0 || Number(s.grade) > maxScale);
   if (wrong) {
-    bulkError.value = `${wrong.student_name}: оценка — целое число от 0 до ${maxScale}`;
+    bulkError.value = `${wrong.student_name}: ${t('rating.gradeRange', { max: maxScale })}`;
     return;
   }
   bulkSaving.value = true;
@@ -535,13 +546,14 @@ async function submitBulkScores() {
     const skipped = data.data.skipped ?? [];
     if (skipped.length) {
       // Keep the sheet open and say who was not saved and why
-      bulkError.value = `Сохранено: ${data.data.saved_count}. Не сохранено: ${skipped.map((s) => s.reason).join('; ')}`;
+      bulkError.value = t('rating.partlySaved', { saved: data.data.saved_count, reasons: skipped.map((s) => serverLabel(s.reason)).join('; ') });
       await loadBulkStudents();
     } else {
       showBulkModal.value = false;
+      toast.success(t('rating.gradesSaved', { count: data.data.saved_count }));
     }
-  } catch (err: any) {
-    bulkError.value = err.response?.data?.message || 'Failed to save group grades';
+  } catch (err: unknown) {
+    bulkError.value = apiErrorMessage(err, t('rating.bulkSaveFailed'));
   } finally {
     bulkSaving.value = false;
   }
@@ -550,17 +562,17 @@ async function submitBulkScores() {
 // CSV Export
 function exportRatingCsv() {
   const headers = [
-    'Rank',
-    'Rank in Group',
-    'Student',
-    'Group',
-    'Course',
-    'Teacher',
-    'Branch',
-    'Grade',
-    'Max Scale',
-    'Status',
-    'Pass Score',
+    t('rating.rank'),
+    t('rating.rankInGroup'),
+    t('months.student'),
+    t('schedule.group'),
+    t('schedule.course'),
+    t('schedule.teacher'),
+    t('common.branch'),
+    t('rating.grade'),
+    t('settings.scaleMax'),
+    t('common.status'),
+    t('settings.passScore'),
   ];
   const exportRows = rows.value.map((r) => [
     r.no,
@@ -572,7 +584,7 @@ function exportRatingCsv() {
     r.branch,
     r.grade,
     summary.value.max_scale,
-    r.is_passed ? 'Passed' : 'Needs Retake',
+    r.is_passed ? t('rating.passed') : t('rating.needsRetake'),
     summary.value.pass_score,
   ]);
   const dateStr = todayIso();
@@ -633,9 +645,9 @@ watch(
     <!-- Header & Action Buttons -->
     <div class="flex flex-wrap items-center justify-between gap-4">
       <div>
-        <h1 class="text-2xl font-bold text-fb-text">Rating & Academic Leaderboard</h1>
+        <h1 class="text-2xl font-bold text-fb-text">{{ t('rating.title') }}</h1>
         <p class="text-sm text-fb-secondary">
-          Student performance, group statistics, and grading reports
+          {{ t('rating.subtitle') }}
         </p>
       </div>
       <div class="flex flex-wrap items-center gap-2">
@@ -645,21 +657,21 @@ watch(
           class="flex items-center gap-1.5 rounded-lg border border-fb-line bg-fb-card px-3.5 py-2 text-sm font-medium text-fb-text shadow-sm hover:border-fb-blue hover:text-fb-blue"
           @click="exportRatingCsv"
         >
-          <span>📥</span> Export CSV
+          <span>📥</span> {{ t('common.exportCsv') }}
         </button>
         <button
           type="button"
           class="flex items-center gap-1.5 rounded-lg border border-emerald-600 bg-emerald-50 px-3.5 py-2 text-sm font-medium text-emerald-700 shadow-sm hover:bg-emerald-100"
           @click="openBulkModal()"
         >
-          <span>📝</span> Group Grading Sheet
+          <span>📝</span> {{ t('rating.groupSheet') }}
         </button>
         <button
           type="button"
           class="flex items-center gap-1.5 rounded-lg bg-fb-blue px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-fb-blue-dark"
           @click="openCreatePanel"
         >
-          <span>+</span> Add grade
+          <span>+</span> {{ t('rating.addTitle') }}
         </button>
       </div>
     </div>
@@ -668,16 +680,16 @@ watch(
     <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
       <div class="rounded-xl border border-fb-line bg-fb-card p-4 shadow-sm">
         <div class="flex items-center justify-between">
-          <p class="text-xs font-semibold uppercase tracking-wider text-fb-secondary">Total Assessed</p>
+          <p class="text-xs font-semibold uppercase tracking-wider text-fb-secondary">{{ t('rating.totalAssessed') }}</p>
           <span class="text-base">🎓</span>
         </div>
         <p class="mt-2 text-2xl font-bold text-fb-text">{{ summary.total }}</p>
-        <p class="mt-1 text-xs text-fb-secondary">Rated students in view</p>
+        <p class="mt-1 text-xs text-fb-secondary">{{ t('rating.ratedInView') }}</p>
       </div>
 
       <div class="rounded-xl border border-blue-200 bg-blue-50/40 p-4 shadow-sm">
         <div class="flex items-center justify-between">
-          <p class="text-xs font-semibold uppercase tracking-wider text-blue-700">Average Grade</p>
+          <p class="text-xs font-semibold uppercase tracking-wider text-blue-700">{{ t('rating.averageGrade') }}</p>
           <span class="text-base">📈</span>
         </div>
         <p class="mt-2 text-2xl font-bold text-blue-900">
@@ -693,13 +705,13 @@ watch(
 
       <div class="rounded-xl border border-emerald-200 bg-emerald-50/40 p-4 shadow-sm">
         <div class="flex items-center justify-between">
-          <p class="text-xs font-semibold uppercase tracking-wider text-emerald-700">Passed</p>
+          <p class="text-xs font-semibold uppercase tracking-wider text-emerald-700">{{ t('rating.passed') }}</p>
           <span class="text-base">✅</span>
         </div>
         <p class="mt-2 text-2xl font-bold text-emerald-900">
           {{ summary.passed_count }} <span class="text-sm font-normal text-emerald-600">({{ summary.pass_rate }}%)</span>
         </p>
-        <p class="mt-1 text-xs text-emerald-700">Threshold: ≥ {{ summary.pass_score }} pts</p>
+        <p class="mt-1 text-xs text-emerald-700">{{ t('rating.threshold', { score: summary.pass_score }) }}</p>
       </div>
 
       <div
@@ -711,7 +723,7 @@ watch(
             class="text-xs font-semibold uppercase tracking-wider"
             :class="summary.failed_count > 0 ? 'text-red-700' : 'text-fb-secondary'"
           >
-            Needs Retake
+            {{ t('rating.needsRetake') }}
           </p>
           <span class="text-base">⚠️</span>
         </div>
@@ -721,15 +733,15 @@ watch(
         >
           {{ summary.failed_count }}
         </p>
-        <p class="mt-1 text-xs text-fb-secondary">Below passing grade</p>
+        <p class="mt-1 text-xs text-fb-secondary">{{ t('rating.belowPassing') }}</p>
       </div>
     </div>
 
     <!-- Top 3 Podium Cards (when records exist) -->
     <div v-if="topThree.length > 0 && !loading" class="rounded-2xl border border-fb-line bg-fb-card p-5 shadow-sm">
       <div class="mb-4 flex items-center justify-between">
-        <h2 class="text-base font-bold text-fb-text">🏆 Academic Top Performers</h2>
-        <span class="text-xs font-medium text-fb-secondary">Based on current filter</span>
+        <h2 class="text-base font-bold text-fb-text">🏆 {{ t('rating.topPerformers') }}</h2>
+        <span class="text-xs font-medium text-fb-secondary">{{ t('rating.basedOnFilter') }}</span>
       </div>
       <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <!-- 1st Place -->
@@ -741,14 +753,14 @@ watch(
           <div class="flex items-center gap-3">
             <span class="text-3xl">🥇</span>
             <div>
-              <p class="text-xs font-bold uppercase tracking-wider text-amber-700">1st Place · Champion</p>
+              <p class="text-xs font-bold uppercase tracking-wider text-amber-700">{{ t('rating.place1') }}</p>
               <p class="text-base font-bold text-fb-text">{{ topThree[0].name }}</p>
               <p class="text-xs text-fb-secondary">{{ topThree[0].group }} · {{ topThree[0].branch }}</p>
             </div>
           </div>
           <div class="text-right">
             <span class="text-2xl font-black text-amber-600">{{ topThree[0].grade }}</span>
-            <p class="text-[10px] text-fb-secondary">/ {{ topThree[0].max_scale }} pts</p>
+            <p class="text-[10px] text-fb-secondary">/ {{ t('rating.points', { count: topThree[0].max_scale }) }}</p>
           </div>
         </div>
 
@@ -761,14 +773,14 @@ watch(
           <div class="flex items-center gap-3">
             <span class="text-3xl">🥈</span>
             <div>
-              <p class="text-xs font-bold uppercase tracking-wider text-slate-600">2nd Place · Runner-up</p>
+              <p class="text-xs font-bold uppercase tracking-wider text-slate-600">{{ t('rating.place2') }}</p>
               <p class="text-base font-bold text-fb-text">{{ topThree[1].name }}</p>
               <p class="text-xs text-fb-secondary">{{ topThree[1].group }} · {{ topThree[1].branch }}</p>
             </div>
           </div>
           <div class="text-right">
             <span class="text-2xl font-black text-slate-700">{{ topThree[1].grade }}</span>
-            <p class="text-[10px] text-fb-secondary">/ {{ topThree[1].max_scale }} pts</p>
+            <p class="text-[10px] text-fb-secondary">/ {{ t('rating.points', { count: topThree[1].max_scale }) }}</p>
           </div>
         </div>
 
@@ -781,14 +793,14 @@ watch(
           <div class="flex items-center gap-3">
             <span class="text-3xl">🥉</span>
             <div>
-              <p class="text-xs font-bold uppercase tracking-wider text-amber-800">3rd Place · Finalist</p>
+              <p class="text-xs font-bold uppercase tracking-wider text-amber-800">{{ t('rating.place3') }}</p>
               <p class="text-base font-bold text-fb-text">{{ topThree[2].name }}</p>
               <p class="text-xs text-fb-secondary">{{ topThree[2].group }} · {{ topThree[2].branch }}</p>
             </div>
           </div>
           <div class="text-right">
             <span class="text-2xl font-black text-amber-800">{{ topThree[2].grade }}</span>
-            <p class="text-[10px] text-fb-secondary">/ {{ topThree[2].max_scale }} pts</p>
+            <p class="text-[10px] text-fb-secondary">/ {{ t('rating.points', { count: topThree[2].max_scale }) }}</p>
           </div>
         </div>
       </div>
@@ -804,7 +816,7 @@ watch(
           : 'border-transparent text-fb-secondary hover:text-fb-text'"
         @click="onTabChange('table')"
       >
-        <span>👨‍🎓</span> Students Rating
+        <span>👨‍🎓</span> {{ t('rating.studentsTab') }}
         <span class="rounded-full bg-fb-canvas px-2 py-0.5 text-xs text-fb-secondary">{{ rows.length }}</span>
       </button>
 
@@ -816,7 +828,7 @@ watch(
           : 'border-transparent text-fb-secondary hover:text-fb-text'"
         @click="onTabChange('groups')"
       >
-        <span>👥</span> Group Leaderboard
+        <span>👥</span> {{ t('rating.groupsTab') }}
         <span class="rounded-full bg-fb-canvas px-2 py-0.5 text-xs text-fb-secondary">{{ groupScores.length }}</span>
       </button>
 
@@ -828,7 +840,7 @@ watch(
           : 'border-transparent text-fb-secondary hover:text-fb-text'"
         @click="onTabChange('analytics')"
       >
-        <span>📊</span> Grade Distribution
+        <span>📊</span> {{ t('rating.distributionTab') }}
       </button>
     </div>
 
@@ -836,13 +848,13 @@ watch(
     <div class="rounded-2xl border border-fb-line bg-fb-card p-4 shadow-sm">
       <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-6">
         <div v-if="!isTeacher">
-          <label class="mb-1 block text-xs font-semibold text-fb-secondary">Branch</label>
+          <label class="mb-1 block text-xs font-semibold text-fb-secondary">{{ t('common.branch') }}</label>
           <select
             v-model="filters.branch_id"
             class="w-full rounded-lg border border-fb-line bg-fb-card px-3 py-2 text-sm focus:border-fb-blue focus:outline-none"
             @change="loadRating(); activeTab === 'groups' && loadGroupScores()"
           >
-            <option value="">All branches</option>
+            <option value="">{{ t('common.allBranches') }}</option>
             <option v-for="b in branches" :key="b.id" :value="String(b.id)">
               {{ b.name }}
             </option>
@@ -850,13 +862,13 @@ watch(
         </div>
 
         <div>
-          <label class="mb-1 block text-xs font-semibold text-fb-secondary">Group</label>
+          <label class="mb-1 block text-xs font-semibold text-fb-secondary">{{ t('schedule.group') }}</label>
           <select
             v-model="filters.group_id"
             class="w-full rounded-lg border border-fb-line bg-fb-card px-3 py-2 text-sm focus:border-fb-blue focus:outline-none"
             @change="loadRating"
           >
-            <option value="">All groups</option>
+            <option value="">{{ t('teacherAtt.allGroups') }}</option>
             <option v-for="g in groups" :key="g.id" :value="String(g.id)">
               {{ g.name }}
             </option>
@@ -864,13 +876,13 @@ watch(
         </div>
 
         <div v-if="!isTeacher">
-          <label class="mb-1 block text-xs font-semibold text-fb-secondary">Teacher</label>
+          <label class="mb-1 block text-xs font-semibold text-fb-secondary">{{ t('schedule.teacher') }}</label>
           <select
             v-model="filters.teacher_id"
             class="w-full rounded-lg border border-fb-line bg-fb-card px-3 py-2 text-sm focus:border-fb-blue focus:outline-none"
             @change="loadRating(); activeTab === 'groups' && loadGroupScores()"
           >
-            <option value="">All teachers</option>
+            <option value="">{{ t('teacherAtt.allTeachers') }}</option>
             <option v-for="t in teachers" :key="t.id" :value="String(t.id)">
               {{ t.name }}
             </option>
@@ -878,13 +890,13 @@ watch(
         </div>
 
         <div v-if="!isTeacher">
-          <label class="mb-1 block text-xs font-semibold text-fb-secondary">Course / Subject</label>
+          <label class="mb-1 block text-xs font-semibold text-fb-secondary">{{ t('schedule.course') }}</label>
           <select
             v-model="filters.course_id"
             class="w-full rounded-lg border border-fb-line bg-fb-card px-3 py-2 text-sm focus:border-fb-blue focus:outline-none"
             @change="loadRating(); activeTab === 'groups' && loadGroupScores()"
           >
-            <option value="">All courses</option>
+            <option value="">{{ t('conversion.allCourses') }}</option>
             <option v-for="c in courses" :key="c.id" :value="String(c.id)">
               {{ c.name }}
             </option>
@@ -892,36 +904,36 @@ watch(
         </div>
 
         <div>
-          <label class="mb-1 block text-xs font-semibold text-fb-secondary">Status</label>
+          <label class="mb-1 block text-xs font-semibold text-fb-secondary">{{ t('common.status') }}</label>
           <select
             v-model="filters.status"
             class="w-full rounded-lg border border-fb-line bg-fb-card px-3 py-2 text-sm focus:border-fb-blue focus:outline-none"
             @change="loadRating"
           >
-            <option value="">All statuses</option>
-            <option value="passed">✅ Passed (≥ {{ summary.pass_score }})</option>
-            <option value="failed">⚠️ Needs Retake (&lt; {{ summary.pass_score }})</option>
-            <option value="top10">⭐ Top 10 Only</option>
+            <option value="">{{ t('rating.allStatuses') }}</option>
+            <option value="passed">✅ {{ t('rating.passed') }} (≥ {{ summary.pass_score }})</option>
+            <option value="failed">⚠️ {{ t('rating.needsRetake') }} (&lt; {{ summary.pass_score }})</option>
+            <option value="top10">⭐ {{ t('rating.top10') }}</option>
           </select>
         </div>
 
         <div>
-          <label class="mb-1 block text-xs font-semibold text-fb-secondary">Search</label>
+          <label class="mb-1 block text-xs font-semibold text-fb-secondary">{{ t('common.search') }}</label>
           <div class="flex gap-2">
             <input
               v-model="filters.q"
               type="search"
-              placeholder="Student name"
+              :placeholder="t('rating.studentName')"
               class="w-full rounded-lg border border-fb-line bg-fb-card px-3 py-2 text-sm focus:border-fb-blue focus:outline-none"
               @keydown.enter="loadRating"
             />
             <button
               type="button"
-              title="Reset filters"
+              :title="t('common.resetFilters')"
               class="rounded-lg border border-fb-line px-3 py-2 text-xs font-medium text-fb-secondary hover:bg-fb-canvas hover:text-fb-text"
               @click="resetFilters"
             >
-              Reset
+              {{ t('common.reset') }}
             </button>
           </div>
         </div>
@@ -932,19 +944,19 @@ watch(
     <div v-if="activeTab === 'table'" class="overflow-hidden rounded-2xl border border-fb-line bg-fb-card shadow-sm">
       <div v-if="loading" class="p-12 text-center text-fb-secondary">
         <div class="inline-block h-6 w-6 animate-spin rounded-full border-2 border-fb-blue border-t-transparent" />
-        <p class="mt-2 text-sm">Loading ratings…</p>
+        <p class="mt-2 text-sm">{{ t('common.loading') }}</p>
       </div>
 
       <div v-else-if="!rows.length" class="p-12 text-center text-fb-secondary">
         <p class="text-4xl">📋</p>
-        <p class="mt-2 text-base font-semibold text-fb-text">No ratings found</p>
-        <p class="mt-1 text-sm text-fb-secondary">Try adjusting your filters or add grades for your students.</p>
+        <p class="mt-2 text-base font-semibold text-fb-text">{{ t('rating.emptyTitle') }}</p>
+        <p class="mt-1 text-sm text-fb-secondary">{{ t('rating.emptyText') }}</p>
         <button
           type="button"
           class="mt-4 rounded-lg bg-fb-blue px-4 py-2 text-sm font-medium text-white hover:bg-fb-blue-dark"
           @click="openBulkModal()"
         >
-          Open Group Grading Sheet
+          {{ t('rating.openSheet') }}
         </button>
       </div>
 
@@ -952,14 +964,14 @@ watch(
         <table class="w-full text-left text-sm">
           <thead class="border-b border-fb-line bg-fb-canvas text-xs font-bold uppercase tracking-wider text-fb-secondary">
             <tr>
-              <th class="px-5 py-3.5 text-center">Rank</th>
-              <th class="px-5 py-3.5">Student</th>
-              <th class="px-5 py-3.5">Group & Subject</th>
-              <th class="px-5 py-3.5">Teacher</th>
-              <th class="px-5 py-3.5">Branch</th>
-              <th class="px-5 py-3.5 text-right">Score</th>
-              <th class="px-5 py-3.5 text-center">Status</th>
-              <th class="px-5 py-3.5 text-center">In-Group Rank</th>
+              <th class="px-5 py-3.5 text-center">{{ t('rating.rank') }}</th>
+              <th class="px-5 py-3.5">{{ t('months.student') }}</th>
+              <th class="px-5 py-3.5">{{ t('rating.groupAndCourse') }}</th>
+              <th class="px-5 py-3.5">{{ t('schedule.teacher') }}</th>
+              <th class="px-5 py-3.5">{{ t('common.branch') }}</th>
+              <th class="px-5 py-3.5 text-right">{{ t('rating.grade') }}</th>
+              <th class="px-5 py-3.5 text-center">{{ t('common.status') }}</th>
+              <th class="px-5 py-3.5 text-center">{{ t('rating.rankInGroup') }}</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-fb-line">
@@ -1021,19 +1033,19 @@ watch(
                   v-if="row.is_passed"
                   class="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 border border-emerald-200"
                 >
-                  <span>✓</span> Passed
+                  <span>✓</span> {{ t('rating.passed') }}
                 </span>
                 <span
                   v-else
                   class="inline-flex items-center gap-1 rounded-full bg-red-50 px-2.5 py-1 text-xs font-semibold text-red-700 border border-red-200"
                 >
-                  <span>✕</span> Retake
+                  <span>✕</span> {{ t('rating.retake') }}
                 </span>
               </td>
 
               <!-- In-Group Rank -->
               <td class="px-5 py-3.5 text-center text-xs font-medium text-fb-secondary">
-                #{{ row.rank_in_group || row.rank }} in group
+                {{ t('rating.inGroup', { rank: row.rank_in_group || row.rank }) }}
               </td>
             </tr>
           </tbody>
@@ -1045,27 +1057,27 @@ watch(
     <div v-else-if="activeTab === 'groups'" class="overflow-hidden rounded-2xl border border-fb-line bg-fb-card shadow-sm">
       <div v-if="groupsLoading" class="p-12 text-center text-fb-secondary">
         <div class="inline-block h-6 w-6 animate-spin rounded-full border-2 border-fb-blue border-t-transparent" />
-        <p class="mt-2 text-sm">Loading group rankings…</p>
+        <p class="mt-2 text-sm">{{ t('common.loading') }}</p>
       </div>
 
       <div v-else-if="!groupScores.length" class="p-12 text-center text-fb-secondary">
         <p class="text-4xl">👥</p>
-        <p class="mt-2 text-base font-semibold text-fb-text">No group statistics available</p>
+        <p class="mt-2 text-base font-semibold text-fb-text">{{ t('rating.noGroupStats') }}</p>
       </div>
 
       <div v-else class="overflow-x-auto">
         <table class="w-full text-left text-sm">
           <thead class="border-b border-fb-line bg-fb-canvas text-xs font-bold uppercase tracking-wider text-fb-secondary">
             <tr>
-              <th class="px-5 py-3.5 text-center">Group Rank</th>
-              <th class="px-5 py-3.5">Group</th>
-              <th class="px-5 py-3.5">Course / Subject</th>
-              <th class="px-5 py-3.5">Teacher</th>
-              <th class="px-5 py-3.5">Branch</th>
-              <th class="px-5 py-3.5 text-center">Graded / Enrolled</th>
-              <th class="px-5 py-3.5 text-right">Average Score</th>
-              <th class="px-5 py-3.5 text-center">Pass Rate</th>
-              <th class="px-5 py-3.5 text-right">Actions</th>
+              <th class="px-5 py-3.5 text-center">{{ t('rating.groupRank') }}</th>
+              <th class="px-5 py-3.5">{{ t('schedule.group') }}</th>
+              <th class="px-5 py-3.5">{{ t('schedule.course') }}</th>
+              <th class="px-5 py-3.5">{{ t('schedule.teacher') }}</th>
+              <th class="px-5 py-3.5">{{ t('common.branch') }}</th>
+              <th class="px-5 py-3.5 text-center">{{ t('rating.gradedEnrolled') }}</th>
+              <th class="px-5 py-3.5 text-right">{{ t('rating.averageGrade') }}</th>
+              <th class="px-5 py-3.5 text-center">{{ t('rating.passRate') }}</th>
+              <th class="px-5 py-3.5 text-right">{{ t('common.actions') }}</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-fb-line">
@@ -1110,7 +1122,7 @@ watch(
 
               <td class="px-5 py-3.5 text-center">
                 <span class="font-semibold text-fb-text">{{ grp.graded_count }}</span>
-                <span class="text-xs text-fb-secondary"> / {{ grp.enrolled_count }} students</span>
+                <span class="text-xs text-fb-secondary"> / {{ t('attendance.studentsCount', { count: grp.enrolled_count }) }}</span>
               </td>
 
               <td class="px-5 py-3.5 text-right">
@@ -1137,7 +1149,7 @@ watch(
                   class="rounded-lg border border-fb-blue bg-blue-50/60 px-3 py-1 text-xs font-semibold text-fb-blue hover:bg-fb-blue hover:text-white transition-colors"
                   @click="openBulkModal(grp.group_id)"
                 >
-                  📝 Grade Group
+                  📝 {{ t('rating.gradeGroup') }}
                 </button>
               </td>
             </tr>
@@ -1150,14 +1162,14 @@ watch(
     <div v-else-if="activeTab === 'analytics'" class="space-y-6">
       <!-- Brackets distribution -->
       <div class="rounded-2xl border border-fb-line bg-fb-card p-6 shadow-sm">
-        <h2 class="text-base font-bold text-fb-text">📊 Score Tier Breakdown</h2>
-        <p class="text-xs text-fb-secondary">Distribution of student performance across score brackets</p>
+        <h2 class="text-base font-bold text-fb-text">📊 {{ t('rating.tiersTitle') }}</h2>
+        <p class="text-xs text-fb-secondary">{{ t('rating.tiersText') }}</p>
 
         <div class="mt-6 space-y-4">
           <div v-for="b in brackets" :key="b.label" class="space-y-1.5">
             <div class="flex items-center justify-between text-sm">
               <span class="font-medium text-fb-text">{{ b.label }}</span>
-              <span class="font-semibold text-fb-secondary">{{ b.count }} students ({{ b.percent }}%)</span>
+              <span class="font-semibold text-fb-secondary">{{ t('attendance.studentsCount', { count: b.count }) }} ({{ b.percent }}%)</span>
             </div>
             <div class="h-3 w-full rounded-full bg-fb-canvas">
               <div
@@ -1172,10 +1184,10 @@ watch(
 
       <!-- Ranked Visual Bars -->
       <div class="rounded-2xl border border-fb-line bg-fb-card p-6 shadow-sm">
-        <h2 class="text-base font-bold text-fb-text">📈 Individual Student Comparison</h2>
-        <p class="text-xs text-fb-secondary">Relative standing against maximum grade scale ({{ summary.max_scale }} pts)</p>
+        <h2 class="text-base font-bold text-fb-text">📈 {{ t('rating.comparisonTitle') }}</h2>
+        <p class="text-xs text-fb-secondary">{{ t('rating.comparisonText', { max: summary.max_scale }) }}</p>
 
-        <div v-if="!rows.length" class="py-8 text-center text-fb-secondary">No data to display</div>
+        <div v-if="!rows.length" class="py-8 text-center text-fb-secondary">{{ t('common.noData') }}</div>
         <div v-else class="mt-6 space-y-3">
           <div
             v-for="row in rows"
@@ -1197,7 +1209,7 @@ watch(
               />
             </div>
             <div class="text-right font-bold" :class="row.is_passed ? 'text-fb-blue' : 'text-red-500'">
-              {{ row.grade }} pts
+              {{ t('rating.points', { count: row.grade }) }}
             </div>
           </div>
         </div>
@@ -1211,12 +1223,12 @@ watch(
         <div class="flex items-center justify-between border-b border-fb-line px-6 py-4">
           <div>
             <h2 class="text-lg font-bold text-fb-text">{{ panelTitle }}</h2>
-            <p class="text-xs text-fb-secondary">Pass mark: {{ summary.pass_score }} pts / Max: {{ summary.max_scale }} pts</p>
+            <p class="text-xs text-fb-secondary">{{ t('rating.passMax', { pass: summary.pass_score, max: summary.max_scale }) }}</p>
           </div>
-          <button type="button" class="text-fb-secondary hover:text-fb-text" @click="closePanel">✕</button>
+          <button type="button" class="text-fb-secondary hover:text-fb-text" :aria-label="t('common.close')" @click="closePanel">✕</button>
         </div>
 
-        <div v-if="panelLoading" class="flex-1 p-6 text-fb-secondary">Loading…</div>
+        <div v-if="panelLoading" class="flex-1 p-6 text-fb-secondary">{{ t('common.loading') }}</div>
 
         <form v-else class="flex flex-1 flex-col overflow-hidden" @submit.prevent="submitScore">
           <div class="flex-1 space-y-4 overflow-y-auto p-6">
@@ -1228,13 +1240,13 @@ watch(
 
             <template v-else>
               <div>
-                <label class="mb-1 block text-sm font-semibold text-fb-text">1. Группа</label>
+                <label class="mb-1 block text-sm font-semibold text-fb-text">1. {{ t('schedule.group') }}</label>
                 <select
                   v-model="form.group_id"
                   class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none"
                   @change="loadPanelStudents()"
                 >
-                  <option value="">Выберите группу</option>
+                  <option value="">{{ t('attendance.chooseGroup') }}</option>
                   <option v-for="group in groups" :key="group.id" :value="group.id">
                     {{ group.name }}
                   </option>
@@ -1242,31 +1254,31 @@ watch(
               </div>
 
               <div>
-                <label class="mb-1 block text-sm font-semibold text-fb-text">2. Дата урока</label>
+                <label class="mb-1 block text-sm font-semibold text-fb-text">2. {{ t('rating.lessonDate') }}</label>
                 <select
                   v-model="panelDate"
                   :disabled="!form.group_id || !panelLessonDates.length"
                   class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm disabled:bg-fb-canvas focus:border-fb-blue focus:outline-none"
                   @change="loadPanelStudents(true)"
                 >
-                  <option v-if="!form.group_id" value="">Сначала выберите группу</option>
-                  <option v-else-if="!panelLessonDates.length" value="">Нет уроков за последние 7 дней</option>
+                  <option v-if="!form.group_id" value="">{{ t('rating.chooseGroupFirst') }}</option>
+                  <option v-else-if="!panelLessonDates.length" value="">{{ t('rating.noLessons7') }}</option>
                   <option v-for="d in panelLessonDates" :key="d.date" :value="d.date">{{ d.label }}</option>
                 </select>
                 <p class="mt-1 text-[11px] text-fb-secondary">
-                  Только дни занятий этой группы по расписанию, не дальше 7 дней назад.
+                  {{ t('rating.lessonDatesHint') }}
                 </p>
               </div>
 
               <div>
-                <label class="mb-1 block text-sm font-semibold text-fb-text">3. Ученик</label>
+                <label class="mb-1 block text-sm font-semibold text-fb-text">3. {{ t('months.student') }}</label>
                 <select
                   v-model="form.student_id"
                   :disabled="!form.group_id || !panelDate || panelStudentsLoading"
                   class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm disabled:bg-fb-canvas focus:border-fb-blue focus:outline-none"
                 >
                   <option value="">
-                    {{ !form.group_id ? 'Сначала выберите группу' : panelStudentsLoading ? 'Загрузка…' : 'Выберите ученика' }}
+                    {{ !form.group_id ? t('rating.chooseGroupFirst') : panelStudentsLoading ? t('common.loading') : t('rating.chooseStudent') }}
                   </option>
                   <!-- Absent today / frozen: shown, but cannot be picked -->
                   <option
@@ -1275,7 +1287,7 @@ watch(
                     :value="st.student_id"
                     :disabled="!st.can_grade"
                   >
-                    {{ st.name }}{{ st.can_grade ? '' : ` — ${st.reason_label}` }}
+                    {{ st.name }}{{ st.can_grade ? '' : ` — ${serverLabel(st.reason_label)}` }}
                   </option>
                 </select>
               </div>
@@ -1284,14 +1296,14 @@ watch(
             <div>
               <div class="flex items-center justify-between">
                 <label class="mb-1 block text-sm font-semibold text-fb-text">
-                  Grade (0 – {{ summary.max_scale }})
+                  {{ t('rating.gradeRangeLabel', { max: summary.max_scale }) }}
                 </label>
                 <span
                   v-if="form.grade !== ''"
                   class="text-xs font-semibold"
                   :class="form.grade >= summary.pass_score ? 'text-emerald-600' : 'text-red-500'"
                 >
-                  {{ form.grade >= summary.pass_score ? 'Passed' : 'Needs Retake' }}
+                  {{ form.grade >= summary.pass_score ? t('rating.passed') : t('rating.needsRetake') }}
                 </span>
               </div>
               <input
@@ -1311,37 +1323,37 @@ watch(
               class="rounded-xl border border-fb-line bg-fb-canvas p-4 text-sm text-fb-secondary space-y-2"
             >
               <div class="flex items-center justify-between">
-                <span>Общий рейтинг:</span>
+                <span>{{ t('rating.overallRank') }}:</span>
                 <span class="font-bold text-fb-text">№{{ detailScore.no }}</span>
               </div>
               <div class="flex items-center justify-between">
-                <span>Место в группе:</span>
+                <span>{{ t('rating.rankInGroup') }}:</span>
                 <span class="font-bold text-fb-text">№{{ detailScore.rank_in_group || detailScore.rank }}</span>
               </div>
               <div class="flex items-center justify-between">
-                <span>Branch:</span>
+                <span>{{ t('common.branch') }}:</span>
                 <span class="font-bold text-fb-text">{{ detailScore.branch }}</span>
               </div>
               <div class="mt-3 flex gap-3 border-t border-fb-line pt-3">
                 <button type="button" class="text-fb-blue hover:underline" @click="goStudent(detailScore)">
-                  Student Profile →
+                  {{ t('rating.studentProfile') }} →
                 </button>
                 <button type="button" class="text-fb-blue hover:underline" @click="goGroup(detailScore)">
-                  Group Page →
+                  {{ t('rating.groupPage') }} →
                 </button>
               </div>
             </div>
 
             <!-- Every grade of the student; the rating shows only the latest one -->
             <div v-if="detailScore" class="rounded-xl border border-fb-line p-4 text-sm">
-              <p class="mb-2 font-semibold text-fb-text">История оценок</p>
-              <p v-if="!history.length" class="text-fb-secondary">Пока нет записей</p>
+              <p class="mb-2 font-semibold text-fb-text">{{ t('rating.history') }}</p>
+              <p v-if="!history.length" class="text-fb-secondary">{{ t('rating.noHistory') }}</p>
               <ul v-else class="space-y-1.5">
                 <li v-for="h in history" :key="h.id" class="flex items-start justify-between gap-3">
                   <span class="text-fb-secondary">
                     {{ formatDay(h.date) }} · {{ h.group }}<span v-if="h.course"> · {{ h.course }}</span>
                     <span v-if="h.corrected" class="block text-[11px] text-amber-700">
-                      исправлено {{ formatDay(h.corrected_at) }}<span v-if="h.corrected_by"> ({{ h.corrected_by }})</span>
+                      {{ t('rating.corrected', { date: formatDay(h.corrected_at) }) }}<span v-if="h.corrected_by"> ({{ h.corrected_by }})</span>
                     </span>
                   </span>
                   <span class="font-bold text-fb-text">{{ h.grade }}</span>
@@ -1359,7 +1371,7 @@ watch(
                 class="rounded-lg bg-fb-blue px-5 py-2 text-sm font-semibold text-white hover:bg-fb-blue-dark"
                 @click="startEdit"
               >
-                Edit
+                {{ t('common.edit') }}
               </button>
               <button
                 type="button"
@@ -1367,7 +1379,7 @@ watch(
                 :disabled="deleting"
                 @click="deleteScore"
               >
-                Delete
+                {{ t('common.delete') }}
               </button>
             </template>
             <template v-else>
@@ -1376,7 +1388,7 @@ watch(
                 class="rounded-lg bg-fb-blue px-5 py-2 text-sm font-semibold text-white hover:bg-fb-blue-dark disabled:opacity-50"
                 :disabled="saving"
               >
-                {{ saving ? 'Saving…' : editingScore ? 'Save Changes' : 'Create Grade' }}
+                {{ saving ? t('common.saving') : editingScore ? t('common.save') : t('rating.addTitle') }}
               </button>
             </template>
             <button
@@ -1384,7 +1396,7 @@ watch(
               class="rounded-lg border border-fb-line px-5 py-2 text-sm font-semibold text-fb-secondary hover:bg-fb-canvas"
               @click="closePanel"
             >
-              Cancel
+              {{ t('common.cancel') }}
             </button>
           </div>
         </form>
@@ -1397,17 +1409,17 @@ watch(
       <div class="relative flex max-h-[90vh] w-full max-w-2xl flex-col rounded-2xl border border-fb-line bg-fb-card shadow-2xl">
         <div class="flex items-center justify-between border-b border-fb-line px-6 py-4">
           <div>
-            <h2 class="text-lg font-bold text-fb-text">📝 Group Grading Sheet</h2>
+            <h2 class="text-lg font-bold text-fb-text">📝 {{ t('rating.groupSheet') }}</h2>
             <p class="text-xs text-fb-secondary">
-              Set or update grades for all students in the selected group simultaneously
+              {{ t('rating.sheetText') }}
             </p>
           </div>
-          <button type="button" class="text-fb-secondary hover:text-fb-text" @click="showBulkModal = false">✕</button>
+          <button type="button" class="text-fb-secondary hover:text-fb-text" :aria-label="t('common.close')" @click="showBulkModal = false">✕</button>
         </div>
 
         <div class="border-b border-fb-line bg-fb-canvas/50 px-6 py-3">
           <div class="flex flex-wrap items-center gap-3">
-            <label class="text-xs font-semibold text-fb-secondary">Select Group:</label>
+            <label class="text-xs font-semibold text-fb-secondary">{{ t('schedule.group') }}:</label>
             <select
               v-model="bulkGroupId"
               class="rounded-lg border border-fb-line bg-fb-card px-3 py-1.5 text-sm font-semibold focus:border-fb-blue focus:outline-none"
@@ -1417,18 +1429,18 @@ watch(
                 {{ g.name }}
               </option>
             </select>
-            <label class="text-xs font-semibold text-fb-secondary">Дата урока:</label>
+            <label class="text-xs font-semibold text-fb-secondary">{{ t('rating.lessonDate') }}:</label>
             <select
               v-model="bulkDate"
               :disabled="!bulkLessonDates.length"
               class="rounded-lg border border-fb-line bg-fb-card px-3 py-1.5 text-sm font-semibold disabled:bg-fb-canvas focus:border-fb-blue focus:outline-none"
               @change="loadBulkStudents"
             >
-              <option v-if="!bulkLessonDates.length" value="">нет уроков за 7 дней</option>
+              <option v-if="!bulkLessonDates.length" value="">{{ t('rating.noLessons7') }}</option>
               <option v-for="d in bulkLessonDates" :key="d.date" :value="d.date">{{ d.label }}</option>
             </select>
             <span class="text-xs text-fb-secondary">
-              (Pass mark: <strong>{{ summary.pass_score }}</strong> / Max scale: <strong>{{ summary.max_scale }}</strong>)
+              ({{ t('rating.passMax', { pass: summary.pass_score, max: summary.max_scale }) }})
             </span>
           </div>
         </div>
@@ -1436,18 +1448,18 @@ watch(
         <div class="flex-1 overflow-y-auto p-6">
           <div v-if="bulkLoading" class="py-12 text-center text-fb-secondary">
             <div class="inline-block h-6 w-6 animate-spin rounded-full border-2 border-fb-blue border-t-transparent" />
-            <p class="mt-2 text-sm">Loading group students…</p>
+            <p class="mt-2 text-sm">{{ t('common.loading') }}</p>
           </div>
 
           <div v-else-if="!bulkStudents.length" class="py-12 text-center text-fb-secondary">
             <p class="text-3xl">👥</p>
-            <p class="mt-2 text-sm font-semibold text-fb-text">No enrolled students in this group</p>
+            <p class="mt-2 text-sm font-semibold text-fb-text">{{ t('attendance.noStudents') }}</p>
           </div>
 
           <div v-else class="space-y-3">
             <div class="flex items-center justify-between border-b border-fb-line pb-2 text-xs font-bold uppercase text-fb-secondary">
-              <span>Student Name</span>
-              <span>Grade (0 – {{ summary.max_scale }})</span>
+              <span>{{ t('rating.studentName') }}</span>
+              <span>{{ t('rating.gradeRangeLabel', { max: summary.max_scale }) }}</span>
             </div>
 
             <div
@@ -1455,7 +1467,7 @@ watch(
               :key="st.student_id"
               class="flex items-center justify-between gap-4 rounded-xl border border-fb-line p-3"
               :class="st.can_grade ? 'bg-fb-canvas/30' : 'pointer-events-none select-none bg-fb-canvas opacity-45 grayscale'"
-              :title="st.can_grade ? '' : st.reason_label"
+              :title="st.can_grade ? '' : serverLabel(st.reason_label)"
             >
               <div class="flex items-center gap-3">
                 <div class="flex h-8 w-8 items-center justify-center rounded-full bg-fb-canvas font-bold text-fb-blue">
@@ -1463,25 +1475,25 @@ watch(
                 </div>
                 <div>
                   <p class="font-semibold text-fb-text">{{ st.student_name }}</p>
-                  <span v-if="!st.can_grade" class="text-[11px] text-fb-secondary">{{ st.reason_label }}</span>
+                  <span v-if="!st.can_grade" class="text-[11px] text-fb-secondary">{{ serverLabel(st.reason_label) }}</span>
                   <span v-else-if="st.grade === ''" class="text-[11px] text-fb-secondary">
-                    Не оценён<span v-if="st.last_grade !== null"> · последняя: {{ st.last_grade }}</span>
+                    {{ t('rating.notGraded') }}<span v-if="st.last_grade !== null"> · {{ t('rating.lastGrade', { grade: st.last_grade }) }}</span>
                   </span>
                   <span
                     v-else-if="st.grade >= summary.pass_score"
                     class="text-[11px] font-semibold text-emerald-600"
                   >
-                    ✓ Pass
+                    ✓ {{ t('rating.passed') }}
                   </span>
                   <span v-else class="text-[11px] font-semibold text-red-500">
-                    ✕ Retake
+                    ✕ {{ t('rating.retake') }}
                   </span>
                 </div>
               </div>
 
               <div class="w-32 text-right">
                 <!-- No box for a student who is not here today: nobody can grade an absent student -->
-                <span v-if="!st.can_grade" class="text-xs font-semibold text-fb-secondary">{{ st.reason_label }}</span>
+                <span v-if="!st.can_grade" class="text-xs font-semibold text-fb-secondary">{{ serverLabel(st.reason_label) }}</span>
                 <input
                   v-else
                   v-model.number="st.grade"
@@ -1501,7 +1513,7 @@ watch(
 
         <div class="flex items-center justify-between border-t border-fb-line px-6 py-4">
           <span class="text-xs text-fb-secondary">
-            {{ bulkStudents.length }} students in sheet
+            {{ t('rating.inSheet', { count: bulkStudents.length }) }}
           </span>
           <div class="flex gap-2">
             <button
@@ -1509,7 +1521,7 @@ watch(
               class="rounded-lg border border-fb-line px-4 py-2 text-sm font-medium text-fb-secondary hover:bg-fb-canvas"
               @click="showBulkModal = false"
             >
-              Cancel
+              {{ t('common.cancel') }}
             </button>
             <button
               type="button"
@@ -1517,7 +1529,7 @@ watch(
               :disabled="bulkSaving || !bulkStudents.length"
               @click="submitBulkScores"
             >
-              {{ bulkSaving ? 'Saving…' : 'Save All Grades' }}
+              {{ bulkSaving ? t('common.saving') : t('rating.saveAll') }}
             </button>
           </div>
         </div>

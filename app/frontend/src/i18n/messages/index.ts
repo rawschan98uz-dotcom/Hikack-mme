@@ -8,6 +8,7 @@ import people from './people';
 import attendance from './attendance';
 import labels from './labels';
 import salaries from './salaries';
+import rating from './rating';
 
 export const messages = {
   ...common,
@@ -20,6 +21,7 @@ export const messages = {
   ...attendance,
   ...labels,
   ...salaries,
+  ...rating,
 };
 
 export type MessageKey = keyof typeof messages;

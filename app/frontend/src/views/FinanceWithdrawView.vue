@@ -5,13 +5,14 @@ import client, { type ApiEnvelope } from '../api/client';
 import { useRememberedFilters } from '../utils/rememberedFilters';
 import EmptyState from '../components/EmptyState.vue';
 import SkeletonBlock from '../components/SkeletonBlock.vue';
+import MoneyTotals from '../components/MoneyTotals.vue';
 import { todayIso } from '../utils/dates';
 import { t } from '../i18n';
 import { confirmDialog, toast } from '../ui/feedback';
 import { apiErrorMessage } from '../utils/apiError';
 import { formatSum } from '../utils/wallet';
 
-type PageArray<T> = T[] & { has_more?: boolean; next_offset?: number | null };
+type PageArray<T> = T[] & { has_more?: boolean; next_offset?: number | null; count?: number; total?: number };
 
 interface WithdrawRow {
   id: number;
@@ -87,6 +88,9 @@ function listParams(offset = 0) {
   return params;
 }
 
+/** Money of the whole filtered period (the server adds it up, not only the rows shown). */
+const periodTotal = ref<{ total: number; count: number } | null>(null);
+
 async function loadRows() {
   loading.value = true;
   try {
@@ -94,6 +98,7 @@ async function loadRows() {
     rows.value = [...data.data];
     hasMore.value = Boolean(data.data.has_more);
     nextOffset.value = data.data.next_offset ?? null;
+    periodTotal.value = typeof data.data.total === 'number' ? { total: data.data.total, count: data.data.count ?? data.data.length } : null;
   } finally {
     loading.value = false;
   }
@@ -245,6 +250,12 @@ watch(
         ✕ {{ t('empty.resetFilters') }}
       </button>
     </div>
+
+    <MoneyTotals
+      v-if="periodTotal && !loading"
+      :items="[{ label: t('totals.withdrawn'), value: periodTotal.total, tone: 'out' }]"
+      :note="t('totals.recordsCount', { count: periodTotal.count })"
+    />
 
     <div class="overflow-hidden rounded-xl border border-fb-line bg-fb-card">
       <SkeletonBlock v-if="loading" :rows="8" :cols="6" />

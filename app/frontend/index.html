@@ -1,9 +1,21 @@
 <!doctype html>
-<html lang="en">
+<html lang="ru">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Hi Jack LMS</title>
+    <title>HiJack LMS</title>
+    <link rel="icon" type="image/svg+xml" href="/icons/favicon.svg" />
+    <meta name="theme-color" content="#4f46e5" />
+    <script>
+      // The dark theme is put on before the page draws, so it never flashes white
+      (function () {
+        try {
+          var saved = localStorage.getItem('ui_theme');
+          var dark = saved === 'dark' || (saved === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+          if (dark) document.documentElement.setAttribute('data-theme', 'dark');
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body class="bg-fb-canvas">
     <div id="app"></div>

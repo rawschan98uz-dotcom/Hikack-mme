@@ -159,7 +159,7 @@ onMounted(load);
         <div class="rounded-xl border border-fb-line bg-fb-canvas/60 p-4 space-y-3">
           <div class="flex items-center justify-between">
             <span class="font-semibold text-sm text-fb-text flex items-center gap-2">
-              <span class="inline-block h-3 w-3 rounded-full bg-blue-500" />
+              <span class="inline-block h-3 w-3 rounded-full bg-indigo-500" />
               <span>Click Merchant</span>
             </span>
             <span v-if="settings.click_service_id && settings.click_merchant_id" class="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-800">

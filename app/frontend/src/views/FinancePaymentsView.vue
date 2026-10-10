@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { formatSum } from '../utils/money';
 
 import client, { type ApiEnvelope } from '../api/client';
 import { useRememberedFilters } from '../utils/rememberedFilters';
 import EmptyState from '../components/EmptyState.vue';
 import SkeletonBlock from '../components/SkeletonBlock.vue';
+import MoneyTotals from '../components/MoneyTotals.vue';
 import PaymentPreviewHint from '../components/PaymentPreviewHint.vue';
 import { todayIso } from '../utils/dates';
 import { useAuthStore } from '../stores/auth';
@@ -62,7 +64,7 @@ interface StudentOption {
   debt_amount?: number;
 }
 
-type PageArray<T> = T[] & { has_more?: boolean; next_offset?: number | null };
+type PageArray<T> = T[] & { has_more?: boolean; next_offset?: number | null; count?: number; totals?: { paid: number; refunded: number } };
 
 const METHODS = [
   { value: 'cash', label: 'payMethod.cash' as MessageKey },
@@ -171,7 +173,7 @@ const panelTitle = computed(() => {
 });
 
 function formatMoney(value: number) {
-  return Math.round(value).toLocaleString('ru-RU');
+  return formatSum(value);
 }
 
 const filteredStudents = computed(() => {
@@ -270,6 +272,9 @@ function listParams(offset = 0) {
   return params;
 }
 
+/** Money of the whole filtered period (the server adds it up, not only the rows shown). */
+const periodTotals = ref<{ paid: number; refunded: number; count: number } | null>(null);
+
 async function loadRows() {
   loading.value = true;
   try {
@@ -277,6 +282,7 @@ async function loadRows() {
     rows.value = [...data.data];
     hasMore.value = Boolean(data.data.has_more);
     nextOffset.value = data.data.next_offset ?? null;
+    periodTotals.value = data.data.totals ? { ...data.data.totals, count: data.data.count ?? data.data.length } : null;
   } finally {
     loading.value = false;
   }
@@ -517,6 +523,16 @@ watch(
       </button>
     </div>
 
+    <MoneyTotals
+      v-if="periodTotals && !loading"
+      :items="[
+        { label: t('totals.received'), value: periodTotals.paid, tone: 'in' },
+        { label: t('totals.refunded'), value: periodTotals.refunded, tone: 'out' },
+        { label: t('totals.net'), value: periodTotals.paid - periodTotals.refunded, tone: 'neutral' },
+      ]"
+      :note="t('totals.recordsCount', { count: periodTotals.count })"
+    />
+
     <div class="overflow-hidden rounded-xl border border-fb-line bg-fb-card">
       <SkeletonBlock v-if="loading" :rows="8" :cols="6" />
       <EmptyState
@@ -568,7 +584,7 @@ watch(
                 {{ t('txType.refund') }}
               </span>
               <template v-else>
-                <span class="inline-flex items-center rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-fb-blue">
+                <span class="inline-flex items-center rounded-full bg-indigo-50 px-2.5 py-0.5 text-xs font-medium text-fb-blue">
                   {{ t('receipt.months', { count: row.months_covered ?? 1 }) }}
                 </span>
                 <span

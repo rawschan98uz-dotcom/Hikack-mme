@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { dateToIso } from '../utils/dates';
 import { onMounted, reactive, ref } from 'vue';
+import { formatSum } from '../utils/money';
 
 import client, { type ApiEnvelope } from '../api/client';
 import { useRememberedFilters } from '../utils/rememberedFilters';
@@ -61,7 +62,7 @@ const filters = reactive({
 useRememberedFilters('pnl', filters);
 
 function money(value: number) {
-  return Math.round(value).toLocaleString('ru-RU');
+  return formatSum(value);
 }
 
 const PRESETS: { key: string; label: MessageKey }[] = [
@@ -269,7 +270,7 @@ onMounted(() => {
             <span>{{ t('pnl.revenue') }}</span>
             <span class="text-base">📈</span>
           </div>
-          <div class="mt-2 text-2xl font-black text-gray-900">
+          <div class="mt-2 whitespace-nowrap text-2xl font-black tabular-nums text-emerald-600">
             {{ money(pnl.summary.total_revenue) }} <span class="text-xs font-semibold text-fb-secondary">{{ t('common.sum') }}</span>
           </div>
           <div class="mt-1 text-xs text-fb-secondary">{{ t('pnl.revenueHint') }}</div>
@@ -281,7 +282,7 @@ onMounted(() => {
             <span>{{ t('pnl.expenses') }}</span>
             <span class="text-base">📉</span>
           </div>
-          <div class="mt-2 text-2xl font-black text-gray-900">
+          <div class="mt-2 whitespace-nowrap text-2xl font-black tabular-nums" :class="pnl.summary.total_expenses ? 'text-red-600' : 'text-fb-text'">
             {{ money(pnl.summary.total_expenses) }} <span class="text-xs font-semibold text-fb-secondary">{{ t('common.sum') }}</span>
           </div>
           <div class="mt-1 text-xs text-fb-secondary">{{ t('pnl.expensesHint') }}</div>
@@ -301,7 +302,7 @@ onMounted(() => {
             <span class="text-base">{{ pnl.summary.net_profit >= 0 ? '💰' : '⚠️' }}</span>
           </div>
           <div
-            class="mt-2 text-2xl font-black"
+            class="mt-2 whitespace-nowrap text-2xl font-black tabular-nums"
             :class="pnl.summary.net_profit >= 0 ? 'text-emerald-700' : 'text-red-700'"
           >
             {{ money(pnl.summary.net_profit) }} <span class="text-xs font-semibold">{{ t('common.sum') }}</span>

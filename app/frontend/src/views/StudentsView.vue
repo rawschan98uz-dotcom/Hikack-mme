@@ -1550,7 +1550,7 @@ onMounted(async () => {
                       </template>
                       <template v-else>
                         <span class="font-semibold text-fb-blue">{{ t('common.sumAmount', { amount: formatSum(p.amount) }) }}</span>
-                        <span class="rounded bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-fb-blue">
+                        <span class="rounded bg-indigo-50 px-2 py-0.5 text-[11px] font-medium text-fb-blue">
                           {{ t('receipt.months', { count: p.months_covered ?? 1 }) }}
                         </span>
                         <span v-if="p.discount_amount" class="rounded bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700">

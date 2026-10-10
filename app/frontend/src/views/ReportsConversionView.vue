@@ -118,7 +118,7 @@ const funnelSteps = computed(() => {
 });
 
 const STEP_COLORS: Record<string, { box: string; title: string; num: string; bar: string; track: string }> = {
-  blue: { box: 'border-blue-200 bg-blue-50/60', title: 'text-blue-800', num: 'text-blue-900', bar: 'bg-blue-600', track: 'bg-blue-200' },
+  blue: { box: 'border-indigo-200 bg-indigo-50/60', title: 'text-indigo-800', num: 'text-indigo-900', bar: 'bg-indigo-600', track: 'bg-indigo-200' },
   emerald: { box: 'border-emerald-200 bg-emerald-50/60', title: 'text-emerald-800', num: 'text-emerald-900', bar: 'bg-emerald-600', track: 'bg-emerald-200' },
   indigo: { box: 'border-indigo-200 bg-indigo-50/60', title: 'text-indigo-800', num: 'text-indigo-900', bar: 'bg-indigo-600', track: 'bg-indigo-200' },
 };
@@ -404,7 +404,7 @@ watch(
                 </tr>
               </thead>
               <tbody class="divide-y divide-fb-line">
-                <tr v-for="row in data.rows" :key="row.id" class="hover:bg-fb-hover/40 transition-colors">
+                <tr v-for="row in data.rows" :key="row.id">
                   <td class="px-5 py-3.5 font-medium text-fb-text">
                     <div class="flex items-center gap-2">
                       <span>{{ row.full_name }}</span>

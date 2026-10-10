@@ -4,19 +4,20 @@ export default {
   theme: {
     extend: {
       colors: {
+        // The colours live in src/style.css as CSS variables: one place for the brand and the dark theme
         fb: {
-          blue: '#1877F2',
-          'blue-dark': '#166FE5',
-          'blue-classic': '#3B5998',
-          canvas: '#F0F2F5',
-          card: '#FFFFFF',
-          line: '#E4E6EB',
-          'line-strong': '#D8DDE4',
-          icon: '#898F9C',
-          text: '#050505',
-          secondary: '#65676B',
-          hover: '#E7F3FF',
-          danger: '#E41E3F',
+          blue: 'rgb(var(--c-brand) / <alpha-value>)',
+          'blue-dark': 'rgb(var(--c-brand-dark) / <alpha-value>)',
+          'blue-classic': 'rgb(var(--c-brand-dark) / <alpha-value>)',
+          canvas: 'rgb(var(--c-canvas) / <alpha-value>)',
+          card: 'rgb(var(--c-card) / <alpha-value>)',
+          line: 'rgb(var(--c-line) / <alpha-value>)',
+          'line-strong': 'rgb(var(--c-line-strong) / <alpha-value>)',
+          icon: 'rgb(var(--c-icon) / <alpha-value>)',
+          text: 'rgb(var(--c-text) / <alpha-value>)',
+          secondary: 'rgb(var(--c-secondary) / <alpha-value>)',
+          hover: 'rgb(var(--c-hover) / <alpha-value>)',
+          danger: 'rgb(var(--c-danger) / <alpha-value>)',
         },
       },
       fontFamily: {

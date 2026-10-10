@@ -1,5 +1,6 @@
 ﻿<script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
+import { formatSum } from '../utils/money';
 
 import client, { type ApiEnvelope } from '../api/client';
 import DataTable from '../components/DataTable.vue';
@@ -33,7 +34,7 @@ onMounted(async () => {
     );
     rows.value = data.data.map((row) => ({
       ...row,
-      sum: row.sum.toLocaleString('ru-RU'),
+      sum: formatSum(row.sum),
     })) as unknown as PaymentRow[];
   } finally {
     loading.value = false;

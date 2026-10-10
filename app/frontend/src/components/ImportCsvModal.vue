@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { ref } from 'vue';
 
 import client, { type ApiEnvelope } from '../api/client';
@@ -302,7 +302,7 @@ async function confirmImport() {
                   <tr
                     v-for="row in previewData.rows"
                     :key="row.row"
-                    :class="row.is_valid ? 'hover:bg-fb-canvas/50' : 'bg-red-50/40 hover:bg-red-50/70'"
+                    :class="row.is_valid ? '' : 'bg-red-50/40'"
                   >
                     <td class="py-2.5 px-3 text-center text-fb-secondary font-mono">{{ row.row }}</td>
                     <td class="py-2.5 px-3 whitespace-nowrap">

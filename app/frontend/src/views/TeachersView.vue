@@ -820,7 +820,7 @@ onCardsReturn(props.cardLevel ?? -1, () => {
                   </tr>
                 </thead>
                 <tbody class="divide-y divide-fb-line">
-                  <tr v-for="group in profileTeacher.groups" :key="group.id" class="hover:bg-fb-hover/40">
+                  <tr v-for="group in profileTeacher.groups" :key="group.id">
                     <td class="px-4 py-3">
                       <button
                         type="button"

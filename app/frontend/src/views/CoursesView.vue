@@ -1,5 +1,6 @@
 ﻿<script setup lang="ts">
 import { onMounted, reactive, ref, watch } from 'vue';
+import { formatMoney } from '../utils/money';
 import SkeletonBlock from '../components/SkeletonBlock.vue';
 import EmptyState from '../components/EmptyState.vue';
 import { useRoute, useRouter } from 'vue-router';
@@ -89,7 +90,7 @@ const form = reactive({
 });
 
 function formatPrice(value: number) {
-  return t('common.sumAmount', { amount: value.toLocaleString('en-US').replace(/,/g, ' ') });
+  return formatMoney(value);
 }
 
 function formatDay(iso: string) {

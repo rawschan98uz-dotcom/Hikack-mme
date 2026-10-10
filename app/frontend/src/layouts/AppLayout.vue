@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 
+import AppLogo from '../components/AppLogo.vue';
 import NavIcon from '../components/NavIcon.vue';
 import { APP_VERSION } from '../version';
 import QuickAddMenu, { type QuickAddMenuItem } from '../components/QuickAddMenu.vue';
@@ -12,6 +13,7 @@ import { firstFlyoutLink, filterNavSections, flyoutSectionForPath, navForRole, p
 import { useAuthStore } from '../stores/auth';
 import { useLocaleStore, type LocaleCode } from '../stores/locale';
 import { t, tMaybe } from '../i18n';
+import { isDark, themeChoice, THEME_OPTIONS, type ThemeChoice } from '../ui/theme';
 import { isHiddenForTeacher, PERM } from '../utils/rbac';
 import { withCreateQuery } from '../utils/crossLinks';
 import client, { type ApiEnvelope } from '../api/client';
@@ -23,7 +25,6 @@ const localeStore = useLocaleStore();
 const route = useRoute();
 const router = useRouter();
 
-const brandName = 'Hi Jack LMS';
 const userInitial = computed(() => (auth.user?.name?.[0] ?? 'U').toUpperCase());
 const userShortName = computed(() => auth.user?.first_name || auth.user?.name || t('layout.user'));
 const userRoleLabel = computed(() => (auth.user ? tMaybe(`roles.${auth.user.role}`, auth.user.role_label ?? '') : ''));
@@ -38,6 +39,8 @@ const userMenuRoot = ref<HTMLElement | null>(null);
 const localeMenuRoot = ref<HTMLElement | null>(null);
 const showSearch = ref(false);
 const showLocaleMenu = ref(false);
+const showThemeMenu = ref(false);
+const themeMenuRoot = ref<HTMLElement | null>(null);
 const showScheduleFab = computed(() => auth.can(PERM.GROUPS_VIEW));
 
 const quickAddItems = computed<QuickAddItem[]>(() => {
@@ -89,6 +92,7 @@ watch(
     showAppGrid.value = false;
     showUserMenu.value = false;
     showLocaleMenu.value = false;
+    showThemeMenu.value = false;
   },
   { immediate: true },
 );
@@ -103,6 +107,9 @@ function onDocumentClick(event: MouseEvent) {
   }
   if (showLocaleMenu.value && localeMenuRoot.value && target && !localeMenuRoot.value.contains(target)) {
     showLocaleMenu.value = false;
+  }
+  if (showThemeMenu.value && themeMenuRoot.value && target && !themeMenuRoot.value.contains(target)) {
+    showThemeMenu.value = false;
   }
 }
 
@@ -179,6 +186,7 @@ function toggleUserMenu() {
   showQuickAdd.value = false;
   showAppGrid.value = false;
   showLocaleMenu.value = false;
+  showThemeMenu.value = false;
 }
 
 function toggleLocaleMenu() {
@@ -186,6 +194,19 @@ function toggleLocaleMenu() {
   showQuickAdd.value = false;
   showAppGrid.value = false;
   showUserMenu.value = false;
+}
+
+function toggleThemeMenu() {
+  showThemeMenu.value = !showThemeMenu.value;
+  showLocaleMenu.value = false;
+  showQuickAdd.value = false;
+  showAppGrid.value = false;
+  showUserMenu.value = false;
+}
+
+function selectTheme(choice: ThemeChoice) {
+  themeChoice.value = choice;
+  showThemeMenu.value = false;
 }
 
 function selectLocale(code: LocaleCode) {
@@ -299,10 +320,11 @@ function logout() {
         <div class="flex items-center gap-4 shrink-0">
           <button
             type="button"
-            class="text-[26px] font-bold text-fb-blue tracking-tight leading-none hover:opacity-90"
+            class="rounded-lg hover:opacity-90"
+            aria-label="HiJack LMS"
             @click="goDashboard"
           >
-            {{ brandName }}
+            <AppLogo :size="36" />
           </button>
           <QuickAddMenu
             ref="quickAddRoot"
@@ -367,6 +389,41 @@ function logout() {
                 @click="selectLocale(option.code)"
               >
                 {{ option.label }}
+              </button>
+            </div>
+          </div>
+
+          <div ref="themeMenuRoot" class="relative">
+            <button
+              type="button"
+              class="icon-btn-fb"
+              :title="t('theme.title')"
+              :aria-label="t('theme.title')"
+              @click.stop="toggleThemeMenu"
+            >
+              <svg v-if="isDark" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M20 14.5A8 8 0 019.5 4a8 8 0 1010.5 10.5z" />
+              </svg>
+              <svg v-else width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="4" />
+                <path d="M12 2.5v2M12 19.5v2M4.6 4.6l1.4 1.4M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4L6 18M18 6l1.4-1.4" />
+              </svg>
+            </button>
+            <div
+              v-if="showThemeMenu"
+              class="absolute right-0 top-[calc(100%+10px)] z-50 min-w-[200px] rounded-md border border-fb-line bg-fb-card py-2 shadow-fb"
+            >
+              <button
+                v-for="option in THEME_OPTIONS"
+                :key="option.id"
+                type="button"
+                class="block w-full px-4 py-2.5 text-left text-[15px] transition-colors"
+                :class="themeChoice === option.id
+                  ? 'bg-fb-hover font-medium text-fb-blue'
+                  : 'text-fb-secondary hover:bg-fb-canvas hover:text-fb-blue'"
+                @click="selectTheme(option.id)"
+              >
+                {{ t(option.label) }}
               </button>
             </div>
           </div>
@@ -523,7 +580,7 @@ function logout() {
 .nav-sidebar-item:hover .nav-sidebar-icon-wrap,
 .nav-sidebar-item.is-active .nav-sidebar-icon-wrap {
   background-color: var(--fb-hover);
-  box-shadow: 0 0 0 2px rgb(24 119 242 / 0.22);
+  box-shadow: 0 0 0 2px rgb(var(--c-brand) / 0.22);
 }
 
 @media (prefers-reduced-motion: no-preference) {
@@ -558,7 +615,7 @@ function logout() {
 .sidebar-scroll,
 .main-scroll {
   scrollbar-width: thin;
-  scrollbar-color: rgb(203 213 225) transparent;
+  scrollbar-color: rgb(var(--c-line-strong)) transparent;
 }
 
 .sidebar-scroll::-webkit-scrollbar,
@@ -569,7 +626,7 @@ function logout() {
 .sidebar-scroll::-webkit-scrollbar-thumb,
 .main-scroll::-webkit-scrollbar-thumb {
   border-radius: 9999px;
-  background-color: rgb(203 213 225);
+  background-color: rgb(var(--c-line-strong));
 }
 
 .locale-menu::before {

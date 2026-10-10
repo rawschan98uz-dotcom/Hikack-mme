@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import SkeletonBlock from '../components/SkeletonBlock.vue';
 
 import client, { type ApiEnvelope } from '../api/client';
 import { useAuthStore } from '../stores/auth';
 import { downloadCsv } from '../utils/csvExport';
-import { currentMonthIso, weekdayShort } from '../utils/dates';
+import { currentMonthIso, todayIso, weekdayShort } from '../utils/dates';
 import { t, type MessageKey } from '../i18n';
 import { attendanceLabel, groupDaysLabel, serverLabel as serverStatusLabel, studentStatusLabel } from '../i18n/labels';
 import { toast } from '../ui/feedback';
@@ -116,7 +117,8 @@ const branches = ref<Branch[]>([]);
 const allGroups = ref<GroupRow[]>([]);
 
 // Filter state
-const todayStr = localIsoDate(new Date());
+// Tashkent's today, whatever the computer clock's time zone (the school works on Tashkent time)
+const todayStr = todayIso();
 const selectedDate = ref(todayStr);
 const selectedBranch = ref<string>('');
 const searchQuery = ref<string>('');
@@ -457,9 +459,8 @@ function setDateToday() {
 }
 
 function setDateYesterday() {
-  const d = new Date();
-  d.setDate(d.getDate() - 1);
-  selectedDate.value = localIsoDate(d);
+  const [y, m, d] = todayStr.split('-').map(Number);
+  selectedDate.value = localIsoDate(new Date(y, m - 1, d - 1));
   if (activeGroup.value) {
     openGroupRoster(activeGroup.value);
   }
@@ -517,8 +518,21 @@ async function exportAllAttendanceCsv() {
   }
 }
 
-onMounted(() => {
-  loadInitialData();
+const route = useRoute();
+const router = useRouter();
+
+/** "?group=5" (the dashboard's "Mark attendance"): that group's roster opens for today at once. */
+async function openGroupFromRoute() {
+  const id = Number(route.query.group);
+  if (!id) return;
+  router.replace({ path: route.path });
+  const group = allGroups.value.find((g) => g.id === id);
+  if (group) await openGroupRoster(group);
+}
+
+onMounted(async () => {
+  await loadInitialData();
+  await openGroupFromRoute();
 });
 </script>
 
@@ -627,7 +641,7 @@ onMounted(() => {
               </tr>
             </thead>
             <tbody class="divide-y divide-fb-line">
-              <tr v-for="r in summaryData.rows" :key="r.student_id" class="hover:bg-fb-hover/40">
+              <tr v-for="r in summaryData.rows" :key="r.student_id">
                 <td class="sticky left-0 bg-fb-card px-4 py-2 whitespace-nowrap">
                   <div class="font-medium text-fb-text">{{ r.student }}</div>
                   <div class="text-[11px] text-fb-secondary">{{ serverStatusLabel(r.status_label) }}</div>
@@ -837,7 +851,7 @@ onMounted(() => {
                 <!-- Group Name (Clickable) -->
                 <td class="px-5 py-3.5 font-medium">
                   <div class="flex items-center gap-2">
-                    <span class="text-blue-600 hover:underline font-semibold text-sm group-hover:text-blue-700">
+                    <span class="text-indigo-600 hover:underline font-semibold text-sm group-hover:text-indigo-700">
                       {{ group.name }}
                     </span>
                   </div>
@@ -885,7 +899,7 @@ onMounted(() => {
 
                 <!-- Students Count -->
                 <td class="px-5 py-3.5 text-center">
-                  <span class="inline-flex items-center justify-center rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-semibold text-blue-700 border border-blue-200">
+                  <span class="inline-flex items-center justify-center rounded-full bg-indigo-50 px-2.5 py-0.5 text-xs font-semibold text-indigo-700 border border-indigo-200">
                     {{ group.students_count }}
                   </span>
                 </td>
@@ -970,7 +984,7 @@ onMounted(() => {
               <h2 class="text-lg font-bold text-fb-text">
                 {{ activeGroup.name }}
               </h2>
-              <span class="rounded-full bg-blue-100 px-2 py-0.5 text-xs font-semibold text-blue-800 border border-blue-200">
+              <span class="rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-semibold text-indigo-800 border border-indigo-200">
                 {{ t('attendance.studentsCount', { count: groupStudents.length }) }}
               </span>
             </div>
@@ -1079,7 +1093,7 @@ onMounted(() => {
             <div
               v-for="(student, index) in groupStudents"
               :key="student.id"
-              class="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-fb-canvas/50 px-2 rounded-lg transition-colors"
+              class="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-2 rounded-lg"
             >
               <!-- Left: Student Info (Full Name, Phone, Status) -->
               <div class="flex items-center gap-3 min-w-0">

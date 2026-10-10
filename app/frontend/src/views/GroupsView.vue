@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { formatSum } from '../utils/money';
 import { useRoute, useRouter } from 'vue-router';
 
 import client, { type ApiEnvelope } from '../api/client';
@@ -17,7 +18,6 @@ import {
   studentsByGroup,
   teacherRoute,
 } from '../utils/crossLinks';
-import { formatSum } from '../utils/wallet';
 import { useRememberedFilters } from '../utils/rememberedFilters';
 import EmptyState from '../components/EmptyState.vue';
 import SkeletonBlock from '../components/SkeletonBlock.vue';
@@ -937,7 +937,7 @@ onMounted(async () => {
               <div class="fact-value">
                 {{ detailGroup.course?.name || '—' }}
                 <span v-if="!isTeacher && detailGroup.course?.price" class="whitespace-nowrap text-base font-semibold text-fb-secondary">
-                  · {{ detailGroup.course.price.toLocaleString('ru-RU') }}
+                  · {{ formatSum(detailGroup.course.price) }}
                 </span>
               </div>
             </div>
@@ -950,7 +950,7 @@ onMounted(async () => {
               <div class="fact-value" :class="detailGroup.debtors_count ? 'text-red-700' : 'text-emerald-700'">
                 {{ detailGroup.debtors_count }}
                 <span v-if="detailGroup.debt_total" class="whitespace-nowrap text-base font-semibold">
-                  · {{ t('common.sumAmount', { amount: detailGroup.debt_total.toLocaleString('ru-RU') }) }}
+                  · {{ t('common.sumAmount', { amount: formatSum(detailGroup.debt_total) }) }}
                 </span>
               </div>
             </div>
@@ -1191,7 +1191,7 @@ onMounted(async () => {
                     <td class="whitespace-nowrap px-4 py-2 text-fb-secondary">{{ student.phone || '—' }}</td>
                     <td class="px-4 py-2 text-fb-secondary">{{ serverLabel(student.status_label) }}</td>
                     <td v-if="detailGroup.debtors_count !== undefined" class="whitespace-nowrap px-4 py-2 text-right font-semibold" :class="student.debt_amount ? 'text-red-700' : 'text-fb-secondary'">
-                      <template v-if="student.debt_amount">{{ student.debt_amount.toLocaleString('ru-RU') }}</template>
+                      <template v-if="student.debt_amount">{{ formatSum(student.debt_amount) }}</template>
                       <template v-else-if="student.is_debtor">{{ t('groups.overdue') }}</template>
                       <template v-else>—</template>
                     </td>

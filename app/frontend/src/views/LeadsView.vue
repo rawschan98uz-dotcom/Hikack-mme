@@ -903,7 +903,7 @@ onMounted(async () => {
               <div class="mt-1 flex flex-wrap items-center gap-1.5 text-xs font-normal">
                 <span
                   v-if="row.course_name"
-                  class="rounded-md bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700 border border-blue-200"
+                  class="rounded-md bg-indigo-50 px-2 py-0.5 text-[11px] font-medium text-indigo-700 border border-indigo-200"
                 >
                   📚 {{ row.course_name }}
                 </span>
@@ -961,7 +961,7 @@ onMounted(async () => {
                     ? 'bg-amber-100 text-amber-800'
                     : row.stage === 'rejected'
                     ? 'bg-rose-100 text-rose-800'
-                    : 'bg-blue-100 text-blue-800'
+                    : 'bg-indigo-100 text-indigo-800'
                 "
               >
                 {{ row.stage === 'converted' && row.student_deleted ? `⚠️ ${t('leads.studentDeleted')}` : leadStageLabel(row.stage, row.stage_label) }}
@@ -1377,8 +1377,8 @@ onMounted(async () => {
         </div>
 
         <form class="flex-1 overflow-y-auto p-6 space-y-4" @submit.prevent="handleConvert">
-          <div v-if="editingLead" class="rounded-lg bg-blue-50/70 border border-blue-200 p-3 text-xs flex flex-wrap items-center gap-3">
-            <span v-if="editingLead.course_name" class="font-medium text-blue-800">📚 {{ editingLead.course_name }}</span>
+          <div v-if="editingLead" class="rounded-lg bg-indigo-50/70 border border-indigo-200 p-3 text-xs flex flex-wrap items-center gap-3">
+            <span v-if="editingLead.course_name" class="font-medium text-indigo-800">📚 {{ editingLead.course_name }}</span>
             <span v-if="convertForm.level" class="font-semibold text-emerald-800">🎯 {{ presetLabel(convertForm.level) }}</span>
             <span v-if="editingLead.branch_name" class="text-amber-800">📍 {{ editingLead.branch_name }}</span>
           </div>

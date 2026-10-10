@@ -76,7 +76,7 @@ export default defineMessages({
   'common.upload': { uz: 'Yuklash', ru: 'Загрузить', en: 'Upload' },
   'common.import': { uz: 'Import', ru: 'Импорт', en: 'Import' },
   'common.sum': { uz: 'soʻm', ru: 'сум', en: 'UZS' },
-  'common.sumAmount': { uz: '{amount} soʻm', ru: '{amount} сум', en: '{amount} UZS' },
+  'common.sumAmount': { uz: '{amount}\u00A0soʻm', ru: '{amount}\u00A0сум', en: '{amount}\u00A0UZS' },
   'common.page': { uz: '{page}-sahifa / {pages}', ru: 'Страница {page} из {pages}', en: 'Page {page} of {pages}' },
   'common.shown': { uz: 'Koʻrsatilgan: {count}', ru: 'Показано: {count}', en: 'Shown: {count}' },
   'common.totalCount': { uz: 'Jami: {count}', ru: 'Всего: {count}', en: 'Total: {count}' },
@@ -191,4 +191,9 @@ export default defineMessages({
     en: 'Try changing the filters or the search.',
   },
   'empty.resetFilters': { uz: 'Filtrlarni tozalash', ru: 'Сбросить фильтры', en: 'Reset filters' },
+  // Light / dark look
+  'theme.title': { uz: 'Mavzu', ru: 'Оформление', en: 'Appearance' },
+  'theme.light': { uz: 'Yorugʻ', ru: 'Светлая тема', en: 'Light' },
+  'theme.dark': { uz: 'Qorongʻi', ru: 'Тёмная тема', en: 'Dark' },
+  'theme.system': { uz: 'Tizimdagidek', ru: 'Как в системе', en: 'Same as the system' },
 });

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
+import { formatSum } from '../utils/money';
 import SkeletonBlock from '../components/SkeletonBlock.vue';
 import { useRouter, type RouteLocationRaw } from 'vue-router';
 
@@ -8,6 +9,7 @@ import { useAuthStore } from '../stores/auth';
 import DashboardCardIcon from '../components/DashboardCardIcon.vue';
 import SchedulePanel from '../components/SchedulePanel.vue';
 import TeacherCheckInPanel from '../components/TeacherCheckInPanel.vue';
+import DashboardFocus, { type DashboardFocusData } from '../components/DashboardFocus.vue';
 import type { ScheduleRow } from '../types/schedule';
 import { groupRoute, studentRoute } from '../utils/crossLinks';
 import { onCardsReturn } from '../utils/cardStack';
@@ -30,6 +32,8 @@ interface DashboardStats {
   unpaid_leavers?: UnpaidLeaver[];
   /** My overdue and today's reminders (without "left without paying", which has its own block). */
   reminders?: DashboardReminder[];
+  /** The top of the page for this role: money, the day's lessons, whom to call */
+  focus?: DashboardFocusData;
 }
 
 interface DashboardReminder {
@@ -107,9 +111,6 @@ function statValue(key: DashboardCard['key']) {
   return stats.value?.[key] ?? 0;
 }
 
-function formatSum(value: number) {
-  return value.toLocaleString('en-US').replace(/,/g, ' ');
-}
 
 const CHART_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -250,6 +251,8 @@ onMounted(() => loadDashboard());
 
     <template v-else>
       <TeacherCheckInPanel v-if="auth.role === 'teacher'" />
+
+      <DashboardFocus v-if="stats?.focus" :focus="stats.focus" />
 
       <div class="border-b border-fb-line">
         <div class="grid grid-cols-1 xl:grid-cols-2">

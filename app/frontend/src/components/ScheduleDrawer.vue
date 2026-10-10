@@ -122,7 +122,7 @@ function onSelectGroup(groupId: number) {
 .schedule-fab--open {
   z-index: 47;
   border-color: var(--fb-blue);
-  box-shadow: -3px 0 14px rgb(24 119 242 / 0.15);
+  box-shadow: -3px 0 14px rgb(var(--c-brand) / 0.15);
 }
 
 .schedule-backdrop {

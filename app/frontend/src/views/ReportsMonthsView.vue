@@ -5,6 +5,7 @@
  * paid in December disappears from the September page — and is December's income in the P&L.
  */
 import { onMounted, ref } from 'vue';
+import { formatSum } from '../utils/money';
 import SkeletonBlock from '../components/SkeletonBlock.vue';
 import { useRouter } from 'vue-router';
 
@@ -71,7 +72,7 @@ const pageLoading = ref(false);
 const onlyUnpaid = ref(true);
 
 function money(value: number) {
-  return Math.round(value || 0).toLocaleString('ru-RU');
+  return formatSum(value);
 }
 
 function day(iso: string) {
@@ -226,7 +227,7 @@ onMounted(() => loadMonths());
             </tr>
           </thead>
           <tbody class="divide-y divide-fb-line">
-            <tr v-for="row in page.rows" :key="row.id" class="hover:bg-fb-hover/40">
+            <tr v-for="row in page.rows" :key="row.id">
               <td class="px-5 py-3">
                 <button type="button" class="font-semibold text-fb-blue hover:underline" @click="router.push(studentRoute(row.student_id))">
                   {{ row.student }}

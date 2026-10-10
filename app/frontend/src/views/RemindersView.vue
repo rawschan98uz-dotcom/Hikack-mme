@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { todayIso } from '../utils/dates';
 import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { formatSum } from '../utils/money';
 import SkeletonBlock from '../components/SkeletonBlock.vue';
 import EmptyState from '../components/EmptyState.vue';
 import { useRoute, useRouter } from 'vue-router';
@@ -243,7 +244,7 @@ async function submitReminder() {
 }
 
 function formatMoney(value: number) {
-  return Math.round(value).toLocaleString('ru-RU');
+  return formatSum(value);
 }
 
 // CEO only: close a "left without paying" reminder without payment; the reason is kept

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import { formatSum } from '../utils/money';
 
 import { t } from '../i18n';
 import { useAuthStore } from '../stores/auth';
@@ -53,7 +54,7 @@ const methodLabel = computed(() => {
 
 const formattedAmount = computed(() => {
   if (!props.payment) return '0';
-  return props.payment.amount.toLocaleString();
+  return formatSum(props.payment.amount);
 });
 
 function close() {

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { todayIso } from '../utils/dates';
 import { onMounted, reactive, ref, watch } from 'vue';
+import { formatSum } from '../utils/money';
 import { useRoute, useRouter } from 'vue-router';
 
 import client, { type ApiEnvelope } from '../api/client';
@@ -95,7 +96,7 @@ const filters = reactive({
 useRememberedFilters('left-students', filters);
 
 function formatMoney(value: number) {
-  return value.toLocaleString('ru-RU');
+  return formatSum(value);
 }
 
 function showDebtors() {

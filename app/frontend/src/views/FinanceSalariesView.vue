@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { currentMonthIso, formatMonthTitle } from '../utils/dates';
 import { computed, onMounted, reactive, ref } from 'vue';
+import { formatSum } from '../utils/money';
 import SkeletonBlock from '../components/SkeletonBlock.vue';
 
 import client, { type ApiEnvelope } from '../api/client';
@@ -111,7 +112,7 @@ interface Option {
 const activeTab = ref<'payroll' | 'settings'>('payroll');
 
 function money(value: number | null | undefined) {
-  return Math.round(value || 0).toLocaleString('ru-RU');
+  return formatSum(value);
 }
 
 // ================= Payroll =================
@@ -630,7 +631,7 @@ onMounted(async () => {
           </thead>
           <tbody class="divide-y divide-fb-line">
             <template v-for="row in payrollRows" :key="row.person_id">
-              <tr class="hover:bg-fb-hover/40">
+              <tr>
                 <td class="px-5 py-3">
                   <div class="font-semibold text-fb-text">
                     {{ row.teacher_name }}

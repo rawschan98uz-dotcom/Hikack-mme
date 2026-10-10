@@ -138,9 +138,10 @@ client.interceptors.response.use(
     ) {
       const pageData = response.data.data;
       const list = pageData.results.slice();
-      (list as any).count = pageData.count;
-      (list as any).has_more = pageData.has_more;
-      (list as any).next_offset = pageData.next_offset;
+      // count, has_more, next_offset and extras such as period totals travel along with the list
+      for (const [key, value] of Object.entries(pageData)) {
+        if (key !== 'results') (list as any)[key] = value;
+      }
       (list as any).results = pageData.results;
       response.data.data = list;
     }

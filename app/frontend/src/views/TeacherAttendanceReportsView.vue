@@ -376,7 +376,7 @@ onMounted(async () => {
               </tr>
             </thead>
             <tbody class="divide-y divide-fb-line">
-              <tr v-for="row in pageRows" :key="rowKey(row)" class="hover:bg-fb-hover/40">
+              <tr v-for="row in pageRows" :key="rowKey(row)">
                 <td class="px-5 py-3 whitespace-nowrap">
                   <div class="font-medium text-fb-text">{{ formatDate(row.date) }}</div>
                   <div v-if="row.start_time" class="text-xs text-fb-secondary">{{ row.start_time }}–{{ row.end_time }}</div>

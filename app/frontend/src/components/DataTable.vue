@@ -31,7 +31,7 @@ defineProps<{
         <tr
           v-for="(row, idx) in rows"
           :key="idx"
-          class="table-row-fb"
+          class="border-b border-fb-line"
         >
           <td
             v-for="col in columns"

@@ -157,7 +157,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown, true));
 }
 
 .dialog__icon--danger {
-  background: #fde8eb;
+  background: rgb(var(--c-danger) / 0.14);
   color: var(--fb-danger);
 }
 

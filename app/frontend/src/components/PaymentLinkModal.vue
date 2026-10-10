@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue';
+import { formatSum } from '../utils/money';
 
 import client, { type ApiEnvelope } from '../api/client';
 import { t } from '../i18n';
@@ -174,7 +175,7 @@ function close() {
         </div>
 
         <div v-if="student.course_price" class="text-[11px] text-fb-secondary">
-          {{ t('payLink.basePrice', { amount: student.course_price.toLocaleString('ru-RU') }) }}
+          {{ t('payLink.basePrice', { amount: formatSum(student.course_price) }) }}
         </div>
 
         <div v-if="loading" class="py-6 text-center text-xs text-fb-secondary">
@@ -189,7 +190,7 @@ function close() {
           <div class="rounded-xl border border-fb-line bg-fb-canvas/50 p-3 space-y-2">
             <div class="flex items-center justify-between">
               <div class="flex items-center gap-2">
-                <span class="inline-block h-2.5 w-2.5 rounded-full bg-blue-500" />
+                <span class="inline-block h-2.5 w-2.5 rounded-full bg-indigo-500" />
                 <span class="font-semibold text-xs text-fb-text">Click</span>
                 <span
                   class="rounded px-1.5 py-0.5 text-[10px] font-medium"

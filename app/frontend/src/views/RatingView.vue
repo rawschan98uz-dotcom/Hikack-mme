@@ -259,7 +259,7 @@ const brackets = computed(() => {
   const total = rows.value.length || 1;
   return [
     { label: `${t('rating.tierExcellent')} (≥ ${Math.round(tier1Threshold)})`, count: tier1, percent: Math.round((tier1 / total) * 100), color: 'bg-emerald-500' },
-    { label: `${t('rating.tierGood')} (${Math.round(tier2Threshold)}–${Math.round(tier1Threshold) - 1})`, count: tier2, percent: Math.round((tier2 / total) * 100), color: 'bg-blue-500' },
+    { label: `${t('rating.tierGood')} (${Math.round(tier2Threshold)}–${Math.round(tier1Threshold) - 1})`, count: tier2, percent: Math.round((tier2 / total) * 100), color: 'bg-indigo-500' },
     { label: `${t('rating.tierPassing')} (${pass}–${Math.round(tier2Threshold) - 1})`, count: tier3, percent: Math.round((tier3 / total) * 100), color: 'bg-amber-500' },
     { label: `${t('rating.tierAttention')} (< ${pass})`, count: tier4, percent: Math.round((tier4 / total) * 100), color: 'bg-red-500' },
   ];
@@ -692,17 +692,17 @@ watch(
         <p class="mt-1 text-xs text-fb-secondary">{{ t('rating.ratedInView') }}</p>
       </div>
 
-      <div class="rounded-xl border border-blue-200 bg-blue-50/40 p-4 shadow-sm">
+      <div class="rounded-xl border border-indigo-200 bg-indigo-50/40 p-4 shadow-sm">
         <div class="flex items-center justify-between">
-          <p class="text-xs font-semibold uppercase tracking-wider text-blue-700">{{ t('rating.averageGrade') }}</p>
+          <p class="text-xs font-semibold uppercase tracking-wider text-indigo-700">{{ t('rating.averageGrade') }}</p>
           <span class="text-base">📈</span>
         </div>
-        <p class="mt-2 text-2xl font-bold text-blue-900">
-          {{ summary.avg_grade }} <span class="text-sm font-normal text-blue-600">/ {{ summary.max_scale }}</span>
+        <p class="mt-2 text-2xl font-bold text-indigo-900">
+          {{ summary.avg_grade }} <span class="text-sm font-normal text-indigo-600">/ {{ summary.max_scale }}</span>
         </p>
-        <div class="mt-1.5 h-1.5 w-full rounded-full bg-blue-100">
+        <div class="mt-1.5 h-1.5 w-full rounded-full bg-indigo-100">
           <div
-            class="h-1.5 rounded-full bg-blue-600"
+            class="h-1.5 rounded-full bg-indigo-600"
             :style="{ width: `${Math.min(100, (summary.avg_grade / (summary.max_scale || 100)) * 100)}%` }"
           />
         </div>
@@ -1084,7 +1084,7 @@ watch(
             <tr
               v-for="grp in groupScores"
               :key="grp.group_id"
-              class="transition-colors hover:bg-fb-hover/40"
+              class="transition-colors"
             >
               <td class="px-5 py-3.5 text-center font-bold" :class="medalClass(grp.rank)">
                 {{ medalIcon(grp.rank) }} #{{ grp.rank }}
@@ -1146,7 +1146,7 @@ watch(
               <td class="px-5 py-3.5 text-right">
                 <button
                   type="button"
-                  class="rounded-lg border border-fb-blue bg-blue-50/60 px-3 py-1 text-xs font-semibold text-fb-blue hover:bg-fb-blue hover:text-white transition-colors"
+                  class="rounded-lg border border-fb-blue bg-indigo-50/60 px-3 py-1 text-xs font-semibold text-fb-blue hover:bg-fb-blue hover:text-white transition-colors"
                   @click="openBulkModal(grp.group_id)"
                 >
                   📝 {{ t('rating.gradeGroup') }}

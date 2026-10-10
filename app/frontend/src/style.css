@@ -3,21 +3,63 @@
 @tailwind utilities;
 
 :root {
-  --fb-blue: #1877f2;
-  --fb-blue-dark: #166fe5;
-  --fb-blue-classic: #3b5998;
-  --fb-canvas: #f0f2f5;
-  --fb-card: #ffffff;
-  --fb-line: #e4e6eb;
-  --fb-line-strong: #d8dde4;
-  --fb-icon: #898f9c;
-  --fb-text: #050505;
-  --fb-text-secondary: #65676b;
-  --fb-hover: #e7f3ff;
-  --fb-danger: #e41e3f;
+  /* HiJack palette (owner, 2026-10): indigo instead of the Facebook blue. Colours are RGB channels so
+     Tailwind can add transparency (bg-fb-blue/10); the dark theme redefines them below. */
+  --c-brand: 79 70 229;
+  --c-brand-dark: 67 56 202;
+  --c-canvas: 244 245 250;
+  --c-card: 255 255 255;
+  --c-line: 228 230 239;
+  --c-line-strong: 212 216 228;
+  --c-icon: 134 140 160;
+  --c-text: 17 19 33;
+  --c-secondary: 88 94 114;
+  --c-hover: 238 240 255;
+  --c-danger: 220 38 38;
+
+  --fb-blue: rgb(var(--c-brand));
+  --fb-blue-dark: rgb(var(--c-brand-dark));
+  --fb-blue-classic: rgb(var(--c-brand-dark));
+  --fb-canvas: rgb(var(--c-canvas));
+  --fb-card: rgb(var(--c-card));
+  --fb-line: rgb(var(--c-line));
+  --fb-line-strong: rgb(var(--c-line-strong));
+  --fb-icon: rgb(var(--c-icon));
+  --fb-text: rgb(var(--c-text));
+  --fb-text-secondary: rgb(var(--c-secondary));
+  --fb-hover: rgb(var(--c-hover));
+  --fb-danger: rgb(var(--c-danger));
   --fb-motion-fast: 150ms;
   --fb-motion-normal: 220ms;
   --fb-ease: cubic-bezier(0.2, 0, 0, 1);
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  --c-brand: 99 102 241;
+  --c-brand-dark: 79 70 229;
+  --c-canvas: 14 16 25;
+  --c-card: 23 26 38;
+  --c-line: 43 47 66;
+  --c-line-strong: 58 63 86;
+  --c-icon: 128 135 158;
+  --c-text: 230 232 241;
+  --c-secondary: 163 169 190;
+  --c-hover: 39 41 77;
+  --c-danger: 248 113 113;
+  color-scheme: dark;
+}
+
+/* Printed receipts and reports are always light */
+@media print {
+  :root[data-theme='dark'] {
+    --c-canvas: 255 255 255;
+    --c-card: 255 255 255;
+    --c-line: 228 230 239;
+    --c-text: 17 19 33;
+    --c-secondary: 88 94 114;
+    color-scheme: light;
+  }
 }
 
 body {
@@ -26,6 +68,11 @@ body {
   font-size: 16px;
   color: var(--fb-text);
   background-color: var(--fb-canvas);
+}
+
+/* Figures in tables line up under each other */
+td {
+  font-variant-numeric: tabular-nums;
 }
 
 main h1 {
@@ -62,7 +109,7 @@ main h1 {
   @media (prefers-reduced-motion: no-preference) {
     .btn-fb-primary:hover {
       transform: translateY(-1px);
-      box-shadow: 0 2px 8px rgb(24 119 242 / 0.35);
+      box-shadow: 0 2px 8px rgb(var(--c-brand) / 0.35);
     }
 
     .btn-fb-primary:active {
@@ -97,12 +144,17 @@ main h1 {
         background-color var(--fb-motion-fast) var(--fb-ease);
     }
 
-    .card-fb:hover {
+    /* Only a card that can be clicked moves under the mouse; a table or a form stays still */
+    a.card-fb:hover,
+    button.card-fb:hover,
+    .card-fb.is-clickable:hover {
       transform: translateY(-2px);
       box-shadow: 0 4px 12px rgb(0 0 0 / 0.1);
     }
 
-    .card-fb:active {
+    a.card-fb:active,
+    button.card-fb:active,
+    .card-fb.is-clickable:active {
       transform: translateY(0) scale(0.995);
     }
   }
@@ -154,14 +206,9 @@ main h1 {
     }
   }
 
+  /* A row that opens something: it lights up under the mouse (rows only to read stay still) */
   .table-row-fb {
     @apply border-b border-fb-line transition-colors hover:bg-fb-hover/40;
-  }
-
-  @media (prefers-reduced-motion: no-preference) {
-    .table-row-fb:active {
-      transform: scale(0.998);
-    }
   }
 
   .page-fb {
@@ -235,7 +282,7 @@ main h1 {
     @apply border-b border-fb-line px-4 py-3 text-fb-text;
   }
 
-  .table-fb tbody tr:hover {
+  .table-fb tbody tr.cursor-pointer:hover {
     @apply bg-fb-hover/40;
   }
 

@@ -5,6 +5,10 @@ import client, { type ApiEnvelope } from '../api/client';
 import { useAuthStore } from '../stores/auth';
 import { downloadCsv } from '../utils/csvExport';
 import { currentMonthIso } from '../utils/dates';
+import { intlLocale, t, type MessageKey } from '../i18n';
+import { attendanceLabel, groupDaysLabel, serverLabel as serverStatusLabel, studentStatusLabel } from '../i18n/labels';
+import { toast } from '../ui/feedback';
+import { apiErrorMessage } from '../utils/apiError';
 
 interface Branch {
   id: number;
@@ -229,8 +233,8 @@ async function loadMonthSummary() {
       params: { group_id: summaryGroupId.value, month: summaryMonth.value },
     });
     summaryData.value = data.data;
-  } catch (err: any) {
-    summaryError.value = err?.response?.data?.message || 'Не удалось загрузить сводку';
+  } catch (err: unknown) {
+    summaryError.value = apiErrorMessage(err, t('attendance.summaryLoadFailed'));
   } finally {
     summaryLoading.value = false;
   }
@@ -249,15 +253,20 @@ function shiftSummaryMonth(delta: number) {
   loadMonthSummary();
 }
 
-const MARK_ICON: Record<number, { text: string; cls: string; title: string }> = {
-  1: { text: '✓', cls: 'text-emerald-600', title: 'Был' },
-  2: { text: '⏰', cls: 'text-amber-600', title: 'Опоздал' },
-  0: { text: '✗', cls: 'text-red-600 font-bold', title: 'Не был' },
+const MARK_ICON: Record<number, { text: string; cls: string; title: MessageKey }> = {
+  1: { text: '✓', cls: 'text-emerald-600', title: 'teacherAtt.present' },
+  2: { text: '⏰', cls: 'text-amber-600', title: 'teacherAtt.late' },
+  0: { text: '✗', cls: 'text-red-600 font-bold', title: 'teacherAtt.absent' },
 };
+
+function markTitle(mark: number | undefined) {
+  const icon = mark === undefined ? undefined : MARK_ICON[mark];
+  return icon ? t(icon.title) : '';
+}
 
 function dayLabel(iso: string) {
   const [y, m, d] = iso.split('-').map(Number);
-  const weekday = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'][new Date(y, m - 1, d).getDay()];
+  const weekday = new Date(y, m - 1, d).toLocaleDateString(intlLocale(), { weekday: 'short' });
   return { day: String(d).padStart(2, '0'), weekday };
 }
 
@@ -266,10 +275,13 @@ function exportMonthSummary() {
   const s = summaryData.value;
   downloadCsv(
     `attendance_${s.group.name}_${s.month}.csv`,
-    ['Ученик', ...s.days.map((d) => d.date), 'Был', 'Опоздал', 'Не был', 'Посещаемость %'],
+    [
+      t('months.student'), ...s.days.map((d) => d.date), t('teacherAtt.present'), t('teacherAtt.late'),
+      t('teacherAtt.absent'), t('attendance.percentCsv'),
+    ],
     s.rows.map((r) => [
       r.student,
-      ...s.days.map((d) => (r.marks[d.date] === undefined ? '' : MARK_ICON[r.marks[d.date]]?.title ?? '')),
+      ...s.days.map((d) => markTitle(r.marks[d.date])),
       r.present,
       r.late,
       r.absent,
@@ -378,7 +390,7 @@ async function openGroupRoster(group: GroupRow) {
     }
   } catch (err) {
     console.error('Failed to load group students or attendance:', err);
-    saveErrorMessage.value = 'Ошибка при загрузке данных учеников группы';
+    saveErrorMessage.value = t('attendance.rosterLoadFailed');
   } finally {
     loadingStudents.value = false;
   }
@@ -412,11 +424,12 @@ async function saveGroupAttendance() {
       records,
     });
 
-    saveSuccessMessage.value = `Посещаемость успешно сохранена! (отмечено учеников: ${data.data.saved})`;
+    saveSuccessMessage.value = t('attendance.saved', { count: data.data.saved });
+    toast.success(t('attendance.savedToast', { group: activeGroup.value.name }));
     loadDayStatus();
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error('Failed to save group attendance:', err);
-    saveErrorMessage.value = err?.response?.data?.message || err?.response?.data?.error || err?.message || 'Не удалось сохранить посещаемость';
+    saveErrorMessage.value = apiErrorMessage(err, t('attendance.saveFailed'));
   } finally {
     savingAttendance.value = false;
   }
@@ -488,18 +501,18 @@ async function exportAllAttendanceCsv() {
     const { data } = await client.get<ApiEnvelope<any>>('/reports/attendance', { params });
     const rows = data?.data?.rows || [];
     if (!rows.length) {
-      alert('За выбранную дату нет сохраненных записей посещаемости для экспорта.');
+      toast.info(t('attendance.nothingToExport'));
       return;
     }
 
     downloadCsv(
       `attendance_${selectedDate.value}.csv`,
-      ['Ученик', 'Группа', 'Филиал', 'Дата', 'Статус', 'Заметка'],
-      rows.map((r: any) => [r.student, r.group, r.branch, r.date, r.status_label, r.note || '']),
+      [t('months.student'), t('schedule.group'), t('common.branch'), t('common.date'), t('common.status'), t('common.note')],
+      rows.map((r: any) => [r.student, r.group, r.branch, r.date, attendanceLabel(r.status, r.status_label), r.note || '']),
     );
   } catch (err) {
     console.error(err);
-    alert('Не удалось экспортировать отчет в CSV');
+    toast.error(t('errors.exportFailed'));
   }
 }
 
@@ -515,13 +528,13 @@ onMounted(() => {
       <div>
         <h1 class="text-xl font-bold text-fb-text flex items-center gap-2">
           <span>📋</span>
-          <span>Посещаемость учеников</span>
+          <span>{{ t('nav.studentAttendance') }}</span>
         </h1>
         <p v-if="isTeacher" class="text-xs text-fb-secondary mt-0.5">
-          Сегодня, {{ todayStr.split('-').reverse().join('.') }} — ваши группы с уроком сегодня. Нажмите «Отметить».
+          {{ t('attendance.teacherSubtitle', { date: todayStr.split('-').reverse().join('.') }) }}
         </p>
         <p v-else class="text-xs text-fb-secondary mt-0.5">
-          Журнал учета посещаемости по группам. Нажмите на название группы для просмотра списка учеников и быстрой отметки.
+          {{ t('attendance.subtitle') }}
         </p>
       </div>
 
@@ -529,11 +542,11 @@ onMounted(() => {
         <button
           type="button"
           class="rounded-lg border border-fb-line bg-fb-card px-3.5 py-2 text-sm text-fb-secondary hover:border-fb-blue hover:text-fb-blue transition-colors flex items-center gap-1.5 shadow-sm"
-          title="Экспортировать сохраненную посещаемость за выбранную дату"
+          :title="t('attendance.exportDateHint')"
           @click="exportAllAttendanceCsv"
         >
           <span>📥</span>
-          <span>Экспорт CSV за дату</span>
+          <span>{{ t('attendance.exportDate') }}</span>
         </button>
       </div>
     </div>
@@ -546,7 +559,7 @@ onMounted(() => {
         :class="activeTab === 'day' ? 'bg-fb-blue text-white' : 'text-fb-secondary hover:text-fb-blue'"
         @click="activeTab = 'day'"
       >
-        📝 Отметить за день
+        📝 {{ t('attendance.dayTab') }}
       </button>
       <button
         type="button"
@@ -554,7 +567,7 @@ onMounted(() => {
         :class="activeTab === 'month' ? 'bg-fb-blue text-white' : 'text-fb-secondary hover:text-fb-blue'"
         @click="activeTab = 'month'"
       >
-        📊 Сводка за месяц
+        📊 {{ t('attendance.monthTab') }}
       </button>
     </div>
 
@@ -562,14 +575,14 @@ onMounted(() => {
     <div v-if="activeTab === 'month'" class="space-y-3">
       <div class="flex flex-wrap items-end gap-3 rounded-xl border border-fb-line bg-fb-card p-4 shadow-sm">
         <div class="min-w-[220px]">
-          <label class="mb-1 block text-xs font-semibold text-fb-text">Группа</label>
+          <label class="mb-1 block text-xs font-semibold text-fb-text">{{ t('schedule.group') }}</label>
           <select v-model="summaryGroupId" class="w-full rounded-lg border border-fb-line bg-white px-3 py-2 text-sm" @change="loadMonthSummary">
-            <option value="">Выберите группу…</option>
+            <option value="">{{ t('attendance.chooseGroup') }}</option>
             <option v-for="g in allGroups" :key="g.id" :value="String(g.id)">{{ g.name }}{{ g.teacher ? ` — ${g.teacher}` : '' }}</option>
           </select>
         </div>
         <div>
-          <label class="mb-1 block text-xs font-semibold text-fb-text">Месяц</label>
+          <label class="mb-1 block text-xs font-semibold text-fb-text">{{ t('common.month') }}</label>
           <div class="flex items-center gap-1">
             <button type="button" class="rounded-lg border border-fb-line px-2 py-2 text-sm hover:border-fb-blue" @click="shiftSummaryMonth(-1)">◀</button>
             <input v-model="summaryMonth" type="month" class="rounded-lg border border-fb-line bg-white px-3 py-2 text-sm" @change="loadMonthSummary" />
@@ -582,47 +595,47 @@ onMounted(() => {
           class="rounded-lg border border-fb-line bg-fb-card px-3.5 py-2 text-sm text-fb-secondary hover:border-fb-blue hover:text-fb-blue"
           @click="exportMonthSummary"
         >
-          📥 Экспорт CSV
+          📥 {{ t('common.exportCsv') }}
         </button>
       </div>
 
       <div v-if="summaryError" class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{{ summaryError }}</div>
       <div v-if="!summaryGroupId" class="rounded-xl border border-fb-line bg-fb-card p-10 text-center text-sm text-fb-secondary">
-        Выберите группу — покажу всех учеников по дням месяца: ✓ был, ⏰ опоздал, ✗ не был.
+        {{ t('attendance.chooseGroupHint') }}
       </div>
-      <div v-else-if="summaryLoading" class="p-10 text-center text-fb-secondary">Загрузка…</div>
+      <div v-else-if="summaryLoading" class="p-10 text-center text-fb-secondary">{{ t('common.loading') }}</div>
       <div v-else-if="summaryData" class="overflow-hidden rounded-xl border border-fb-line bg-fb-card shadow-sm">
         <div class="border-b border-fb-line px-5 py-3 text-sm">
           <strong class="text-fb-text">{{ summaryData.group.name }}</strong>
           <span class="text-fb-secondary"> · {{ summaryData.group.branch }}<template v-if="summaryData.group.teacher"> · {{ summaryData.group.teacher }}</template></span>
-          <span class="ml-2 text-xs text-fb-secondary">Пустая клетка — отметки нет.</span>
+          <span class="ml-2 text-xs text-fb-secondary">{{ t('attendance.emptyCell') }}</span>
         </div>
-        <div v-if="!summaryData.rows.length" class="p-10 text-center text-sm text-fb-secondary">В этом месяце в группе нет учеников и отметок.</div>
+        <div v-if="!summaryData.rows.length" class="p-10 text-center text-sm text-fb-secondary">{{ t('attendance.summaryEmpty') }}</div>
         <div v-else class="overflow-x-auto">
           <table class="w-full text-sm">
             <thead class="border-b border-fb-line bg-fb-canvas text-xs text-fb-secondary">
               <tr>
-                <th class="sticky left-0 bg-fb-canvas px-4 py-2 text-left font-semibold">Ученик</th>
+                <th class="sticky left-0 bg-fb-canvas px-4 py-2 text-left font-semibold">{{ t('months.student') }}</th>
                 <th v-for="d in summaryData.days" :key="d.date" class="px-1.5 py-2 text-center font-medium" :class="d.future ? 'opacity-40' : ''">
                   <div>{{ dayLabel(d.date).day }}</div>
                   <div class="text-[10px]">{{ dayLabel(d.date).weekday }}</div>
                 </th>
-                <th class="px-3 py-2 text-center font-semibold">Пропуски</th>
-                <th class="px-3 py-2 text-center font-semibold">Опоздания</th>
-                <th class="px-4 py-2 text-center font-semibold">Посещаемость</th>
+                <th class="px-3 py-2 text-center font-semibold">{{ t('myAtt.absences') }}</th>
+                <th class="px-3 py-2 text-center font-semibold">{{ t('myAtt.lates') }}</th>
+                <th class="px-4 py-2 text-center font-semibold">{{ t('attendance.attendance') }}</th>
               </tr>
             </thead>
             <tbody class="divide-y divide-fb-line">
               <tr v-for="r in summaryData.rows" :key="r.student_id" class="hover:bg-fb-hover/40">
                 <td class="sticky left-0 bg-fb-card px-4 py-2 whitespace-nowrap">
                   <div class="font-medium text-fb-text">{{ r.student }}</div>
-                  <div class="text-[11px] text-fb-secondary">{{ r.status_label }}</div>
+                  <div class="text-[11px] text-fb-secondary">{{ serverStatusLabel(r.status_label) }}</div>
                 </td>
                 <td v-for="d in summaryData.days" :key="d.date" class="px-1.5 py-2 text-center">
                   <span
                     v-if="r.marks[d.date] !== undefined"
                     :class="MARK_ICON[r.marks[d.date]]?.cls"
-                    :title="MARK_ICON[r.marks[d.date]]?.title"
+                    :title="markTitle(r.marks[d.date])"
                   >{{ MARK_ICON[r.marks[d.date]]?.text }}</span>
                 </td>
                 <td class="px-3 py-2 text-center font-semibold" :class="r.absent ? 'text-red-600' : 'text-fb-secondary'">{{ r.absent }}</td>
@@ -642,7 +655,7 @@ onMounted(() => {
         <div class="lg:col-span-4">
           <div class="flex items-center justify-between mb-1">
             <label class="block text-xs font-semibold text-fb-text">
-              Дата занятия:
+              {{ t('attendance.lessonDate') }}:
             </label>
             <div class="flex items-center gap-1.5 text-xs">
               <button
@@ -650,7 +663,7 @@ onMounted(() => {
                 class="text-fb-blue hover:underline font-medium"
                 @click="setDateToday"
               >
-                Сегодня
+                {{ t('common.today') }}
               </button>
               <span class="text-fb-secondary">|</span>
               <button
@@ -658,7 +671,7 @@ onMounted(() => {
                 class="text-fb-blue hover:underline font-medium"
                 @click="setDateYesterday"
               >
-                Вчера
+                {{ t('common.yesterday') }}
               </button>
             </div>
           </div>
@@ -673,16 +686,16 @@ onMounted(() => {
         <!-- Smart Search Input with Autocomplete Dropdown -->
         <div class="relative lg:col-span-5">
           <label class="mb-1 block text-xs font-semibold text-fb-text flex items-center justify-between">
-            <span>Умный поиск группы</span>
+            <span>{{ t('attendance.groupSearch') }}</span>
             <span v-if="searchQuery" class="text-[11px] font-normal text-fb-secondary">
-              Найдено: {{ filteredGroups.length }}
+              {{ t('attendance.found', { count: filteredGroups.length }) }}
             </span>
           </label>
           <div class="relative">
             <input
               v-model="searchQuery"
               type="search"
-              placeholder="Введите название группы, курс или учителя..."
+              :placeholder="t('attendance.searchPlaceholder')"
               autocomplete="off"
               class="w-full rounded-lg border border-fb-line bg-white pl-9 pr-8 py-2 text-sm text-fb-text placeholder-fb-secondary/70 focus:border-fb-blue focus:outline-none focus:ring-1 focus:ring-fb-blue"
               @focus="showSuggestions = true"
@@ -695,7 +708,7 @@ onMounted(() => {
               v-if="searchQuery"
               type="button"
               class="absolute right-2.5 top-2.5 text-fb-secondary hover:text-fb-text text-sm"
-              title="Очистить поиск"
+              :title="t('attendance.clearSearch')"
               @click="searchQuery = ''; showSuggestions = false;"
             >
               ✕
@@ -708,7 +721,7 @@ onMounted(() => {
             class="absolute left-0 right-0 top-full mt-1 z-30 rounded-xl border border-fb-line bg-white shadow-xl overflow-hidden divide-y divide-fb-line max-h-64 overflow-y-auto"
           >
             <div class="bg-fb-canvas px-3 py-1.5 text-[11px] font-semibold text-fb-secondary uppercase tracking-wider">
-              Подсказки (нажмите для открытия журнала):
+              {{ t('attendance.suggestions') }}
             </div>
             <button
               v-for="item in searchSuggestions"
@@ -729,7 +742,7 @@ onMounted(() => {
                 </span>
               </div>
               <span class="shrink-0 text-xs text-fb-secondary bg-fb-canvas px-2 py-0.5 rounded-md border border-fb-line">
-                👥 {{ item.group.students_count }} уч.
+                👥 {{ item.group.students_count }}
               </span>
             </button>
           </div>
@@ -738,13 +751,13 @@ onMounted(() => {
         <!-- Branch Select -->
         <div class="lg:col-span-3">
           <label class="mb-1 block text-xs font-semibold text-fb-text">
-            Филиал
+            {{ t('common.branch') }}
           </label>
           <select
             v-model="selectedBranch"
             class="w-full rounded-lg border border-fb-line bg-white px-3 py-2 text-sm text-fb-text focus:border-fb-blue focus:outline-none focus:ring-1 focus:ring-fb-blue"
           >
-            <option value="">Все филиалы</option>
+            <option value="">{{ t('common.allBranches') }}</option>
             <option v-for="b in branches" :key="b.id" :value="String(b.id)">
               {{ b.name }}
             </option>
@@ -755,10 +768,10 @@ onMounted(() => {
       <!-- Filter Subbar: Active groups count & Reset button -->
       <div class="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-fb-line/60 text-xs">
         <span class="flex flex-wrap items-center gap-4 text-fb-secondary">
-          <span>Всего групп: <strong class="text-fb-text">{{ filteredGroups.length }}</strong></span>
+          <span>{{ t('attendance.totalGroups') }}: <strong class="text-fb-text">{{ filteredGroups.length }}</strong></span>
           <label class="inline-flex cursor-pointer items-center gap-1.5">
             <input v-model="onlyWithLesson" type="checkbox" class="rounded" />
-            <span>Только группы с уроком в этот день</span>
+            <span>{{ t('attendance.onlyWithLesson') }}</span>
           </label>
         </span>
 
@@ -768,7 +781,7 @@ onMounted(() => {
           class="text-fb-blue hover:underline font-medium"
           @click="resetSearchAndFilters"
         >
-          Сбросить фильтры
+          {{ t('common.resetFilters') }}
         </button>
       </div>
     </div>
@@ -778,7 +791,7 @@ onMounted(() => {
       <!-- Loading State -->
       <div v-if="loadingGroups" class="p-16 text-center text-fb-secondary">
         <div class="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-fb-blue border-r-transparent mb-3" />
-        <p class="text-sm font-medium text-fb-text">Загрузка списка групп…</p>
+        <p class="text-sm font-medium text-fb-text">{{ t('common.loading') }}</p>
       </div>
 
       <!-- Empty State -->
@@ -786,9 +799,9 @@ onMounted(() => {
         <div class="flex h-16 w-16 items-center justify-center rounded-full bg-fb-hover text-2xl mb-3 text-fb-icon">
           👥
         </div>
-        <h3 class="text-base font-semibold text-fb-text">{{ isTeacher ? 'Сегодня уроков нет' : 'Группы не найдены' }}</h3>
+        <h3 class="text-base font-semibold text-fb-text">{{ isTeacher ? t('attendance.noLessonsToday') : t('attendance.noGroupsFound') }}</h3>
         <p class="mt-1 text-sm text-fb-secondary max-w-sm">
-          {{ isTeacher ? 'У ваших групп сегодня нет уроков по расписанию.' : 'По текущим параметрам поиска и фильтрам группы отсутствуют.' }}
+          {{ isTeacher ? t('checkin.noLessons') : t('attendance.noGroupsFoundText') }}
         </p>
         <button
           v-if="!isTeacher"
@@ -796,7 +809,7 @@ onMounted(() => {
           class="mt-4 rounded-lg bg-fb-blue px-4 py-2 text-xs font-medium text-white hover:bg-fb-blue-dark transition-colors shadow-sm"
           @click="resetSearchAndFilters"
         >
-          Сбросить фильтры поиска
+          {{ t('common.resetFilters') }}
         </button>
       </div>
 
@@ -806,14 +819,14 @@ onMounted(() => {
           <table class="w-full text-sm text-left">
             <thead class="border-b border-fb-line bg-fb-canvas text-xs uppercase tracking-wider font-semibold text-fb-secondary">
               <tr>
-                <th class="px-5 py-3.5">Группа</th>
-                <th class="px-5 py-3.5">Курс</th>
-                <th v-if="!isTeacher" class="px-5 py-3.5">Преподаватель</th>
-                <th v-if="!isTeacher" class="px-5 py-3.5">Филиал</th>
-                <th class="px-5 py-3.5">Дни / Время</th>
-                <th class="px-5 py-3.5 text-center">Учеников</th>
-                <th v-if="!isTeacher" class="px-5 py-3.5 text-center">На {{ selectedDate.split('-').reverse().join('.') }}</th>
-                <th class="px-5 py-3.5 text-right">Действие</th>
+                <th class="px-5 py-3.5">{{ t('schedule.group') }}</th>
+                <th class="px-5 py-3.5">{{ t('schedule.course') }}</th>
+                <th v-if="!isTeacher" class="px-5 py-3.5">{{ t('schedule.teacher') }}</th>
+                <th v-if="!isTeacher" class="px-5 py-3.5">{{ t('common.branch') }}</th>
+                <th class="px-5 py-3.5">{{ t('attendance.daysTime') }}</th>
+                <th class="px-5 py-3.5 text-center">{{ t('nav.students') }}</th>
+                <th v-if="!isTeacher" class="px-5 py-3.5 text-center">{{ t('attendance.onDate', { date: selectedDate.split('-').reverse().join('.') }) }}</th>
+                <th class="px-5 py-3.5 text-right">{{ t('misc.action') }}</th>
               </tr>
             </thead>
             <tbody class="divide-y divide-fb-line">
@@ -865,7 +878,7 @@ onMounted(() => {
                 <!-- Days & Time -->
                 <td class="px-5 py-3.5 text-fb-secondary">
                   <div class="text-xs">
-                    <span class="font-medium text-fb-text">{{ group.days_label }}</span>
+                    <span class="font-medium text-fb-text">{{ groupDaysLabel(group.days, group.days_label) }}</span>
                     <span v-if="group.lesson_start_time" class="block text-[11px] text-fb-secondary">
                       {{ group.lesson_start_time }} - {{ group.lesson_end_time || '?' }}
                     </span>
@@ -882,12 +895,12 @@ onMounted(() => {
                 <!-- Marked or not on the chosen date -->
                 <td v-if="!isTeacher" class="px-5 py-3.5 text-center">
                   <span v-if="!dayStatus[group.id]" class="text-xs text-fb-secondary">—</span>
-                  <span v-else-if="!dayStatus[group.id].has_lesson" class="text-xs text-fb-secondary">нет урока</span>
+                  <span v-else-if="!dayStatus[group.id].has_lesson" class="text-xs text-fb-secondary">{{ t('attendance.noLesson') }}</span>
                   <span
                     v-else-if="dayStatus[group.id].marked"
                     class="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700"
-                  >✓ отмечено</span>
-                  <span v-else class="rounded-full border border-red-200 bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700">не отмечено</span>
+                  >✓ {{ t('attendance.marked') }}</span>
+                  <span v-else class="rounded-full border border-red-200 bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700">{{ t('attendance.notMarked') }}</span>
                 </td>
 
                 <!-- Action Button -->
@@ -895,10 +908,10 @@ onMounted(() => {
                   <button
                     type="button"
                     class="mr-1.5 inline-flex items-center rounded-lg border border-fb-line px-2.5 py-1.5 text-xs font-medium text-fb-secondary hover:border-fb-blue hover:text-fb-blue"
-                    title="Все ученики по дням месяца"
+                    :title="t('attendance.summaryHint')"
                     @click="openMonthSummary(group)"
                   >
-                    📊 Сводка
+                    📊 {{ t('attendance.summary') }}
                   </button>
                   <button
                     type="button"
@@ -906,7 +919,7 @@ onMounted(() => {
                     @click="openGroupRoster(group)"
                   >
                     <span>📝</span>
-                    <span>Отметить</span>
+                    <span>{{ t('attendance.mark') }}</span>
                   </button>
                 </td>
               </tr>
@@ -923,7 +936,7 @@ onMounted(() => {
               :disabled="currentPage <= 1"
               @click="currentPage--"
             >
-              ← Назад
+              ← {{ t('common.prev') }}
             </button>
             <button
               type="button"
@@ -931,14 +944,14 @@ onMounted(() => {
               :disabled="currentPage >= totalPages"
               @click="currentPage++"
             >
-              Вперед →
+              {{ t('common.next') }} →
             </button>
           </div>
 
           <span class="text-xs text-fb-secondary font-medium">
-            Страница <strong class="text-fb-text">{{ currentPage }}</strong> из <strong class="text-fb-text">{{ totalPages }}</strong>
+            {{ t('common.page', { page: currentPage, pages: totalPages }) }}
             <span class="ml-1 text-fb-secondary/80">
-              (показано {{ paginatedGroups.length }} из {{ filteredGroups.length }} групп, по 50 на стр.)
+              ({{ t('pagination.shownOf', { shown: paginatedGroups.length, total: filteredGroups.length }) }})
             </span>
           </span>
         </div>
@@ -960,7 +973,7 @@ onMounted(() => {
                 {{ activeGroup.name }}
               </h2>
               <span class="rounded-full bg-blue-100 px-2 py-0.5 text-xs font-semibold text-blue-800 border border-blue-200">
-                {{ groupStudents.length }} учеников
+                {{ t('attendance.studentsCount', { count: groupStudents.length }) }}
               </span>
             </div>
             <p class="text-xs text-fb-secondary mt-0.5">
@@ -973,8 +986,8 @@ onMounted(() => {
           <div class="flex items-center gap-3">
             <!-- Inline Date Picker in Modal -->
             <div class="flex items-center gap-2">
-              <span class="text-xs font-semibold text-fb-secondary">Дата:</span>
-              <span v-if="isTeacher" class="text-xs font-semibold text-fb-text">Сегодня, {{ selectedDate.split('-').reverse().join('.') }}</span>
+              <span class="text-xs font-semibold text-fb-secondary">{{ t('common.date') }}:</span>
+              <span v-if="isTeacher" class="text-xs font-semibold text-fb-text">{{ t('common.today') }}, {{ selectedDate.split('-').reverse().join('.') }}</span>
               <input
                 v-else
                 v-model="selectedDate"
@@ -986,7 +999,7 @@ onMounted(() => {
             <button
               type="button"
               class="rounded-lg p-1.5 text-fb-secondary hover:bg-fb-hover hover:text-fb-text transition-colors"
-              title="Закрыть"
+              :title="t('common.close')"
               @click="closeModal"
             >
               <span class="text-lg leading-none">✕</span>
@@ -997,33 +1010,33 @@ onMounted(() => {
         <!-- Quick Bulk Actions & Counters Bar -->
         <div class="border-b border-fb-line bg-white px-6 py-3 flex flex-wrap items-center justify-between gap-3 text-xs">
           <div class="flex items-center gap-2">
-            <span class="font-medium text-fb-secondary">Быстрая отметка:</span>
+            <span class="font-medium text-fb-secondary">{{ t('attendance.quickMark') }}:</span>
             <button
               type="button"
               class="rounded-lg bg-emerald-50 border border-emerald-300 text-emerald-800 px-2.5 py-1 font-semibold hover:bg-emerald-100 transition-colors"
               @click="markAll(1)"
             >
-              ✓ Все присутствовали
+              ✓ {{ t('attendance.allPresent') }}
             </button>
             <button
               type="button"
               class="rounded-lg bg-red-50 border border-red-300 text-red-800 px-2.5 py-1 font-semibold hover:bg-red-100 transition-colors"
               @click="markAll(0)"
             >
-              ✕ Все отсутствовали
+              ✕ {{ t('attendance.allAbsent') }}
             </button>
           </div>
 
           <!-- Roster Counters -->
           <div class="flex items-center gap-2">
             <span class="rounded-full bg-emerald-100 text-emerald-800 px-2 py-0.5 font-semibold text-[11px] border border-emerald-200">
-              Присутствуют: {{ rosterSummary.present }}
+              {{ t('attendance.presentCount', { count: rosterSummary.present }) }}
             </span>
             <span class="rounded-full bg-red-100 text-red-800 px-2 py-0.5 font-semibold text-[11px] border border-red-200">
-              Отсутствуют: {{ rosterSummary.absent }}
+              {{ t('attendance.absentCount', { count: rosterSummary.absent }) }}
             </span>
             <span class="rounded-full bg-amber-100 text-amber-800 px-2 py-0.5 font-semibold text-[11px] border border-amber-200">
-              Опоздали: {{ rosterSummary.late }}
+              {{ t('attendance.lateCount', { count: rosterSummary.late }) }}
             </span>
           </div>
         </div>
@@ -1054,15 +1067,15 @@ onMounted(() => {
           <!-- Loading Students -->
           <div v-if="loadingStudents" class="py-16 text-center text-fb-secondary">
             <div class="inline-block h-7 w-7 animate-spin rounded-full border-4 border-solid border-fb-blue border-r-transparent mb-2" />
-            <p class="text-sm font-medium">Загрузка списка учеников группы…</p>
+            <p class="text-sm font-medium">{{ t('common.loading') }}</p>
           </div>
 
           <!-- Empty Students State -->
           <div v-else-if="!groupStudents.length" class="py-12 text-center text-fb-secondary">
             <div class="text-3xl mb-2">👤</div>
-            <p class="font-semibold text-fb-text text-sm">В этой группе пока нет учеников</p>
+            <p class="font-semibold text-fb-text text-sm">{{ t('attendance.noStudents') }}</p>
             <p class="text-xs text-fb-secondary mt-1">
-              Добавьте учеников в группу в разделе «Группы» или переведите лидов в статус «Обучается».
+              {{ t('attendance.noStudentsHint') }}
             </p>
           </div>
 
@@ -1087,7 +1100,7 @@ onMounted(() => {
                       class="rounded-full px-2 py-0.2 text-[10px] font-semibold border"
                       :class="studentStatusPill(student.status)"
                     >
-                      {{ student.status_label }}
+                      {{ studentStatusLabel(student.status, student.status_label) }}
                     </span>
                   </div>
                   <div v-if="student.phone" class="text-xs text-fb-secondary mt-0.5">
@@ -1104,18 +1117,18 @@ onMounted(() => {
                   class="rounded-lg border px-3 py-1.5 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-fb-blue transition-colors cursor-pointer shadow-sm"
                   :class="statusBadgeClass(studentStatuses[student.id])"
                 >
-                  <option :value="1">Присутствовал</option>
-                  <option :value="0">Отсутствовал</option>
-                  <option :value="2">Опоздал</option>
+                  <option :value="1">{{ t('teacherAtt.present') }}</option>
+                  <option :value="0">{{ t('teacherAtt.absent') }}</option>
+                  <option :value="2">{{ t('teacherAtt.late') }}</option>
                 </select>
 
                 <!-- Note input -->
                 <input
                   v-model="studentNotes[student.id]"
                   type="text"
-                  placeholder="Заметка…"
+                  :placeholder="t('attendance.notePlaceholder')"
                   class="w-32 sm:w-40 rounded-lg border border-fb-line px-2.5 py-1.5 text-xs text-fb-text placeholder-fb-secondary/60 focus:border-fb-blue focus:outline-none"
-                  title="Заметка к посещаемости"
+                  :title="t('attendance.noteHint')"
                 />
               </div>
             </div>
@@ -1125,7 +1138,7 @@ onMounted(() => {
         <!-- Modal Footer with Batch Save Button -->
         <div class="border-t border-fb-line bg-fb-canvas px-6 py-4 flex flex-wrap items-center justify-between gap-3">
           <div class="text-xs text-fb-secondary">
-            Дата сохранения: <strong class="text-fb-text">{{ selectedDate }}</strong>
+            {{ t('attendance.saveDate') }}: <strong class="text-fb-text">{{ selectedDate }}</strong>
           </div>
 
           <div class="flex items-center gap-3">
@@ -1134,7 +1147,7 @@ onMounted(() => {
               class="rounded-lg border border-fb-line bg-white px-4 py-2 text-xs font-semibold text-fb-secondary hover:text-fb-text transition-colors"
               @click="closeModal"
             >
-              Отмена
+              {{ t('common.cancel') }}
             </button>
 
             <button
@@ -1144,7 +1157,7 @@ onMounted(() => {
               @click="saveGroupAttendance"
             >
               <span v-if="savingAttendance" class="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-solid border-white border-r-transparent" />
-              <span>💾 Сохранить посещаемость группы</span>
+              <span>💾 {{ t('attendance.saveGroup') }}</span>
             </button>
           </div>
         </div>

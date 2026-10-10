@@ -35,6 +35,11 @@ export function attendanceLabel(code: Code, fallback?: string | null): string {
 const SERVER_LABEL_PREFIXES = ['groupDays.', 'groupStatus.', 'studentStatus.', 'leadStage.', 'payMethod.', 'txType.', 'enrollment.', 'roles.'];
 let byRussianText: Map<string, MessageKey> | null = null;
 
+// "Ушел" and "Ушёл" are the same word
+function normalizeRussian(text: string) {
+  return text.trim().toLowerCase().replace(/ё/g, 'е');
+}
+
 /**
  * A label the server sends only as Russian text (e.g. "Нечётные дни") in the interface language.
  * Unknown text is returned unchanged.
@@ -45,10 +50,10 @@ export function serverLabel(text: string | null | undefined): string {
     byRussianText = new Map();
     for (const [key, phrase] of Object.entries(messages)) {
       if (SERVER_LABEL_PREFIXES.some((prefix) => key.startsWith(prefix))) {
-        byRussianText.set(phrase.ru.toLowerCase(), key as MessageKey);
+        byRussianText.set(normalizeRussian(phrase.ru), key as MessageKey);
       }
     }
   }
-  const key = byRussianText.get(text.trim().toLowerCase());
+  const key = byRussianText.get(normalizeRussian(text));
   return key ? t(key) : text;
 }

@@ -37,6 +37,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from django.conf import settings
+from django.db import close_old_connections
 from django.db.models import Count, Max, Min, Sum
 from django.utils import timezone
 

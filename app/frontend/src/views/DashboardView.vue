@@ -11,6 +11,9 @@ import type { ScheduleRow } from '../types/schedule';
 import { groupRoute, studentRoute } from '../utils/crossLinks';
 import { onCardsReturn } from '../utils/cardStack';
 import { canAccessRoute, PERM } from '../utils/rbac';
+import { intlLocale, t, type MessageKey } from '../i18n';
+import { confirmDialog, toast } from '../ui/feedback';
+import { apiErrorMessage } from '../utils/apiError';
 
 interface DashboardStats {
   active_leads: number;
@@ -58,16 +61,16 @@ const stats = ref<DashboardStats | null>(null);
 const loading = ref(true);
 
 const cardsRowPrimary = [
-  { key: 'active_leads', label: 'Active leads', icon: 'leads', to: '/leads' },
-  { key: 'active_students', label: 'Active students', icon: 'students', to: '/students?statuses=1' },
-  { key: 'groups', label: 'Groups', icon: 'groups', to: '/groups' },
-  { key: 'debtors', label: 'Debtors', icon: 'debtors', to: '/students/debtors' },
+  { key: 'active_leads', label: 'dashboard.activeLeads' as MessageKey, icon: 'leads', to: '/leads' },
+  { key: 'active_students', label: 'dashboard.activeStudents' as MessageKey, icon: 'students', to: '/students?statuses=1' },
+  { key: 'groups', label: 'nav.groups' as MessageKey, icon: 'groups', to: '/groups' },
+  { key: 'debtors', label: 'nav.debtors' as MessageKey, icon: 'debtors', to: '/students/debtors' },
 ] as const;
 
 const cardsRowSecondary = [
-  { key: 'trial_students', label: 'In a trial lesson', icon: 'trial', to: '/students?statuses=1' },
-  { key: 'left_active_group', label: 'Left active group', icon: 'left-group', to: '/reports/left-students?status=8' },
-  { key: 'left_after_trial', label: 'Left after trial period', icon: 'left-trial', to: '/reports/left-students?status=7' },
+  { key: 'trial_students', label: 'dashboard.inTrial' as MessageKey, icon: 'trial', to: '/students?statuses=1' },
+  { key: 'left_active_group', label: 'leftReport.leftActiveGroup' as MessageKey, icon: 'left-group', to: '/reports/left-students?status=8' },
+  { key: 'left_after_trial', label: 'leftReport.leftAfterTrial' as MessageKey, icon: 'left-trial', to: '/reports/left-students?status=7' },
 ] as const;
 
 type DashboardCard = (typeof cardsRowPrimary)[number] | (typeof cardsRowSecondary)[number];
@@ -106,6 +109,16 @@ function formatSum(value: number) {
   return value.toLocaleString('en-US').replace(/,/g, ' ');
 }
 
+const CHART_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** The server labels chart months in English ("Sep 2026"); show them in the interface language. */
+function chartLabel(label: string) {
+  const match = /^([A-Z][a-z]{2}) (\d{4})$/.exec(label);
+  const month = match ? CHART_MONTHS.indexOf(match[1]) : -1;
+  if (!match || month < 0) return label;
+  return new Date(Number(match[2]), month, 1).toLocaleDateString(intlLocale(), { month: 'short', year: 'numeric' });
+}
+
 async function loadDashboard(quiet = false) {
   if (!quiet) loading.value = true;
   try {
@@ -128,18 +141,23 @@ async function closeUnpaidLeaver(item: UnpaidLeaver, writeOffReason = '') {
       stats.value.unpaid_leavers = stats.value.unpaid_leavers.filter((r) => r.reminder_id !== item.reminder_id);
     }
     window.dispatchEvent(new Event('reminders-changed'));
+    toast.success(writeOffReason ? t('dashboard.writtenOff') : t('dashboard.reminderClosed'));
   } catch (error) {
-    const message = (error as { response?: { data?: { message?: string } } })?.response?.data?.message;
-    window.alert(message || 'Не удалось закрыть напоминание');
+    toast.error(apiErrorMessage(error, t('dashboard.closeFailed')));
   } finally {
     resolvingId.value = null;
   }
 }
 
-function resolveUnpaidLeaver(item: UnpaidLeaver) {
+async function resolveUnpaidLeaver(item: UnpaidLeaver) {
   if (item.locked) return; // debt not paid yet
-  if (!window.confirm(`Долг оплачен. Закрыть напоминание «${item.title}»?`)) return;
-  closeUnpaidLeaver(item);
+  const ok = await confirmDialog({
+    title: t('dashboard.resolveTitle'),
+    message: t('dashboard.resolveText', { title: item.title }),
+    confirmText: t('dashboard.resolved'),
+  });
+  if (!ok) return;
+  void closeUnpaidLeaver(item);
 }
 
 // CEO only: close without payment, the reason is kept in the history
@@ -161,7 +179,7 @@ async function confirmWriteOff() {
   if (!writeOffModal.item) return;
   const reason = writeOffModal.reason.trim();
   if (reason.length < 3) {
-    writeOffModal.error = 'Укажите причину (минимум 3 символа).';
+    writeOffModal.error = t('dashboard.reasonMin3');
     return;
   }
   writeOffModal.show = false;
@@ -185,9 +203,9 @@ async function completeDashboardReminder(reminder: DashboardReminder) {
       stats.value.reminders = stats.value.reminders.filter((r) => r.id !== reminder.id);
     }
     window.dispatchEvent(new Event('reminders-changed'));
+    toast.success(t('dashboard.reminderDone'));
   } catch (error) {
-    const message = (error as { response?: { data?: { message?: string } } })?.response?.data?.message;
-    window.alert(message || 'Не удалось отметить напоминание');
+    toast.error(apiErrorMessage(error, t('dashboard.reminderDoneFailed')));
   } finally {
     completingReminderId.value = null;
   }
@@ -227,7 +245,7 @@ onMounted(() => loadDashboard());
 <template>
   <div class="dashboard-page -m-6 min-h-full bg-fb-card border border-fb-line">
     <div v-if="loading" class="py-16 text-center text-[15px] text-fb-icon">
-      Loading…
+      {{ t('common.loading') }}
     </div>
 
     <template v-else>
@@ -252,7 +270,7 @@ onMounted(() => loadDashboard());
                 <DashboardCardIcon :name="card.icon" :size="32" />
               </div>
               <p class="mb-1 text-[11px] font-semibold leading-tight text-fb-secondary sm:mb-2 sm:text-[13px] sm:leading-snug">
-                {{ card.label }}
+                {{ t(card.label) }}
               </p>
               <p class="text-[22px] font-normal leading-none text-fb-blue sm:text-[28px]">
                 {{ statValue(card.key) }}
@@ -265,10 +283,10 @@ onMounted(() => loadDashboard());
       <div v-if="unpaidLeavers.length" class="border-b border-rose-200 bg-rose-50 px-5 py-4">
         <div class="mb-3 flex items-center justify-between gap-3">
           <h2 class="text-[15px] font-semibold text-rose-800">
-            ⚠️ Ушли, не заплатив — {{ unpaidLeavers.length }}
+            ⚠️ {{ t('dashboard.unpaidLeavers', { count: unpaidLeavers.length }) }}
           </h2>
           <button type="button" class="text-xs font-medium text-rose-700 hover:underline" @click="goTo('/reports/left-students?with_debt=1')">
-            Все ушедшие с долгом →
+            {{ t('dashboard.allLeftWithDebt') }} →
           </button>
         </div>
         <ul class="space-y-2">
@@ -280,16 +298,16 @@ onMounted(() => loadDashboard());
             <div
               class="min-w-0"
               :class="item.student_id ? 'cursor-pointer' : ''"
-              title="Открыть карточку ученика"
+              :title="t('dashboard.openStudentCard')"
               @click="item.student_id && goTo(studentRoute(item.student_id))"
             >
               <p class="text-sm font-semibold text-fb-text">{{ item.title }}</p>
               <p class="mt-0.5 whitespace-pre-line text-xs text-fb-secondary">{{ item.details }}</p>
-              <p class="mt-1 text-[11px] text-fb-icon">Ушёл: {{ formatDay(item.created_at) }}</p>
+              <p class="mt-1 text-[11px] text-fb-icon">{{ t('dashboard.leftOn', { date: formatDay(item.created_at) }) }}</p>
               <p v-if="item.locked" class="mt-1 text-xs font-semibold text-rose-700">
-                Осталось оплатить: {{ item.debt_months }} мес.<span v-if="item.debt_amount"> (≈ {{ formatSum(item.debt_amount) }} сум)</span>
+                {{ t('dashboard.leftToPay', { months: t('receipt.months', { count: item.debt_months }) }) }}<span v-if="item.debt_amount"> (≈ {{ t('common.sumAmount', { amount: formatSum(item.debt_amount) }) }})</span>
               </p>
-              <p v-else class="mt-1 text-xs font-semibold text-emerald-700">✓ Долг оплачен — можно закрыть</p>
+              <p v-else class="mt-1 text-xs font-semibold text-emerald-700">✓ {{ t('dashboard.debtPaidCanClose') }}</p>
             </div>
             <div class="flex shrink-0 gap-2">
               <button
@@ -298,7 +316,7 @@ onMounted(() => loadDashboard());
                 class="rounded-lg border border-fb-line px-3 py-1.5 text-xs font-medium text-fb-blue hover:bg-fb-hover"
                 @click="goTo(studentRoute(item.student_id))"
               >
-                Открыть ученика
+                {{ t('dashboard.openStudent') }}
               </button>
               <button
                 v-if="auth.isCeo && item.locked"
@@ -307,7 +325,7 @@ onMounted(() => loadDashboard());
                 :disabled="resolvingId === item.reminder_id"
                 @click="writeOffUnpaidLeaver(item)"
               >
-                Списать долг
+                {{ t('dashboard.writeOffDebt') }}
               </button>
               <button
                 v-if="canResolveReminders"
@@ -315,10 +333,10 @@ onMounted(() => loadDashboard());
                 class="rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-medium text-white"
                 :class="item.locked ? 'cursor-not-allowed opacity-35' : 'shadow-md ring-2 ring-rose-300 hover:bg-rose-700'"
                 :disabled="item.locked || resolvingId === item.reminder_id"
-                :title="item.locked ? 'Сначала примите оплату в карточке ученика' : 'Долг оплачен — закрыть напоминание'"
+                :title="item.locked ? t('dashboard.takePaymentFirst') : t('dashboard.debtPaidClose')"
                 @click="resolveUnpaidLeaver(item)"
               >
-                Решено
+                {{ t('dashboard.resolved') }}
               </button>
             </div>
           </li>
@@ -328,10 +346,10 @@ onMounted(() => loadDashboard());
       <div v-if="showReminders && myReminders.length" class="border-b border-amber-200 bg-amber-50 px-5 py-4">
         <div class="mb-3 flex items-center justify-between gap-3">
           <h2 class="text-[15px] font-semibold text-amber-900">
-            ⏰ Напоминания на сегодня и просроченные — {{ myReminders.length }}
+            ⏰ {{ t('dashboard.todayReminders', { count: myReminders.length }) }}
           </h2>
           <button type="button" class="text-xs font-medium text-amber-800 hover:underline" @click="goTo('/reminders')">
-            Все напоминания →
+            {{ t('dashboard.allReminders') }} →
           </button>
         </div>
         <ul class="space-y-2">
@@ -344,7 +362,7 @@ onMounted(() => loadDashboard());
               <p class="text-sm font-semibold text-fb-text">{{ reminder.title }}</p>
               <p v-if="reminder.details" class="mt-0.5 whitespace-pre-line text-xs text-fb-secondary">{{ reminder.details }}</p>
               <p class="mt-1 text-[11px]" :class="reminder.status === 'overdue' ? 'font-semibold text-fb-danger' : 'text-fb-icon'">
-                {{ reminder.status === 'overdue' ? 'Просрочено' : 'Сегодня' }} · {{ formatDay(reminder.due_date) }} · {{ reminder.assigned_to }}
+                {{ reminder.status === 'overdue' ? t('reminderStatus.overdue') : t('reminderStatus.today') }} · {{ formatDay(reminder.due_date) }} · {{ reminder.assigned_to }}
               </p>
             </div>
             <div class="flex shrink-0 gap-2">
@@ -354,7 +372,7 @@ onMounted(() => loadDashboard());
                 class="rounded-lg border border-fb-line px-3 py-1.5 text-xs font-medium text-fb-blue hover:bg-fb-hover"
                 @click="goTo(studentRoute(reminder.student_id))"
               >
-                Открыть ученика
+                {{ t('dashboard.openStudent') }}
               </button>
               <button
                 v-if="canCompleteReminder(reminder)"
@@ -363,7 +381,7 @@ onMounted(() => loadDashboard());
                 :disabled="completingReminderId === reminder.id"
                 @click="completeDashboardReminder(reminder)"
               >
-                ✓ Выполнено
+                ✓ {{ t('reminderStatus.done') }}
               </button>
             </div>
           </li>
@@ -373,21 +391,21 @@ onMounted(() => loadDashboard());
       <div v-if="writeOffModal.show" class="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
         <div class="w-full max-w-md overflow-hidden rounded-2xl bg-fb-card shadow-2xl">
           <div class="border-b border-fb-line px-6 py-4">
-            <h2 class="text-lg font-semibold text-rose-700">Списать долг без оплаты?</h2>
+            <h2 class="text-lg font-semibold text-rose-700">{{ t('dashboard.writeOffTitle') }}</h2>
           </div>
           <div class="space-y-3 px-6 py-5">
             <p class="text-[15px] font-medium text-fb-text">{{ writeOffModal.item?.title }}</p>
             <p v-if="writeOffModal.item?.debt_months" class="text-sm text-fb-secondary">
-              Будет списано: {{ writeOffModal.item.debt_months }} мес.<span v-if="writeOffModal.item.debt_amount">
-                (≈ {{ formatSum(writeOffModal.item.debt_amount) }} сум)</span>.
-              Долг исчезнет из отчётов, в отчёте «Ушедшие» останется пометка «Списано» с причиной.
+              {{ t('dashboard.willWriteOff', { months: t('receipt.months', { count: writeOffModal.item.debt_months }) }) }}<span v-if="writeOffModal.item.debt_amount">
+                (≈ {{ t('common.sumAmount', { amount: formatSum(writeOffModal.item.debt_amount) }) }})</span>.
+              {{ t('dashboard.writeOffHint') }}
             </p>
-            <label class="block text-sm font-medium text-fb-secondary">Причина (обязательно)</label>
+            <label class="block text-sm font-medium text-fb-secondary">{{ t('dashboard.reasonRequired') }}</label>
             <textarea
               v-model="writeOffModal.reason"
               rows="3"
               class="w-full rounded-lg border border-fb-line px-3 py-2 focus:border-fb-blue focus:outline-none"
-              placeholder="Например: переехал в другой город, связаться не удалось"
+              :placeholder="t('dashboard.reasonPlaceholder')"
             />
             <p v-if="writeOffModal.error" class="text-sm text-fb-danger">{{ writeOffModal.error }}</p>
           </div>
@@ -397,14 +415,14 @@ onMounted(() => loadDashboard());
               class="rounded-lg border border-fb-line px-5 py-2 text-sm font-medium text-fb-secondary hover:bg-fb-hover"
               @click="writeOffModal.show = false"
             >
-              Отмена
+              {{ t('common.cancel') }}
             </button>
             <button
               type="button"
               class="rounded-lg bg-rose-600 px-5 py-2 text-sm font-medium text-white hover:bg-rose-700"
               @click="confirmWriteOff"
             >
-              Списать
+              {{ t('dashboard.writeOff') }}
             </button>
           </div>
         </div>
@@ -415,7 +433,7 @@ onMounted(() => loadDashboard());
           v-if="!hasChartData"
           class="flex min-h-[300px] items-center justify-center text-[15px] text-fb-icon lg:min-h-[340px]"
         >
-          No data to display
+          {{ t('common.noData') }}
         </div>
         <div
           v-else
@@ -432,7 +450,7 @@ onMounted(() => loadDashboard());
                 :style="{ height: `${Math.max((point.value / maxChartValue) * 100, 6)}%` }"
               />
             </div>
-            <span class="text-[13px] text-fb-icon">{{ point.label }}</span>
+            <span class="text-[13px] text-fb-icon">{{ chartLabel(point.label) }}</span>
             <span class="mt-1 text-[14px] font-medium text-fb-blue">{{ formatSum(point.value) }}</span>
           </div>
         </div>

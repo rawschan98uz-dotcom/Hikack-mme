@@ -9,6 +9,9 @@ import { computed, onMounted, reactive, ref, watch } from 'vue';
 
 import client, { type ApiEnvelope } from '../api/client';
 import { downloadCsv } from '../utils/csvExport';
+import { t, type MessageKey } from '../i18n';
+import { leadStageLabel } from '../i18n/labels';
+import { toast } from '../ui/feedback';
 
 interface ConversionRow {
   id: number;
@@ -60,12 +63,12 @@ interface ConversionData {
   total_pages?: number;
 }
 
-const STAGES = [
-  { value: 'trial_booked', label: 'Записан на пробный' },
-  { value: 'attended', label: 'Был на уроке (Думает)' },
-  { value: 'converted', label: 'Зачислен (Студент)' },
-  { value: 'rejected', label: 'Отказ' },
-] as const;
+const STAGES: { value: string; label: MessageKey }[] = [
+  { value: 'trial_booked', label: 'leadStage.trial_booked' },
+  { value: 'attended', label: 'leadStage.attended' },
+  { value: 'converted', label: 'leadStage.converted' },
+  { value: 'rejected', label: 'leadStage.rejected' },
+];
 
 const data = ref<ConversionData | null>(null);
 const courses = ref<Option[]>([]);
@@ -97,14 +100,14 @@ const funnel = computed<Funnel>(() => data.value?.funnel ?? {
 const funnelSteps = computed(() => {
   const f = funnel.value;
   return [
-    { key: 'booked', title: '1. Записались на пробный', count: f.booked, rate: f.booked ? 100 : 0, hint: 'все лиды за период', color: 'blue' },
-    { key: 'came', title: '2. Пришли на пробный', count: f.came, rate: pct(f.came, f.booked), hint: 'от записавшихся', color: 'emerald' },
+    { key: 'booked', title: `1. ${t('conversion.booked')}`, count: f.booked, rate: f.booked ? 100 : 0, hint: t('conversion.allLeadsPeriod'), color: 'blue' },
+    { key: 'came', title: `2. ${t('conversion.came')}`, count: f.came, rate: pct(f.came, f.booked), hint: t('conversion.ofBooked'), color: 'emerald' },
     {
       key: 'converted',
-      title: '3. Стали студентами',
+      title: `3. ${t('conversion.converted')}`,
       count: f.converted,
       rate: pct(f.converted, f.booked),
-      hint: `от записавшихся · ${pct(f.converted, f.came)}% от пришедших`,
+      hint: `${t('conversion.ofBooked')} · ${t('conversion.ofCame', { pct: pct(f.converted, f.came) })}`,
       color: 'indigo',
     },
   ];
@@ -178,7 +181,10 @@ async function exportCsv() {
     const res = await client.get<ApiEnvelope<ConversionData>>('/reports/conversion', { params: queryParams({ export: '1' }) });
     downloadCsv(
       `leads_conversion_${todayIso()}.csv`,
-      ['ID', 'ФИО', 'Телефон', 'Курс', 'Филиал', 'Источник', 'Школа', 'Этап', 'Пришёл на пробный', 'Статус', 'Дата обращения'],
+      [
+        'ID', t('common.fullName'), t('common.phone'), t('schedule.course'), t('common.branch'), t('conversion.source'),
+        t('import.school'), t('conversion.stage'), t('conversion.cameToTrial'), t('common.status'), t('conversion.createdAt'),
+      ],
       res.data.data.rows.map((row) => [
         row.id,
         row.full_name,
@@ -187,15 +193,15 @@ async function exportCsv() {
         row.branch_name || '—',
         row.source || '—',
         row.school || '—',
-        row.stage_label,
-        row.attended ? 'Да' : 'Нет',
-        row.is_active === false ? 'В архиве' : 'Активный',
+        leadStageLabel(row.stage, row.stage_label),
+        row.attended ? t('common.yes') : t('common.no'),
+        row.is_active === false ? t('groupStatus.3') : t('common.active'),
         row.created_at,
       ]),
     );
   } catch (err) {
     console.error(err);
-    alert('Не удалось экспортировать отчет в CSV');
+    toast.error(t('errors.exportFailed'));
   } finally {
     exporting.value = false;
   }
@@ -220,8 +226,8 @@ watch(
   <div class="space-y-4">
     <div class="flex flex-wrap items-center justify-between gap-3">
       <div>
-        <h1 class="text-xl font-semibold text-fb-text">Лиды и конверсия</h1>
-        <p class="text-xs text-fb-secondary mt-0.5">Сколько записалось на пробный, сколько пришло и сколько стало студентами</p>
+        <h1 class="text-xl font-semibold text-fb-text">{{ t('nav.leadConversion') }}</h1>
+        <p class="text-xs text-fb-secondary mt-0.5">{{ t('conversion.subtitle') }}</p>
       </div>
       <button
         type="button"
@@ -229,77 +235,77 @@ watch(
         :disabled="exporting"
         @click="exportCsv"
       >
-        {{ exporting ? 'Экспорт…' : '📥 Экспорт CSV' }}
+        {{ exporting ? t('leftReport.exporting') : `📥 ${t('common.exportCsv')}` }}
       </button>
     </div>
 
     <!-- Filters -->
     <div class="flex flex-wrap items-end gap-3 rounded-xl border border-fb-line bg-fb-card p-4">
       <div>
-        <label class="mb-1 block text-xs font-medium text-fb-secondary">Курс</label>
+        <label class="mb-1 block text-xs font-medium text-fb-secondary">{{ t('schedule.course') }}</label>
         <select v-model="filters.course_id" class="rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none" @change="applyFilters">
-          <option value="">Все курсы</option>
+          <option value="">{{ t('conversion.allCourses') }}</option>
           <option v-for="c in courses" :key="c.id" :value="String(c.id)">{{ c.name }}</option>
         </select>
       </div>
       <div v-if="branches.length > 1">
-        <label class="mb-1 block text-xs font-medium text-fb-secondary">Филиал</label>
+        <label class="mb-1 block text-xs font-medium text-fb-secondary">{{ t('common.branch') }}</label>
         <select v-model="filters.branch_id" class="rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none" @change="applyFilters">
-          <option value="">Все филиалы</option>
+          <option value="">{{ t('common.allBranches') }}</option>
           <option v-for="b in branches" :key="b.id" :value="String(b.id)">{{ b.name }}</option>
         </select>
       </div>
       <div>
-        <label class="mb-1 block text-xs font-medium text-fb-secondary">Источник</label>
+        <label class="mb-1 block text-xs font-medium text-fb-secondary">{{ t('conversion.source') }}</label>
         <select v-model="filters.source" class="rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none" @change="applyFilters">
-          <option value="">Все источники</option>
+          <option value="">{{ t('conversion.allSources') }}</option>
           <option v-for="src in data?.sources ?? []" :key="src" :value="src">{{ src }}</option>
-          <option value="—">Без источника</option>
+          <option value="—">{{ t('conversion.noSource') }}</option>
         </select>
       </div>
       <div>
-        <label class="mb-1 block text-xs font-medium text-fb-secondary">Этап</label>
+        <label class="mb-1 block text-xs font-medium text-fb-secondary">{{ t('conversion.stage') }}</label>
         <select v-model="filters.stage" class="rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none" @change="applyFilters">
-          <option value="">Все этапы</option>
-          <option v-for="s in STAGES" :key="s.value" :value="s.value">{{ s.label }}</option>
+          <option value="">{{ t('conversion.allStages') }}</option>
+          <option v-for="s in STAGES" :key="s.value" :value="s.value">{{ t(s.label) }}</option>
         </select>
       </div>
       <div>
-        <label class="mb-1 block text-xs font-medium text-fb-secondary">Лиды</label>
+        <label class="mb-1 block text-xs font-medium text-fb-secondary">{{ t('nav.leads') }}</label>
         <select v-model="filters.is_active" class="rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none" @change="applyFilters">
-          <option value="">Все (включая архив)</option>
-          <option value="true">Только активные</option>
-          <option value="false">Только архив</option>
+          <option value="">{{ t('conversion.allWithArchive') }}</option>
+          <option value="true">{{ t('conversion.onlyActive') }}</option>
+          <option value="false">{{ t('conversion.onlyArchive') }}</option>
         </select>
       </div>
       <div>
-        <label class="mb-1 block text-xs font-medium text-fb-secondary">С даты</label>
+        <label class="mb-1 block text-xs font-medium text-fb-secondary">{{ t('archive.startDate') }}</label>
         <input v-model="filters.date_from" type="date" class="rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none" @change="applyFilters" />
       </div>
       <div>
-        <label class="mb-1 block text-xs font-medium text-fb-secondary">По дату</label>
+        <label class="mb-1 block text-xs font-medium text-fb-secondary">{{ t('archive.endDate') }}</label>
         <input v-model="filters.date_to" type="date" class="rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none" @change="applyFilters" />
       </div>
       <div class="min-w-[180px] flex-1">
-        <label class="mb-1 block text-xs font-medium text-fb-secondary">Поиск</label>
+        <label class="mb-1 block text-xs font-medium text-fb-secondary">{{ t('common.search') }}</label>
         <input
           v-model="filters.q"
           type="search"
-          placeholder="Имя, телефон, источник, школа…"
+          :placeholder="t('conversion.searchPlaceholder')"
           class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none"
           @keydown.enter="applyFilters"
         />
       </div>
       <button type="button" class="rounded-lg border border-fb-line px-4 py-2 text-sm text-fb-secondary hover:text-fb-blue" @click="resetFilters">
-        Сбросить
+        {{ t('common.reset') }}
       </button>
     </div>
 
-    <div v-if="loading && !data" class="p-12 text-center text-fb-secondary">Загрузка данных…</div>
+    <div v-if="loading && !data" class="p-12 text-center text-fb-secondary">{{ t('common.loading') }}</div>
     <template v-else-if="data">
       <!-- Funnel: what happened to every lead of the period -->
       <div class="rounded-xl border border-fb-line bg-fb-card p-5 shadow-sm">
-        <div class="mb-3 text-xs font-medium text-fb-secondary">Воронка за выбранный период</div>
+        <div class="mb-3 text-xs font-medium text-fb-secondary">{{ t('conversion.funnelTitle') }}</div>
         <div class="grid grid-cols-1 gap-3 md:grid-cols-3">
           <div
             v-for="step in funnelSteps"
@@ -320,32 +326,32 @@ watch(
         </div>
         <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3 text-sm">
           <button type="button" class="rounded-lg border border-fb-line px-3 py-2 text-left hover:border-fb-blue" :class="filters.stage === 'trial_booked' ? 'border-fb-blue bg-fb-hover' : ''" @click="pickStage('trial_booked')">
-            <span class="text-fb-secondary">Ещё не были на пробном:</span>
+            <span class="text-fb-secondary">{{ t('conversion.waiting') }}:</span>
             <strong class="ml-1 text-fb-text">{{ funnel.waiting }}</strong>
           </button>
           <button type="button" class="rounded-lg border border-fb-line px-3 py-2 text-left hover:border-fb-blue" :class="filters.stage === 'attended' ? 'border-fb-blue bg-fb-hover' : ''" @click="pickStage('attended')">
-            <span class="text-fb-secondary">Были, думают:</span>
+            <span class="text-fb-secondary">{{ t('conversion.thinking') }}:</span>
             <strong class="ml-1 text-fb-text">{{ funnel.thinking }}</strong>
           </button>
           <button type="button" class="rounded-lg border border-fb-line px-3 py-2 text-left hover:border-fb-blue" :class="filters.stage === 'rejected' ? 'border-fb-blue bg-fb-hover' : ''" @click="pickStage('rejected')">
-            <span class="text-fb-secondary">Отказ:</span>
+            <span class="text-fb-secondary">{{ t('leadStage.rejected') }}:</span>
             <strong class="ml-1 text-fb-text">{{ funnel.rejected }}</strong>
-            <span class="ml-1 text-xs text-fb-secondary">(до урока {{ funnel.rejected_before }}, после урока {{ funnel.rejected_after }})</span>
+            <span class="ml-1 text-xs text-fb-secondary">({{ t('conversion.rejectedSplit', { before: funnel.rejected_before, after: funnel.rejected_after }) }})</span>
           </button>
         </div>
       </div>
 
       <!-- Which advertising works -->
       <div v-if="data.by_source.length" class="overflow-hidden rounded-xl border border-fb-line bg-fb-card shadow-sm">
-        <div class="border-b border-fb-line px-5 py-3 text-sm font-semibold text-fb-text">По источникам — какая реклама приводит студентов</div>
+        <div class="border-b border-fb-line px-5 py-3 text-sm font-semibold text-fb-text">{{ t('conversion.bySource') }}</div>
         <table class="w-full text-sm">
           <thead class="border-b border-fb-line bg-fb-canvas text-xs uppercase tracking-wider font-semibold text-fb-secondary">
             <tr>
-              <th class="px-5 py-2.5 text-left">Источник</th>
-              <th class="px-4 py-2.5 text-right">Лидов</th>
-              <th class="px-4 py-2.5 text-right">Пришли на пробный</th>
-              <th class="px-4 py-2.5 text-right">Стали студентами</th>
-              <th class="px-5 py-2.5 text-right">Конверсия</th>
+              <th class="px-5 py-2.5 text-left">{{ t('conversion.source') }}</th>
+              <th class="px-4 py-2.5 text-right">{{ t('nav.leads') }}</th>
+              <th class="px-4 py-2.5 text-right">{{ t('conversion.came') }}</th>
+              <th class="px-4 py-2.5 text-right">{{ t('conversion.converted') }}</th>
+              <th class="px-5 py-2.5 text-right">{{ t('conversion.rate') }}</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-fb-line">
@@ -354,10 +360,10 @@ watch(
               :key="src.source"
               class="cursor-pointer hover:bg-fb-hover/40"
               :class="filters.source === src.source ? 'bg-fb-hover' : ''"
-              title="Нажмите, чтобы показать лидов этого источника"
+              :title="t('conversion.sourceRowHint')"
               @click="pickSource(src.source)"
             >
-              <td class="px-5 py-2.5 font-medium text-fb-text">{{ src.source === '—' ? 'Без источника' : src.source }}</td>
+              <td class="px-5 py-2.5 font-medium text-fb-text">{{ src.source === '—' ? t('conversion.noSource') : src.source }}</td>
               <td class="px-4 py-2.5 text-right">{{ src.total }}</td>
               <td class="px-4 py-2.5 text-right">{{ src.came }}</td>
               <td class="px-4 py-2.5 text-right">{{ src.converted }}</td>
@@ -370,12 +376,12 @@ watch(
       <!-- Leads -->
       <div class="overflow-hidden rounded-xl border border-fb-line bg-fb-card shadow-sm">
         <div class="flex flex-wrap items-center justify-between gap-2 border-b border-fb-line px-5 py-3 text-sm">
-          <span class="font-semibold text-fb-text">Лиды</span>
-          <span class="text-fb-secondary">Всего: <strong class="text-fb-text">{{ data.total }}</strong> · активных: <strong class="text-fb-text">{{ data.active }}</strong> · в архиве: <strong class="text-fb-text">{{ data.total - data.active }}</strong></span>
+          <span class="font-semibold text-fb-text">{{ t('nav.leads') }}</span>
+          <span class="text-fb-secondary">{{ t('conversion.totalLabel') }}: <strong class="text-fb-text">{{ data.total }}</strong> · {{ t('conversion.activeLabel') }}: <strong class="text-fb-text">{{ data.active }}</strong> · {{ t('conversion.archivedLabel') }}: <strong class="text-fb-text">{{ data.total - data.active }}</strong></span>
         </div>
         <div v-if="!data.rows.length" class="flex flex-col items-center justify-center p-12 text-center">
-          <h3 class="text-base font-semibold text-fb-text">Лиды не найдены</h3>
-          <p class="mt-1 text-sm text-fb-secondary max-w-sm">По выбранным фильтрам лидов нет. Попробуйте изменить период или сбросить фильтры.</p>
+          <h3 class="text-base font-semibold text-fb-text">{{ t('conversion.emptyTitle') }}</h3>
+          <p class="mt-1 text-sm text-fb-secondary max-w-sm">{{ t('conversion.emptyText') }}</p>
         </div>
 
         <template v-else>
@@ -383,14 +389,14 @@ watch(
             <table class="w-full text-sm">
               <thead class="border-b border-fb-line bg-fb-canvas text-xs uppercase tracking-wider font-semibold text-fb-secondary">
                 <tr>
-                  <th class="px-5 py-3.5 text-left">ФИО</th>
-                  <th class="px-5 py-3.5 text-left">Телефон</th>
-                  <th class="px-4 py-3.5 text-left">Курс</th>
-                  <th v-if="branches.length > 1" class="px-4 py-3.5 text-left">Филиал</th>
-                  <th class="px-4 py-3.5 text-left">Источник</th>
-                  <th class="px-5 py-3.5 text-left">Этап</th>
-                  <th class="px-3 py-3.5 text-center">Был на пробном</th>
-                  <th class="px-5 py-3.5 text-left">Дата</th>
+                  <th class="px-5 py-3.5 text-left">{{ t('common.fullName') }}</th>
+                  <th class="px-5 py-3.5 text-left">{{ t('common.phone') }}</th>
+                  <th class="px-4 py-3.5 text-left">{{ t('schedule.course') }}</th>
+                  <th v-if="branches.length > 1" class="px-4 py-3.5 text-left">{{ t('common.branch') }}</th>
+                  <th class="px-4 py-3.5 text-left">{{ t('conversion.source') }}</th>
+                  <th class="px-5 py-3.5 text-left">{{ t('conversion.stage') }}</th>
+                  <th class="px-3 py-3.5 text-center">{{ t('conversion.wasOnTrial') }}</th>
+                  <th class="px-5 py-3.5 text-left">{{ t('common.date') }}</th>
                 </tr>
               </thead>
               <tbody class="divide-y divide-fb-line">
@@ -401,9 +407,9 @@ watch(
                       <span
                         v-if="row.is_active === false"
                         class="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 border border-amber-200"
-                        title="Лид находится в архиве"
+                        :title="t('conversion.leadArchived')"
                       >
-                        Архив
+                        {{ t('nav.archive') }}
                       </span>
                     </div>
                   </td>
@@ -418,7 +424,7 @@ watch(
                   </td>
                   <td class="px-5 py-3.5">
                     <span class="rounded-full bg-fb-canvas border border-fb-line px-2.5 py-0.5 text-xs font-medium text-fb-text">
-                      {{ row.stage_label }}
+                      {{ leadStageLabel(row.stage, row.stage_label) }}
                     </span>
                   </td>
                   <td class="px-3 py-3.5 text-center">
@@ -438,10 +444,10 @@ watch(
               :disabled="currentPage <= 1"
               @click="changePage(-1)"
             >
-              ← Назад
+              ← {{ t('common.prev') }}
             </button>
             <span class="text-xs text-fb-secondary font-medium">
-              Страница {{ currentPage }} из {{ totalPages }} (всего {{ data.total }} лидов)
+              {{ t('common.page', { page: currentPage, pages: totalPages }) }} · {{ t('common.totalCount', { count: data.total }) }}
             </span>
             <button
               type="button"
@@ -449,7 +455,7 @@ watch(
               :disabled="currentPage >= totalPages"
               @click="changePage(1)"
             >
-              Вперед →
+              {{ t('common.next') }} →
             </button>
           </div>
         </template>

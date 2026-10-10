@@ -3,6 +3,10 @@ import { computed, onMounted, reactive, ref , watch} from 'vue';
 
 import client, { type ApiEnvelope } from '../api/client';
 import { todayIso } from '../utils/dates';
+import { t } from '../i18n';
+import { confirmDialog, toast } from '../ui/feedback';
+import { apiErrorMessage } from '../utils/apiError';
+import { formatSum } from '../utils/wallet';
 
 type PageArray<T> = T[] & { has_more?: boolean; next_offset?: number | null };
 
@@ -34,14 +38,14 @@ const form = reactive({ name: '', amount: 0, comment: '', withdrawal_date: today
 
 const isReadOnly = computed(() => Boolean(detailRow.value && !editingRow.value));
 const panelTitle = computed(() =>
-  editingRow.value ? 'Edit withdrawal' : detailRow.value ? 'Withdrawal details' : 'Add withdrawal',
+  editingRow.value ? t('withdraw.editTitle') : detailRow.value ? t('withdraw.detailTitle') : t('withdraw.addTitle'),
 );
 const tableRows = computed(() =>
   rows.value.map((r) => ({
     id: r.id,
     date: r.date,
     name: r.name,
-    sum: r.sum.toLocaleString(),
+    sum: formatSum(r.sum),
     comment: r.comment || '—',
     creator: r.creator,
   })),
@@ -130,15 +134,15 @@ function closePanel() {
 async function submitForm() {
   formError.value = '';
   if (!form.name.trim()) {
-    formError.value = 'Fill name and amount';
+    formError.value = t('withdraw.nameRequired');
     return;
   }
   if (!Number.isInteger(form.amount) || form.amount <= 0) {
-    formError.value = 'Сумма — целое положительное число.';
+    formError.value = t('finance.amountPositive');
     return;
   }
   if (!form.withdrawal_date || form.withdrawal_date > todayIso()) {
-    formError.value = 'Дата изъятия не может быть позже сегодняшнего дня.';
+    formError.value = t('withdraw.dateNotFuture');
     return;
   }
   saving.value = true;
@@ -149,30 +153,39 @@ async function submitForm() {
       comment: form.comment.trim(),
       date: form.withdrawal_date,
     };
+    const wasEditing = Boolean(editingRow.value);
     if (editingRow.value) {
       await client.patch(`/withdraws/${editingRow.value.id}`, payload);
     } else {
       await client.post('/withdraws', payload);
     }
     closePanel();
+    toast.success(wasEditing ? t('toast.saved') : t('withdraw.created', { amount: formatSum(payload.amount) }));
     await loadRows();
-  } catch (err: any) {
-    formError.value = err?.response?.data?.message || 'Could not save';
+  } catch (err: unknown) {
+    formError.value = apiErrorMessage(err, t('errors.saveFailed'));
   } finally {
     saving.value = false;
   }
 }
 
 async function deleteRow() {
-  if (!detailRow.value || !window.confirm('Delete this withdrawal?')) return;
+  if (!detailRow.value) return;
+  const ok = await confirmDialog({
+    title: t('withdraw.deleteConfirm', { amount: formatSum(detailRow.value.sum) }),
+    message: t('withdraw.deleteHint', { name: detailRow.value.name, date: detailRow.value.date }),
+    danger: true,
+  });
+  if (!ok || !detailRow.value) return;
   deleting.value = true;
   try {
     await client.delete(`/withdraws/${detailRow.value.id}`);
     closePanel();
+    toast.success(t('toast.deleted'));
     await loadRows();
-  } catch (err: any) {
+  } catch (err: unknown) {
     // e.g. the month is closed
-    window.alert(err?.response?.data?.message || 'Не удалось удалить изъятие');
+    toast.error(apiErrorMessage(err, t('withdraw.deleteFailed')));
   } finally {
     deleting.value = false;
   }
@@ -197,39 +210,39 @@ watch(
 <template>
   <div class="space-y-4">
     <div class="flex flex-wrap items-center justify-between gap-3">
-      <h1 class="text-xl font-semibold text-fb-text">Withdraw</h1>
+      <h1 class="text-xl font-semibold text-fb-text">{{ t('nav.withdraw') }}</h1>
       <button type="button" class="rounded-lg bg-fb-blue px-4 py-2 text-sm font-medium text-white" @click="openCreate">
-        + Add withdrawal
+        + {{ t('withdraw.addTitle') }}
       </button>
     </div>
 
     <div class="flex flex-wrap items-end gap-3 rounded-xl border border-fb-line bg-fb-card p-4">
       <div>
-        <label class="mb-1 block text-xs text-fb-secondary">From</label>
+        <label class="mb-1 block text-xs text-fb-secondary">{{ t('common.from') }}</label>
         <input v-model="filters.date_from" type="date" class="rounded-lg border border-fb-line px-3 py-2 text-sm" />
       </div>
       <div>
-        <label class="mb-1 block text-xs text-fb-secondary">To</label>
+        <label class="mb-1 block text-xs text-fb-secondary">{{ t('common.to') }}</label>
         <input v-model="filters.date_to" type="date" class="rounded-lg border border-fb-line px-3 py-2 text-sm" />
       </div>
       <div class="min-w-[180px] flex-1">
-        <label class="mb-1 block text-xs text-fb-secondary">Search</label>
+        <label class="mb-1 block text-xs text-fb-secondary">{{ t('common.search') }}</label>
         <input v-model="filters.q" type="search" class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm" @keydown.enter="loadRows" />
       </div>
-      <button type="button" class="rounded-lg border border-fb-line px-4 py-2 text-sm" @click="loadRows">Apply</button>
+      <button type="button" class="rounded-lg border border-fb-line px-4 py-2 text-sm" @click="loadRows">{{ t('common.apply') }}</button>
     </div>
 
     <div class="overflow-hidden rounded-xl border border-fb-line bg-fb-card">
-      <div v-if="loading" class="p-8 text-center text-fb-secondary">Loading…</div>
-      <div v-else-if="!tableRows.length" class="p-8 text-center text-fb-icon">No withdrawals</div>
+      <div v-if="loading" class="p-8 text-center text-fb-secondary">{{ t('common.loading') }}</div>
+      <div v-else-if="!tableRows.length" class="p-8 text-center text-fb-icon">{{ t('withdraw.empty') }}</div>
       <table v-else class="w-full text-base">
         <thead class="border-b bg-fb-canvas">
           <tr>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Date</th>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Name</th>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Sum</th>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Comment</th>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Creator</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('common.date') }}</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('withdraw.who') }}</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('common.amount') }}</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('common.comment') }}</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('finance.creator') }}</th>
           </tr>
         </thead>
         <tbody>
@@ -249,7 +262,7 @@ watch(
           :disabled="loadingMore"
           @click="loadMore"
         >
-          {{ loadingMore ? 'Загрузка…' : 'Показать ещё' }}
+          {{ loadingMore ? t('common.loading') : t('common.showMore') }}
         </button>
       </div>
     </div>
@@ -259,13 +272,13 @@ watch(
       <div class="drawer-panel-fb max-w-lg">
         <div class="flex items-center justify-between border-b px-6 py-4">
           <h2 class="text-lg font-semibold">{{ panelTitle }}</h2>
-          <button type="button" @click="closePanel">✕</button>
+          <button type="button" :aria-label="t('common.close')" @click="closePanel">✕</button>
         </div>
-        <div v-if="panelLoading" class="p-6 text-fb-secondary">Loading…</div>
+        <div v-if="panelLoading" class="p-6 text-fb-secondary">{{ t('common.loading') }}</div>
         <form v-else class="flex flex-1 flex-col overflow-hidden" @submit.prevent="submitForm">
           <div class="flex-1 space-y-4 overflow-y-auto p-6">
             <div>
-              <label class="mb-1 block text-sm font-medium">Дата изъятия</label>
+              <label class="mb-1 block text-sm font-medium">{{ t('withdraw.date') }}</label>
               <input
                 v-model="form.withdrawal_date"
                 type="date"
@@ -276,28 +289,28 @@ watch(
               />
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium">Name</label>
+              <label class="mb-1 block text-sm font-medium">{{ t('withdraw.who') }}</label>
               <input v-model="form.name" :readonly="isReadOnly" required class="w-full rounded-lg border px-3 py-2 read-only:bg-fb-canvas" />
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium">Amount</label>
+              <label class="mb-1 block text-sm font-medium">{{ t('common.amount') }}</label>
               <input v-model.number="form.amount" type="number" min="1" step="1" :readonly="isReadOnly" required class="w-full rounded-lg border px-3 py-2 read-only:bg-fb-canvas" />
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium">Comment</label>
+              <label class="mb-1 block text-sm font-medium">{{ t('common.comment') }}</label>
               <textarea v-model="form.comment" :readonly="isReadOnly" rows="3" class="w-full rounded-lg border px-3 py-2 read-only:bg-fb-canvas" />
             </div>
             <p v-if="formError" class="text-sm text-fb-danger">{{ formError }}</p>
           </div>
           <div class="flex gap-2 border-t px-6 py-4">
             <template v-if="isReadOnly && detailRow">
-              <button type="button" class="rounded-lg bg-fb-blue px-5 py-2 text-sm text-white" @click="startEdit">Edit</button>
-              <button type="button" class="rounded-lg border border-red-300 px-5 py-2 text-sm text-fb-danger" :disabled="deleting" @click="deleteRow">Delete</button>
+              <button type="button" class="rounded-lg bg-fb-blue px-5 py-2 text-sm text-white" @click="startEdit">{{ t('common.edit') }}</button>
+              <button type="button" class="rounded-lg border border-red-300 px-5 py-2 text-sm text-fb-danger" :disabled="deleting" @click="deleteRow">{{ t('common.delete') }}</button>
             </template>
             <button v-else type="submit" class="rounded-lg bg-fb-blue px-5 py-2 text-sm text-white" :disabled="saving">
-              {{ saving ? 'Saving…' : editingRow ? 'Save' : 'Create' }}
+              {{ saving ? t('common.saving') : editingRow ? t('common.save') : t('common.create') }}
             </button>
-            <button type="button" class="rounded-lg border px-5 py-2 text-sm" @click="closePanel">Cancel</button>
+            <button type="button" class="rounded-lg border px-5 py-2 text-sm" @click="closePanel">{{ t('common.cancel') }}</button>
           </div>
         </form>
       </div>

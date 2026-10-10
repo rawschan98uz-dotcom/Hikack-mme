@@ -137,4 +137,6 @@ export default defineMessages({
   'weekday.sun': { uz: 'Ya', ru: 'Вс', en: 'Sun' },
   'common.selectDate': { uz: 'Sanani tanlang', ru: 'Выберите дату', en: 'Select date' },
   'common.addNew': { uz: 'Yangi qoʻshish', ru: 'Добавить', en: 'Add new' },
+  'confirm.deleteWord': { uz: 'OʻCHIRISH', ru: 'УДАЛИТЬ', en: 'DELETE' },
+  'common.showMore': { uz: 'Yana koʻrsatish', ru: 'Показать ещё', en: 'Show more' },
 });

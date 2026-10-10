@@ -2,6 +2,9 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 
 import client, { type ApiEnvelope } from '../api/client';
+import { t, tMaybe } from '../i18n';
+import { confirmDialog, toast } from '../ui/feedback';
+import { apiErrorMessage } from '../utils/apiError';
 import { useAuthStore } from '../stores/auth';
 import { PERM } from '../utils/rbac';
 import { downloadCsv } from '../utils/csvExport';
@@ -27,6 +30,10 @@ interface ArchivePayload {
 }
 
 const ROLE_OPTIONS = ['', 'student', 'teacher', 'staff'];
+
+function roleLabel(role: string) {
+  return tMaybe(`archive.role.${(role || '').toLowerCase()}`, role);
+}
 
 const rows = ref<ArchiveRow[]>([]);
 const auth = useAuthStore();
@@ -119,35 +126,71 @@ async function loadRows() {
 
 async function bulkAction(action: 'delete' | 'restore') {
   if (!selectedIds.value.length) return;
-  const label = action === 'delete' ? 'permanently delete' : 'reestablish';
-  if (!window.confirm(`${label} ${selectedIds.value.length} record(s)?`)) return;
+  const count = selectedIds.value.length;
+  const ok = action === 'delete'
+    ? await confirmDialog({
+      title: t('archive.bulkDeleteTitle', { count }),
+      message: t('archive.deleteForeverHint'),
+      danger: true,
+      confirmText: t('archive.deleteForever'),
+      typeToConfirm: t('confirm.deleteWord'),
+    })
+    : await confirmDialog({
+      title: t('archive.bulkRestoreTitle', { count }),
+      confirmText: t('common.restore'),
+    });
+  if (!ok) return;
 
   bulkLoading.value = true;
   try {
     await client.post('/archive/list/bulk', { action, ids: selectedIds.value });
+    toast.success(action === 'delete' ? t('archive.deletedCount', { count }) : t('archive.restoredCount', { count }));
     await loadRows();
+  } catch (err: unknown) {
+    toast.error(apiErrorMessage(err));
   } finally {
     bulkLoading.value = false;
   }
 }
 
-async function restoreOne(id: number) {
-  if (!window.confirm('Reestablish this record?')) return;
-  await client.post(`/archive/list/${id}/restore`);
-  await loadRows();
+async function restoreOne(row: ArchiveRow) {
+  const ok = await confirmDialog({
+    title: t('archive.restoreTitle', { name: row.name }),
+    confirmText: t('common.restore'),
+  });
+  if (!ok) return;
+  try {
+    await client.post(`/archive/list/${row.id}/restore`);
+    toast.success(t('toast.restored'));
+    await loadRows();
+  } catch (err: unknown) {
+    toast.error(apiErrorMessage(err));
+  }
 }
 
-async function deleteOne(id: number) {
-  if (!window.confirm('Permanently delete this record?')) return;
-  await client.delete(`/archive/list/${id}`);
-  await loadRows();
+async function deleteOne(row: ArchiveRow) {
+  const ok = await confirmDialog({
+    title: t('archive.deleteTitle', { name: row.name }),
+    message: t('archive.deleteForeverHint'),
+    danger: true,
+    confirmText: t('archive.deleteForever'),
+    typeToConfirm: t('confirm.deleteWord'),
+  });
+  if (!ok) return;
+  try {
+    await client.delete(`/archive/list/${row.id}`);
+    toast.success(t('toast.deleted'));
+    await loadRows();
+  } catch (err: unknown) {
+    toast.error(apiErrorMessage(err, t('errors.deleteFailed')));
+  }
 }
 
 function exportCsv() {
   downloadCsv(
     'archive.csv',
-    ['Name', 'Phone', 'Roles', 'Reason', 'Comment', 'Archived'],
-    rows.value.map((row) => [row.name, row.phone, row.roles, row.reason, row.comment, row.archived]),
+    [t('common.fullName'), t('common.phone'), t('archive.roles'), t('archive.reason'), t('common.comment'), t('archive.archived')],
+    rows.value.map((row) => [row.name, row.phone, roleLabel(row.roles), row.reason, row.comment, row.archived]),
   );
 }
 
@@ -161,9 +204,9 @@ onMounted(async () => {
   <div class="space-y-4">
     <div class="flex flex-wrap items-center justify-between gap-3">
       <h1 class="text-xl font-semibold text-fb-text">
-        Archive
+        {{ t('nav.archive') }}
         <span class="ml-2 text-base font-normal text-fb-secondary">
-          Quantity — {{ filteredRows.length }}<span v-if="filters.q.trim() && rows.length !== filteredRows.length"> (of {{ quantity }})</span>
+          {{ t('archive.quantity', { count: filteredRows.length }) }}<span v-if="filters.q.trim() && rows.length !== filteredRows.length"> ({{ t('archive.ofTotal', { total: quantity }) }})</span>
         </span>
       </h1>
       <button
@@ -171,19 +214,19 @@ onMounted(async () => {
         class="rounded-lg border border-fb-line px-4 py-2 text-sm"
         @click="showReasons = true"
       >
-        Reasons for archiving
+        {{ t('archive.reasonsTitle') }}
       </button>
     </div>
 
     <div class="space-y-3 rounded-xl border border-fb-line bg-fb-card p-4">
       <div class="flex flex-wrap items-end gap-3">
         <div class="min-w-[220px] flex-1">
-          <label class="mb-1 block text-xs text-fb-secondary">Search</label>
+          <label class="mb-1 block text-xs text-fb-secondary">{{ t('common.search') }}</label>
           <div class="relative">
             <input
               v-model="filters.q"
               type="search"
-              placeholder="Search by name, phone, role, reason…"
+              :placeholder="t('archive.searchPlaceholder')"
               class="w-full h-10 pl-9 pr-4 rounded-lg border px-3 py-2 text-sm focus:outline-none focus:border-fb-blue"
               @keydown.enter="loadRows"
             />
@@ -194,28 +237,28 @@ onMounted(async () => {
           </div>
         </div>
         <div>
-          <label class="mb-1 block text-xs text-fb-secondary">Filter by role</label>
+          <label class="mb-1 block text-xs text-fb-secondary">{{ t('archive.filterRole') }}</label>
           <select v-model="filters.role" class="rounded-lg border px-3 py-2 text-sm">
-            <option value="">All roles</option>
-            <option v-for="role in ROLE_OPTIONS.filter(Boolean)" :key="role" :value="role">{{ role }}</option>
+            <option value="">{{ t('archive.allRoles') }}</option>
+            <option v-for="role in ROLE_OPTIONS.filter(Boolean)" :key="role" :value="role">{{ roleLabel(role) }}</option>
           </select>
         </div>
         <div>
-          <label class="mb-1 block text-xs text-fb-secondary">Filter by reason</label>
+          <label class="mb-1 block text-xs text-fb-secondary">{{ t('archive.filterReason') }}</label>
           <select v-model="filters.reason" class="rounded-lg border px-3 py-2 text-sm">
-            <option value="">All reasons</option>
+            <option value="">{{ t('archive.allReasons') }}</option>
             <option v-for="reason in reasons" :key="reason.id" :value="reason.name">{{ reason.name }}</option>
           </select>
         </div>
         <div>
-          <label class="mb-1 block text-xs text-fb-secondary">Start date</label>
+          <label class="mb-1 block text-xs text-fb-secondary">{{ t('archive.startDate') }}</label>
           <input v-model="filters.date_from" type="date" class="rounded-lg border px-3 py-2 text-sm" />
         </div>
         <div>
-          <label class="mb-1 block text-xs text-fb-secondary">End date</label>
+          <label class="mb-1 block text-xs text-fb-secondary">{{ t('archive.endDate') }}</label>
           <input v-model="filters.date_to" type="date" class="rounded-lg border px-3 py-2 text-sm" />
         </div>
-        <button type="button" class="rounded-lg border px-4 py-2 text-sm" @click="loadRows">Apply</button>
+        <button type="button" class="rounded-lg border px-4 py-2 text-sm" @click="loadRows">{{ t('common.apply') }}</button>
       </div>
 
       <div class="flex flex-wrap gap-2">
@@ -225,7 +268,7 @@ onMounted(async () => {
           :disabled="!selectedIds.length || bulkLoading"
           @click="bulkAction('delete')"
         >
-          Delete
+          {{ t('common.delete') }}
         </button>
         <button
           type="button"
@@ -233,7 +276,7 @@ onMounted(async () => {
           :disabled="!selectedIds.length || bulkLoading"
           @click="bulkAction('restore')"
         >
-          Reestablish
+          {{ t('common.restore') }}
         </button>
         <button
           v-if="canExportArchive"
@@ -241,15 +284,15 @@ onMounted(async () => {
           class="ml-auto rounded-lg border px-3 py-1.5 text-sm"
           @click="exportCsv"
         >
-          Export
+          {{ t('common.export') }}
         </button>
       </div>
     </div>
 
     <div class="overflow-hidden rounded-xl border border-fb-line bg-fb-card">
-      <div v-if="loading" class="p-8 text-center text-fb-secondary">Loading…</div>
+      <div v-if="loading" class="p-8 text-center text-fb-secondary">{{ t('common.loading') }}</div>
       <div v-else-if="!filteredRows.length" class="p-8 text-center text-fb-icon">
-        {{ rows.length ? 'No archive records match your search.' : 'No Data' }}
+        {{ rows.length ? t('common.nothingFound') : t('common.noData') }}
       </div>
       <table v-else class="w-full text-sm">
         <thead class="border-b bg-fb-canvas">
@@ -257,13 +300,13 @@ onMounted(async () => {
             <th class="px-4 py-3 text-left">
               <input type="checkbox" :checked="allSelected" @change="toggleAll" />
             </th>
-            <th class="px-4 py-3 text-left font-semibold text-fb-secondary">Name</th>
-            <th class="px-4 py-3 text-left font-semibold text-fb-secondary">Phone</th>
-            <th class="px-4 py-3 text-left font-semibold text-fb-secondary">Roles</th>
-            <th class="px-4 py-3 text-left font-semibold text-fb-secondary">Reasons for removal</th>
-            <th class="px-4 py-3 text-left font-semibold text-fb-secondary">Comment</th>
-            <th class="px-4 py-3 text-left font-semibold text-fb-secondary">Archived</th>
-            <th class="px-4 py-3 text-left font-semibold text-fb-secondary">Actions</th>
+            <th class="px-4 py-3 text-left font-semibold text-fb-secondary">{{ t('common.fullName') }}</th>
+            <th class="px-4 py-3 text-left font-semibold text-fb-secondary">{{ t('common.phone') }}</th>
+            <th class="px-4 py-3 text-left font-semibold text-fb-secondary">{{ t('archive.roles') }}</th>
+            <th class="px-4 py-3 text-left font-semibold text-fb-secondary">{{ t('archive.reason') }}</th>
+            <th class="px-4 py-3 text-left font-semibold text-fb-secondary">{{ t('common.comment') }}</th>
+            <th class="px-4 py-3 text-left font-semibold text-fb-secondary">{{ t('archive.archived') }}</th>
+            <th class="px-4 py-3 text-left font-semibold text-fb-secondary">{{ t('common.actions') }}</th>
           </tr>
         </thead>
         <tbody>
@@ -273,14 +316,14 @@ onMounted(async () => {
             </td>
             <td class="px-4 py-3">{{ row.name }}</td>
             <td class="px-4 py-3">{{ row.phone }}</td>
-            <td class="px-4 py-3">{{ row.roles }}</td>
+            <td class="px-4 py-3">{{ roleLabel(row.roles) }}</td>
             <td class="px-4 py-3">{{ row.reason }}</td>
             <td class="px-4 py-3">{{ row.comment }}</td>
             <td class="px-4 py-3">{{ row.archived }}</td>
             <td class="px-4 py-3">
               <div class="flex gap-2">
-                <button type="button" class="text-emerald-700 hover:underline" @click="restoreOne(row.id)">Restore</button>
-                <button type="button" class="text-fb-danger hover:underline" @click="deleteOne(row.id)">Delete</button>
+                <button type="button" class="text-emerald-700 hover:underline" @click="restoreOne(row)">{{ t('common.restore') }}</button>
+                <button type="button" class="text-fb-danger hover:underline" @click="deleteOne(row)">{{ t('common.delete') }}</button>
               </div>
             </td>
           </tr>
@@ -292,8 +335,8 @@ onMounted(async () => {
       <div class="absolute inset-0 bg-black/35" @click="showReasons = false" />
       <div class="modal-panel-fb max-w-md p-6">
         <div class="mb-4 flex items-center justify-between">
-          <h2 class="text-lg font-semibold">Reasons for archiving</h2>
-          <button type="button" @click="showReasons = false">✕</button>
+          <h2 class="text-lg font-semibold">{{ t('archive.reasonsTitle') }}</h2>
+          <button type="button" :aria-label="t('common.close')" @click="showReasons = false">✕</button>
         </div>
         <ul class="space-y-2">
           <li v-for="reason in reasons" :key="reason.id" class="rounded-lg border px-4 py-2 text-sm">

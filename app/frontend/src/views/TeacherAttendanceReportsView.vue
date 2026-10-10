@@ -13,6 +13,9 @@ import { downloadCsv } from '../utils/csvExport';
 import { groupRoute, teacherRoute } from '../utils/crossLinks';
 import { currentMonthIso, todayIso } from '../utils/dates';
 import { PERM } from '../utils/rbac';
+import { intlLocale, t, type MessageKey } from '../i18n';
+import { confirmDialog, toast } from '../ui/feedback';
+import { apiErrorMessage } from '../utils/apiError';
 
 interface Option {
   id: number;
@@ -45,11 +48,17 @@ interface Summary {
   not_marked: number;
 }
 
-const MARKS = [
-  { value: 1, label: 'Был', cls: 'border-emerald-300 text-emerald-700 hover:bg-emerald-50' },
-  { value: 2, label: 'Опоздал', cls: 'border-amber-300 text-amber-700 hover:bg-amber-50' },
-  { value: 0, label: 'Не был', cls: 'border-red-300 text-red-700 hover:bg-red-50' },
-] as const;
+const MARKS: { value: number; label: MessageKey; cls: string }[] = [
+  { value: 1, label: 'teacherAtt.present', cls: 'border-emerald-300 text-emerald-700 hover:bg-emerald-50' },
+  { value: 2, label: 'teacherAtt.late', cls: 'border-amber-300 text-amber-700 hover:bg-amber-50' },
+  { value: 0, label: 'teacherAtt.absent', cls: 'border-red-300 text-red-700 hover:bg-red-50' },
+];
+
+function statusLabel(row: LessonRow) {
+  if (row.status === null || row.status === undefined) return t('teacherAtt.notMarked');
+  const mark = MARKS.find((m) => m.value === row.status);
+  return mark ? t(mark.label) : row.status_label;
+}
 
 const router = useRouter();
 const auth = useAuthStore();
@@ -115,7 +124,7 @@ function statusClass(status: number | null) {
 
 function formatDate(iso: string) {
   const [y, m, d] = iso.split('-');
-  const weekday = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'][new Date(Number(y), Number(m) - 1, Number(d)).getDay()];
+  const weekday = new Date(Number(y), Number(m) - 1, Number(d)).toLocaleDateString(intlLocale(), { weekday: 'short' });
   return `${d}.${m}.${y}, ${weekday}`;
 }
 
@@ -140,8 +149,8 @@ async function loadReport() {
     summary.value = data.data.summary;
     rows.value = data.data.rows;
     currentPage.value = 1;
-  } catch (err: any) {
-    errorMessage.value = err?.response?.data?.message || 'Не удалось загрузить уроки';
+  } catch (err: unknown) {
+    errorMessage.value = apiErrorMessage(err, t('teacherAtt.loadFailed'));
   } finally {
     loading.value = false;
   }
@@ -165,10 +174,16 @@ async function mark(row: LessonRow, status: number) {
   if (!teacherId) return;
   const teacherChanged = teacherId !== row.teacher_id;
   if (row.status === status && !teacherChanged) return;
-  const verb = MARKS.find((m) => m.value === status)?.label ?? '';
+  const markKey = MARKS.find((m) => m.value === status)?.label;
+  const verb = markKey ? t(markKey) : '';
   const who = teacherName(teacherId) || row.teacher;
-  const substitute = row.record_id && teacherChanged ? ` (вместо ${row.teacher})` : '';
-  if (!window.confirm(`${who}${substitute}, группа «${row.group}», ${formatDate(row.date)}: отметить «${verb}»?`)) return;
+  const substitute = row.record_id && teacherChanged ? ` (${t('teacherAtt.insteadOf', { name: row.teacher })})` : '';
+  const ok = await confirmDialog({
+    title: t('teacherAtt.markConfirm', { mark: verb }),
+    message: t('teacherAtt.markDetails', { who: `${who}${substitute}`, group: row.group, date: formatDate(row.date) }),
+    confirmText: verb,
+  });
+  if (!ok) return;
   savingKey.value = rowKey(row);
   errorMessage.value = '';
   try {
@@ -184,9 +199,10 @@ async function mark(row: LessonRow, status: number) {
       });
     }
     delete picked[rowKey(row)];
+    toast.success(t('teacherAtt.markSaved'));
     await loadReport();
-  } catch (err: any) {
-    errorMessage.value = err?.response?.data?.message || 'Не удалось сохранить отметку';
+  } catch (err: unknown) {
+    toast.error(apiErrorMessage(err, t('teacherAtt.markFailed')));
   } finally {
     savingKey.value = '';
   }
@@ -195,14 +211,17 @@ async function mark(row: LessonRow, status: number) {
 function exportCsv() {
   downloadCsv(
     `teacher_lessons_${filters.month}_${todayIso()}.csv`,
-    ['Дата', 'Время', 'Группа', 'Филиал', 'Преподаватель', 'Статус', 'Отмечено', 'Заметка'],
+    [
+      t('common.date'), t('common.time'), t('schedule.group'), t('common.branch'), t('schedule.teacher'),
+      t('common.status'), t('teacherAtt.markedAt'), t('common.note'),
+    ],
     rows.value.map((row) => [
       row.date,
       row.start_time ? `${row.start_time}–${row.end_time}` : '',
       row.group,
       row.branch,
       row.teacher,
-      row.status_label,
+      statusLabel(row),
       row.marked_at,
       row.note,
     ]),
@@ -233,9 +252,9 @@ onMounted(async () => {
   <div class="space-y-4">
     <div class="flex flex-wrap items-center justify-between gap-3">
       <div>
-        <h1 class="text-xl font-semibold text-fb-text">Посещаемость преподавателей</h1>
+        <h1 class="text-xl font-semibold text-fb-text">{{ t('nav.teacherAttendance') }}</h1>
         <p class="text-xs text-fb-secondary mt-0.5">
-          Все уроки по расписанию. Урок оплачивается учителю, только если он отмечен «Был» или «Опоздал». Если урок провёл другой учитель (замена), выберите его в строке и отметьте.
+          {{ t('teacherAtt.subtitle') }}
         </p>
       </div>
       <button
@@ -243,14 +262,14 @@ onMounted(async () => {
         class="rounded-lg border border-fb-line bg-fb-card px-3.5 py-2 text-sm text-fb-secondary hover:border-fb-blue hover:text-fb-blue transition-colors"
         @click="exportCsv"
       >
-        📥 Экспорт CSV
+        📥 {{ t('common.exportCsv') }}
       </button>
     </div>
 
     <!-- Filters -->
     <div class="flex flex-wrap items-end gap-3 rounded-xl border border-fb-line bg-fb-card p-4">
       <div>
-        <label class="mb-1 block text-xs font-medium text-fb-secondary">Месяц</label>
+        <label class="mb-1 block text-xs font-medium text-fb-secondary">{{ t('common.month') }}</label>
         <div class="flex items-center gap-1">
           <button type="button" class="rounded-lg border border-fb-line px-2 py-2 text-sm hover:border-fb-blue" @click="shiftMonth(-1)">◀</button>
           <input v-model="filters.month" type="month" class="rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none" @change="loadReport" />
@@ -258,38 +277,38 @@ onMounted(async () => {
         </div>
       </div>
       <div v-if="branches.length > 1">
-        <label class="mb-1 block text-xs font-medium text-fb-secondary">Филиал</label>
+        <label class="mb-1 block text-xs font-medium text-fb-secondary">{{ t('common.branch') }}</label>
         <select v-model="filters.branch_id" class="rounded-lg border border-fb-line px-3 py-2 text-sm" @change="filters.group_id = ''; loadReport()">
-          <option value="">Все филиалы</option>
+          <option value="">{{ t('common.allBranches') }}</option>
           <option v-for="b in branches" :key="b.id" :value="String(b.id)">{{ b.name }}</option>
         </select>
       </div>
       <div>
-        <label class="mb-1 block text-xs font-medium text-fb-secondary">Группа</label>
+        <label class="mb-1 block text-xs font-medium text-fb-secondary">{{ t('schedule.group') }}</label>
         <select v-model="filters.group_id" class="rounded-lg border border-fb-line px-3 py-2 text-sm" @change="loadReport">
-          <option value="">Все группы</option>
+          <option value="">{{ t('teacherAtt.allGroups') }}</option>
           <option v-for="g in filterGroups" :key="g.id" :value="String(g.id)">{{ g.name }}</option>
         </select>
       </div>
       <div>
-        <label class="mb-1 block text-xs font-medium text-fb-secondary">Преподаватель</label>
+        <label class="mb-1 block text-xs font-medium text-fb-secondary">{{ t('schedule.teacher') }}</label>
         <select v-model="filters.teacher_id" class="rounded-lg border border-fb-line px-3 py-2 text-sm" @change="loadReport">
-          <option value="">Все преподаватели</option>
+          <option value="">{{ t('teacherAtt.allTeachers') }}</option>
           <option v-for="t in teachers" :key="t.id" :value="String(t.id)">{{ t.name }}</option>
         </select>
       </div>
       <div>
-        <label class="mb-1 block text-xs font-medium text-fb-secondary">Статус</label>
+        <label class="mb-1 block text-xs font-medium text-fb-secondary">{{ t('common.status') }}</label>
         <select v-model="filters.status" class="rounded-lg border border-fb-line px-3 py-2 text-sm" @change="loadReport">
-          <option value="">Все уроки</option>
-          <option value="not_marked">Не отметился</option>
-          <option value="present">Был</option>
-          <option value="late">Опоздал</option>
-          <option value="absent">Не был</option>
+          <option value="">{{ t('teacherAtt.allLessons') }}</option>
+          <option value="not_marked">{{ t('teacherAtt.notMarked') }}</option>
+          <option value="present">{{ t('teacherAtt.present') }}</option>
+          <option value="late">{{ t('teacherAtt.late') }}</option>
+          <option value="absent">{{ t('teacherAtt.absent') }}</option>
         </select>
       </div>
       <button type="button" class="rounded-lg border border-fb-line px-4 py-2 text-sm text-fb-secondary hover:text-fb-blue" @click="resetFilters">
-        Сбросить
+        {{ t('common.reset') }}
       </button>
     </div>
 
@@ -297,51 +316,51 @@ onMounted(async () => {
     <div class="grid grid-cols-2 gap-3 md:grid-cols-5">
       <div class="rounded-xl border border-fb-line bg-fb-card p-4 text-center">
         <div class="text-2xl font-bold text-fb-text">{{ summary.lessons }}</div>
-        <div class="mt-1 text-xs text-fb-secondary">Уроков по расписанию</div>
+        <div class="mt-1 text-xs text-fb-secondary">{{ t('teacherAtt.scheduled') }}</div>
       </div>
       <div class="rounded-xl border border-emerald-200 bg-emerald-50/50 p-4 text-center">
         <div class="text-2xl font-bold text-emerald-700">{{ summary.present }}</div>
-        <div class="mt-1 text-xs text-fb-secondary">Был</div>
+        <div class="mt-1 text-xs text-fb-secondary">{{ t('teacherAtt.present') }}</div>
       </div>
       <div class="rounded-xl border border-amber-200 bg-amber-50/50 p-4 text-center">
         <div class="text-2xl font-bold text-amber-700">{{ summary.late }}</div>
-        <div class="mt-1 text-xs text-fb-secondary">Опоздал</div>
+        <div class="mt-1 text-xs text-fb-secondary">{{ t('teacherAtt.late') }}</div>
       </div>
       <div class="rounded-xl border border-red-200 bg-red-50/50 p-4 text-center">
         <div class="text-2xl font-bold text-fb-danger">{{ summary.absent }}</div>
-        <div class="mt-1 text-xs text-fb-secondary">Не был</div>
+        <div class="mt-1 text-xs text-fb-secondary">{{ t('teacherAtt.absent') }}</div>
       </div>
       <button
         type="button"
         class="rounded-xl border border-dashed border-gray-400 bg-gray-50 p-4 text-center hover:border-fb-blue"
-        title="Показать только неотмеченные уроки"
+        :title="t('teacherAtt.showNotMarked')"
         @click="filters.status = 'not_marked'; loadReport()"
       >
         <div class="text-2xl font-bold text-gray-700">{{ summary.not_marked }}</div>
-        <div class="mt-1 text-xs text-fb-secondary">Не отметился (не оплачивается)</div>
+        <div class="mt-1 text-xs text-fb-secondary">{{ t('teacherAtt.notMarkedUnpaid') }}</div>
       </button>
     </div>
     <p v-if="summary.lessons" class="text-xs text-fb-secondary">
-      Проведено {{ summary.present + summary.late }} из {{ summary.lessons }} уроков ({{ heldPercent }}%). Уроки считаются до сегодняшнего дня.
+      {{ t('teacherAtt.heldSummary', { held: summary.present + summary.late, total: summary.lessons, pct: heldPercent }) }}
     </p>
 
     <div v-if="errorMessage" class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-fb-danger">{{ errorMessage }}</div>
 
     <!-- Lessons -->
     <div class="overflow-hidden rounded-xl border border-fb-line bg-fb-card shadow-sm">
-      <div v-if="loading" class="p-12 text-center text-fb-secondary">Загрузка…</div>
-      <div v-else-if="!rows.length" class="p-12 text-center text-sm text-fb-secondary">За этот месяц уроков не найдено.</div>
+      <div v-if="loading" class="p-12 text-center text-fb-secondary">{{ t('common.loading') }}</div>
+      <div v-else-if="!rows.length" class="p-12 text-center text-sm text-fb-secondary">{{ t('teacherAtt.empty') }}</div>
       <template v-else>
         <div class="overflow-x-auto">
           <table class="w-full text-sm">
             <thead class="border-b border-fb-line bg-fb-canvas text-xs uppercase tracking-wider font-semibold text-fb-secondary">
               <tr>
-                <th class="px-5 py-3 text-left">Дата</th>
-                <th class="px-4 py-3 text-left">Группа</th>
-                <th class="px-4 py-3 text-left">Преподаватель</th>
-                <th class="px-4 py-3 text-left">Статус</th>
-                <th class="px-4 py-3 text-left">Отмечено</th>
-                <th v-if="canWrite" class="px-5 py-3 text-right">Кто вёл · отметить за учителя</th>
+                <th class="px-5 py-3 text-left">{{ t('common.date') }}</th>
+                <th class="px-4 py-3 text-left">{{ t('schedule.group') }}</th>
+                <th class="px-4 py-3 text-left">{{ t('schedule.teacher') }}</th>
+                <th class="px-4 py-3 text-left">{{ t('common.status') }}</th>
+                <th class="px-4 py-3 text-left">{{ t('teacherAtt.markedAt') }}</th>
+                <th v-if="canWrite" class="px-5 py-3 text-right">{{ t('teacherAtt.whoTaught') }}</th>
               </tr>
             </thead>
             <tbody class="divide-y divide-fb-line">
@@ -356,23 +375,23 @@ onMounted(async () => {
                 </td>
                 <td class="px-4 py-3">
                   <button v-if="row.teacher_id" type="button" class="text-fb-text hover:text-fb-blue hover:underline" @click="router.push(teacherRoute(row.teacher_id))">{{ row.teacher }}</button>
-                  <span v-else class="text-fb-secondary">— нет учителя</span>
+                  <span v-else class="text-fb-secondary">— {{ t('teacherAtt.noTeacher') }}</span>
                 </td>
                 <td class="px-4 py-3">
-                  <span class="rounded-full px-2.5 py-0.5 text-xs font-medium" :class="statusClass(row.status)">{{ row.status_label }}</span>
+                  <span class="rounded-full px-2.5 py-0.5 text-xs font-medium" :class="statusClass(row.status)">{{ statusLabel(row) }}</span>
                   <div v-if="row.note" class="mt-1 text-xs text-fb-secondary">{{ row.note }}</div>
                 </td>
                 <td class="px-4 py-3 text-xs text-fb-secondary">{{ row.marked_at || '—' }}</td>
                 <td v-if="canWrite" class="px-5 py-3 text-right whitespace-nowrap">
-                  <span v-if="row.locked" class="text-xs text-fb-secondary" title="Месяц закрыт в «Зарплатах»: отметки не меняются">🔒 месяц закрыт</span>
+                  <span v-if="row.locked" class="text-xs text-fb-secondary" :title="t('teacherAtt.lockedHint')">🔒 {{ t('teacherAtt.locked') }}</span>
                   <div v-else class="inline-flex items-center gap-1">
                     <select
                       :value="pickedTeacher(row) ?? ''"
                       class="max-w-[150px] rounded-md border border-fb-line px-1.5 py-1 text-xs"
-                      title="Кто вёл урок (для замены выберите другого учителя)"
+                      :title="t('teacherAtt.whoTaughtHint')"
                       @change="picked[rowKey(row)] = Number(($event.target as HTMLSelectElement).value) || null"
                     >
-                      <option value="" disabled>Кто вёл?</option>
+                      <option value="" disabled>{{ t('teacherAtt.whoTaughtQ') }}</option>
                       <option v-if="row.teacher_id && !teachers.some((t) => t.id === row.teacher_id)" :value="row.teacher_id">{{ row.teacher }}</option>
                       <option v-for="t in teachers" :key="t.id" :value="t.id">{{ t.name }}</option>
                     </select>
@@ -385,7 +404,7 @@ onMounted(async () => {
                       :disabled="savingKey === rowKey(row) || !pickedTeacher(row) || (row.status === m.value && pickedTeacher(row) === row.teacher_id)"
                       @click="mark(row, m.value)"
                     >
-                      {{ m.label }}
+                      {{ t(m.label) }}
                     </button>
                   </div>
                 </td>
@@ -394,9 +413,9 @@ onMounted(async () => {
           </table>
         </div>
         <div v-if="totalPages > 1" class="flex items-center justify-between border-t border-fb-line px-5 py-3">
-          <button type="button" class="rounded-lg border border-fb-line px-3 py-1.5 text-xs disabled:opacity-40" :disabled="currentPage <= 1" @click="currentPage--">← Назад</button>
-          <span class="text-xs text-fb-secondary">Страница {{ currentPage }} из {{ totalPages }} (всего {{ rows.length }} уроков)</span>
-          <button type="button" class="rounded-lg border border-fb-line px-3 py-1.5 text-xs disabled:opacity-40" :disabled="currentPage >= totalPages" @click="currentPage++">Вперед →</button>
+          <button type="button" class="rounded-lg border border-fb-line px-3 py-1.5 text-xs disabled:opacity-40" :disabled="currentPage <= 1" @click="currentPage--">← {{ t('common.prev') }}</button>
+          <span class="text-xs text-fb-secondary">{{ t('common.page', { page: currentPage, pages: totalPages }) }} · {{ t('teacherAtt.lessonsTotal', { count: rows.length }) }}</span>
+          <button type="button" class="rounded-lg border border-fb-line px-3 py-1.5 text-xs disabled:opacity-40" :disabled="currentPage >= totalPages" @click="currentPage++">{{ t('common.next') }} →</button>
         </div>
       </template>
     </div>

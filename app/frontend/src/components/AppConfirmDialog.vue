@@ -13,9 +13,14 @@ const options = computed(() => confirmState.options);
 const confirmLabel = computed(
   () => options.value.confirmText || (options.value.danger ? t('common.delete') : t('common.ok')),
 );
+// Case and apostrophes do not matter: "o'chirish" typed for "OʻCHIRISH" is accepted
+function normalizeWord(value: string) {
+  return value.toLowerCase().replace(/\p{Lm}|[^\p{L}\p{N}]/gu, '');
+}
+
 const locked = computed(() => {
   const word = options.value.typeToConfirm;
-  return Boolean(word) && typed.value.trim().toLowerCase() !== word!.trim().toLowerCase();
+  return Boolean(word) && normalizeWord(typed.value) !== normalizeWord(word!);
 });
 
 watch(

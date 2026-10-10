@@ -19,6 +19,11 @@ import {
   studentRoute,
 } from '../utils/crossLinks';
 import { onCardsReturn, pathWithoutCards } from '../utils/cardStack';
+import { t, type MessageKey } from '../i18n';
+import { payMethodLabel, studentStatusLabel } from '../i18n/labels';
+import { PHONE_OWNER_BUTTONS, PHONE_OWNERS, presetLabel } from '../i18n/presets';
+import { toast } from '../ui/feedback';
+import { apiErrorMessage } from '../utils/apiError';
 
 interface Branch {
   id: number;
@@ -89,12 +94,12 @@ interface StudentCharge {
   state: 'paid' | 'partial' | 'unpaid' | 'ahead' | 'written_off';
 }
 
-const CHARGE_STATE: Record<StudentCharge['state'], { label: string; cls: string }> = {
-  paid: { label: 'Оплачено', cls: 'bg-emerald-100 text-emerald-700' },
-  partial: { label: 'Оплачено частично', cls: 'bg-amber-100 text-amber-800' },
-  unpaid: { label: 'Не оплачено', cls: 'bg-red-100 text-red-700' },
-  ahead: { label: 'Аванс', cls: 'bg-sky-100 text-sky-800' },
-  written_off: { label: 'Списано', cls: 'bg-slate-200 text-slate-700' },
+const CHARGE_STATE: Record<StudentCharge['state'], { label: MessageKey; cls: string }> = {
+  paid: { label: 'months.state.paid', cls: 'bg-emerald-100 text-emerald-700' },
+  partial: { label: 'months.state.partial', cls: 'bg-amber-100 text-amber-800' },
+  unpaid: { label: 'months.state.unpaid', cls: 'bg-red-100 text-red-700' },
+  ahead: { label: 'months.state.ahead', cls: 'bg-sky-100 text-sky-800' },
+  written_off: { label: 'months.state.writtenOff', cls: 'bg-slate-200 text-slate-700' },
 };
 
 interface StudentPayment {
@@ -112,11 +117,11 @@ interface StudentPayment {
 }
 
 const STATUS_OPTIONS = [
-  { value: 1, label: 'Обучается' },
-  { value: 2, label: 'Заморозка' },
-  { value: 7, label: 'Ушел после пробного' },
-  { value: 8, label: 'Отчислен / Ушел' },
-  { value: 9, label: 'Завершил курс' },
+  { value: 1, label: 'studentStatus.1' as MessageKey },
+  { value: 2, label: 'studentStatus.2' as MessageKey },
+  { value: 7, label: 'studentStatus.7' as MessageKey },
+  { value: 8, label: 'studentStatus.8' as MessageKey },
+  { value: 9, label: 'studentStatus.9' as MessageKey },
 ] as const;
 
 // Card mode: the page shows only this student's card, on top of another page (see utils/cardStack)
@@ -189,7 +194,7 @@ function printStudentPayment(p: StudentPayment) {
   receiptPayment.value = {
     id: p.id,
     date: p.date,
-    student_name: detailStudent.value?.full_name || 'Ученик',
+    student_name: detailStudent.value?.full_name || t('months.student'),
     amount: p.amount,
     months_covered: p.months_covered ?? 1,
     method: p.method,
@@ -242,15 +247,15 @@ function onPayMonthsChange() {
 async function submitPayment() {
   if (!detailStudent.value) return;
   if (!Number.isInteger(payForm.amount) || payForm.amount <= 0) {
-    payError.value = 'Сумма — целое положительное число.';
+    payError.value = t('finance.amountPositive');
     return;
   }
   if (payForm.discount !== '' && (!Number.isInteger(payForm.discount) || payForm.discount < 0)) {
-    payError.value = 'Скидка — целое число (сумма), или оставьте поле пустым.';
+    payError.value = t('payments.discountInvalid');
     return;
   }
   if (!payForm.payment_date || payForm.payment_date > todayIso()) {
-    payError.value = 'Дата оплаты не может быть позже сегодняшнего дня.';
+    payError.value = t('payments.dateNotFuture');
     return;
   }
   paySaving.value = true;
@@ -266,6 +271,7 @@ async function submitPayment() {
       comment: payForm.comment.trim(),
     });
     showPayModal.value = false;
+    toast.success(t('payments.received', { amount: formatSum(payForm.amount), name: detailStudent.value.full_name }));
     const studentId = detailStudent.value.id;
     const [{ data }] = await Promise.all([
       client.get<ApiEnvelope<StudentRow>>(`/students/${studentId}`),
@@ -274,8 +280,8 @@ async function submitPayment() {
     ]);
     detailStudent.value = data.data;
     fillForm(data.data);
-  } catch (err: any) {
-    payError.value = apiErrorMessage(err, 'Не удалось провести оплату');
+  } catch (err: unknown) {
+    payError.value = apiErrorMessage(err, t('payments.saveFailed'));
   } finally {
     paySaving.value = false;
   }
@@ -291,7 +297,7 @@ function openUnfreezeModal(student: StudentRow) {
 async function confirmUnfreeze() {
   if (!unfreezeStudent.value) return;
   if (!unfreezeDate.value) {
-    unfreezeError.value = 'Укажите дату возобновления обучения';
+    unfreezeError.value = t('students.resumeDateRequired');
     return;
   }
   unfreezeSaving.value = true;
@@ -305,13 +311,14 @@ async function confirmUnfreeze() {
       },
     );
     showUnfreezeModal.value = false;
+    toast.success(t('students.resumed', { name: unfreezeStudent.value.full_name }));
     if (detailStudent.value && detailStudent.value.id === unfreezeStudent.value.id) {
       detailStudent.value = data.data;
       fillForm(data.data);
     }
     await loadStudents();
   } catch (error) {
-    unfreezeError.value = apiErrorMessage(error, 'Не удалось возобновить обучение');
+    unfreezeError.value = apiErrorMessage(error, t('students.resumeFailed'));
   } finally {
     unfreezeSaving.value = false;
   }
@@ -351,20 +358,20 @@ const form = reactive({
 });
 
 const title = computed(() => {
-  if (route.path.includes('debtors')) return 'Debtors (Должники)';
-  if (route.query.statuses === '1') return 'Обучающиеся';
-  if (route.query.statuses === '2') return 'Замороженные';
-  if (route.query.statuses === '7') return 'Ушедшие после пробного';
-  if (route.query.statuses === '8') return 'Отчисленные / Ушедшие';
-  if (route.query.statuses === '9') return 'Завершившие курс';
-  if (route.query.q) return `Students — search “${route.query.q}”`;
-  return 'Students';
+  if (route.path.includes('debtors')) return t('nav.debtors');
+  if (route.query.statuses === '1') return t('students.titleStudying');
+  if (route.query.statuses === '2') return t('students.titleFrozen');
+  if (route.query.statuses === '7') return t('students.titleLeftTrial');
+  if (route.query.statuses === '8') return t('students.titleLeft');
+  if (route.query.statuses === '9') return t('students.titleGraduated');
+  if (route.query.q) return t('students.titleSearch', { q: String(route.query.q) });
+  return t('nav.students');
 });
 
 const panelTitle = computed(() => {
-  if (editingStudent.value) return 'Edit student';
-  if (detailStudent.value) return 'Student details';
-  return 'Add student';
+  if (editingStudent.value) return t('students.editTitle');
+  if (detailStudent.value) return t('students.detailTitle');
+  return t('layout.addStudent');
 });
 
 const isReadOnly = computed(() => Boolean(detailStudent.value && !editingStudent.value));
@@ -378,18 +385,22 @@ const canAcceptPayment = computed(() => auth.can(PERM.PAYMENTS_WRITE));
 function exportCsv() {
   downloadCsv(
     'students.csv',
-    ['Name', 'Phone', 'Phone 2', 'Phone 2 Owner', 'Address', 'Comment', 'Status', 'Start Date', 'Next Payment', 'Payment Status', 'School', 'Group', 'Branch', 'Telegram (parents)'],
+    [
+      t('common.fullName'), t('common.phone'), t('leads.phone2'), t('leads.phone2Owner'), t('settings.address'),
+      t('common.comment'), t('common.status'), t('students.startDate'), t('students.nextPayment'),
+      t('students.paymentStatus'), t('import.school'), t('schedule.group'), t('common.branch'), t('students.telegramParents'),
+    ],
     rows.value.map((row) => [
       row.full_name,
       row.phone,
       row.phone2 || '',
-      row.phone2_owner || '',
+      presetLabel(row.phone2_owner),
       row.address || '',
       row.comment || '',
-      row.status_label,
+      studentStatusLabel(row.status, row.status_label),
       row.trial_date || '',
       row.next_payment_date || '',
-      row.is_debtor ? `Overdue (${row.overdue_days || 0} days)` : 'OK',
+      row.is_debtor ? t('students.overdueDays', { count: row.overdue_days || 0 }) : t('students.paymentOk'),
       row.school,
       row.group ?? '',
       row.branch,
@@ -459,7 +470,7 @@ const tableRows = computed(() =>
     phone2: row.phone2 || '',
     phone2_owner: row.phone2_owner || '',
     status: row.status,
-    statusText: row.status_label,
+    statusText: studentStatusLabel(row.status, row.status_label),
     level: row.level || '',
     school: row.school || '—',
     group: row.group ?? '—',
@@ -598,6 +609,7 @@ const detailParentTgLink = computed(() => parentTgLink(detailStudent.value?.tele
 async function copyText(text: string) {
   try {
     await navigator.clipboard.writeText(text);
+    toast.success(t('common.copied'));
   } catch {
     const area = document.createElement('textarea');
     area.value = text;
@@ -605,6 +617,7 @@ async function copyText(text: string) {
     area.select();
     document.execCommand('copy');
     document.body.removeChild(area);
+    toast.success(t('common.copied'));
   }
 }
 
@@ -666,11 +679,11 @@ function onPhotoChange(event: Event) {
   input.value = '';
   if (!file) return;
   if (!ALLOWED_PHOTO_TYPES.includes(file.type)) {
-    formError.value = 'Only JPG, PNG or WEBP photos are allowed';
+    formError.value = t('students.photoType');
     return;
   }
   if (file.size > MAX_PHOTO_MB * 1024 * 1024) {
-    formError.value = `Photo is too large (max ${MAX_PHOTO_MB} MB)`;
+    formError.value = t('students.photoSize', { mb: MAX_PHOTO_MB });
     return;
   }
   formError.value = '';
@@ -717,55 +730,41 @@ function cleanPhoneDigits(raw: string): string {
   return d;
 }
 
-function apiErrorMessage(error: unknown, fallback: string) {
-  const data = (error as { response?: { data?: { message?: string; error?: string; detail?: string } } })?.response?.data;
-  const msg = data?.message || data?.error || data?.detail;
-  if (msg && msg.includes('Secondary phone must contain at least 9 digits')) {
-    return 'Дополнительный номер должен содержать минимум 9 цифр (например, 90 123 45 67)';
-  }
-  if (msg && msg.includes('at least 9 digits')) {
-    return 'Номер телефона должен содержать минимум 9 цифр (например, 90 123 45 67)';
-  }
-  if (msg && msg.includes('Trial / start date is required')) {
-    return 'Укажите дату старта / число оплаты (Anchor date)';
-  }
-  return msg || fallback;
-}
-
 async function submitStudent() {
   formError.value = '';
   if (!form.first_name.trim()) {
-    formError.value = 'Введите имя';
+    formError.value = t('errors.enterName');
     return;
   }
   if (!form.phone.trim()) {
-    formError.value = 'Введите номер телефона';
+    formError.value = t('errors.enterPhone');
     return;
   }
   const digits = cleanPhoneDigits(form.phone);
   if (digits.length < 9) {
-    formError.value = 'Номер телефона должен содержать минимум 9 цифр (например, 90 123 45 67)';
+    formError.value = t('errors.phoneMin9');
     return;
   }
   if (form.phone2.trim()) {
     const digits2 = cleanPhoneDigits(form.phone2);
     if (digits2.length < 9) {
-      formError.value = 'Дополнительный номер должен содержать минимум 9 цифр (например, 90 123 45 67)';
+      formError.value = t('errors.secondPhoneMin9');
       return;
     }
   }
   if (!form.branch_id) {
-    formError.value = 'Выберите филиал';
+    formError.value = t('groups.branchRequired');
     return;
   }
   if (!form.trial_date) {
-    formError.value = 'Укажите дату старта / число оплаты (Anchor date)';
+    formError.value = t('leads.startDateRequired');
     return;
   }
 
   saving.value = true;
   try {
     const payload = buildPayload();
+    const wasEditing = Boolean(editingStudent.value);
     let studentId: number | null = editingStudent.value?.id ?? null;
     if (editingStudent.value) {
       await client.patch(`/students/${editingStudent.value.id}`, payload);
@@ -785,12 +784,10 @@ async function submitStudent() {
       }
     }
     closePanel();
+    toast.success(wasEditing ? t('toast.saved') : t('students.created'));
     await loadStudents();
   } catch (error) {
-    formError.value = apiErrorMessage(
-      error,
-      editingStudent.value ? 'Could not update student' : 'Could not create student',
-    );
+    formError.value = apiErrorMessage(error, t('errors.saveFailed'));
   } finally {
     saving.value = false;
   }
@@ -889,7 +886,7 @@ onMounted(async () => {
       <div class="flex items-baseline gap-3">
         <h1 class="text-xl font-semibold text-fb-text">{{ title }}</h1>
         <span v-if="!loading" class="text-sm text-fb-secondary">
-          Quantity — {{ tableRows.length }}<span v-if="filters.q.trim() && rows.length !== tableRows.length"> (of {{ rows.length }})</span>
+          {{ t('archive.quantity', { count: tableRows.length }) }}<span v-if="filters.q.trim() && rows.length !== tableRows.length"> ({{ t('archive.ofTotal', { total: rows.length }) }})</span>
         </span>
       </div>
       <div class="flex flex-wrap gap-2">
@@ -899,7 +896,7 @@ onMounted(async () => {
           class="rounded-lg border border-fb-line px-4 py-2 text-sm font-medium text-fb-secondary hover:border-fb-blue hover:text-fb-blue"
           @click="exportCsv"
         >
-          Export
+          {{ t('common.export') }}
         </button>
         <button
           v-if="canImportStudents"
@@ -907,7 +904,7 @@ onMounted(async () => {
           class="rounded-lg border border-fb-line px-4 py-2 text-sm font-medium text-fb-secondary hover:border-fb-blue hover:text-fb-blue"
           @click="showImportModal = true"
         >
-          Import
+          {{ t('common.import') }}
         </button>
         <button
           v-if="canWriteStudents"
@@ -915,55 +912,55 @@ onMounted(async () => {
           class="rounded-lg bg-fb-blue px-4 py-2 text-sm font-medium text-white hover:bg-fb-blue-dark"
           @click="openCreatePanel"
         >
-          + Add student
+          + {{ t('layout.addStudent') }}
         </button>
       </div>
     </div>
 
     <div class="flex flex-wrap items-end gap-3 rounded-xl border border-fb-line bg-fb-card p-4">
       <div v-if="!route.path.includes('debtors')">
-        <label class="mb-1 block text-xs font-medium text-fb-secondary">Branch</label>
+        <label class="mb-1 block text-xs font-medium text-fb-secondary">{{ t('common.branch') }}</label>
         <select
           v-model="filters.branch_id"
           class="rounded-lg border border-fb-line px-3 py-2 text-sm"
         >
-          <option value="">All branches</option>
+          <option value="">{{ t('common.allBranches') }}</option>
           <option v-for="branch in branches" :key="branch.id" :value="String(branch.id)">
             {{ branch.name }}
           </option>
         </select>
       </div>
       <div v-if="!route.path.includes('debtors')">
-        <label class="mb-1 block text-xs font-medium text-fb-secondary">Group</label>
+        <label class="mb-1 block text-xs font-medium text-fb-secondary">{{ t('schedule.group') }}</label>
         <select
           v-model="filters.group_id"
           class="rounded-lg border border-fb-line px-3 py-2 text-sm"
         >
-          <option value="">All groups</option>
+          <option value="">{{ t('teacherAtt.allGroups') }}</option>
           <option v-for="group in groups" :key="group.id" :value="String(group.id)">
             {{ group.name }}
           </option>
         </select>
       </div>
       <div v-if="!route.path.includes('debtors')">
-        <label class="mb-1 block text-xs font-medium text-fb-secondary">Status</label>
+        <label class="mb-1 block text-xs font-medium text-fb-secondary">{{ t('common.status') }}</label>
         <select
           v-model="filters.status"
           class="rounded-lg border border-fb-line px-3 py-2 text-sm"
         >
-          <option value="">All statuses</option>
+          <option value="">{{ t('rating.allStatuses') }}</option>
           <option v-for="option in STATUS_OPTIONS" :key="option.value" :value="String(option.value)">
-            {{ option.label }}
+            {{ t(option.label) }}
           </option>
         </select>
       </div>
       <div class="min-w-[240px] flex-1">
-        <label class="mb-1 block text-xs font-medium text-fb-secondary">Search</label>
+        <label class="mb-1 block text-xs font-medium text-fb-secondary">{{ t('common.search') }}</label>
         <div class="relative">
           <input
             v-model="filters.q"
             type="search"
-            placeholder="Search by name, phone, school or group…"
+            :placeholder="t('students.searchPlaceholder')"
             class="w-full h-10 pl-9 pr-4 rounded-lg border border-fb-line text-sm focus:outline-none focus:border-fb-blue"
             @keydown.enter="applyFilters"
           />
@@ -979,26 +976,26 @@ onMounted(async () => {
         class="rounded-lg border border-fb-line px-4 py-2 text-sm text-fb-secondary hover:border-fb-blue hover:text-fb-blue"
         @click="applyFilters"
       >
-        Apply
+        {{ t('common.apply') }}
       </button>
     </div>
 
     <div class="overflow-hidden rounded-xl border border-fb-line bg-fb-card">
-      <div v-if="loading" class="p-8 text-center text-fb-secondary">Loading…</div>
+      <div v-if="loading" class="p-8 text-center text-fb-secondary">{{ t('common.loading') }}</div>
       <div v-else-if="!tableRows.length" class="p-8 text-center text-fb-icon">
-        {{ rows.length ? 'No students match your search.' : 'No students' }}
+        {{ rows.length ? t('common.nothingFound') : t('students.empty') }}
       </div>
       <table v-else class="w-full text-base">
         <thead class="border-b border-fb-line bg-fb-canvas">
           <tr>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Student</th>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Phone</th>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Status</th>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">School</th>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Group</th>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Branch</th>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Start date</th>
-            <th v-if="canSeeMoney" class="px-5 py-4 text-left font-semibold text-fb-secondary">Next payment</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('months.student') }}</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('common.phone') }}</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('common.status') }}</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('import.school') }}</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('schedule.group') }}</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('common.branch') }}</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('students.startDate') }}</th>
+            <th v-if="canSeeMoney" class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('students.nextPayment') }}</th>
           </tr>
         </thead>
         <tbody>
@@ -1027,7 +1024,7 @@ onMounted(async () => {
                   <span class="font-medium text-fb-text">{{ row.full_name }}</span>
                   <div v-if="row.level" class="mt-0.5">
                     <span class="rounded-md bg-emerald-50 px-1.5 py-0.5 text-[11px] font-medium text-emerald-800 border border-emerald-200">
-                      🎯 {{ row.level }}
+                      🎯 {{ presetLabel(row.level) }}
                     </span>
                   </div>
                 </div>
@@ -1036,7 +1033,7 @@ onMounted(async () => {
             <td class="px-5 py-4 text-fb-secondary">
               <div>{{ row.phone }}</div>
               <div v-if="row.phone2" class="text-xs text-fb-icon flex items-center gap-1 mt-0.5">
-                <span v-if="row.phone2_owner" class="font-medium text-fb-secondary">({{ row.phone2_owner }})</span>
+                <span v-if="row.phone2_owner" class="font-medium text-fb-secondary">({{ presetLabel(row.phone2_owner) }})</span>
                 <span>{{ row.phone2 }}</span>
               </div>
             </td>
@@ -1065,17 +1062,17 @@ onMounted(async () => {
             <td v-if="canSeeMoney" class="px-5 py-4 text-fb-secondary">
               <div v-if="row.isDebtor" class="flex flex-col items-start gap-1">
                 <span class="inline-flex items-center rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-semibold text-red-700">
-                  Просрочено на {{ row.overdueDays }} дн.
+                  {{ t('students.overdueDays', { count: row.overdueDays }) }}
                 </span>
                 <span v-if="row.debtAmount" class="text-xs font-semibold text-red-700">
-                  долг {{ formatSum(row.debtAmount) }} сум
+                  {{ t('students.debtAmount', { amount: formatSum(row.debtAmount) }) }}
                 </span>
                 <span
                   v-if="row.isFrozen"
                   class="inline-flex items-center rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-medium text-sky-700"
-                  title="Долг был до заморозки; пока ученик в заморозке, просрочка не растёт"
+                  :title="t('students.frozenHint')"
                 >
-                  в заморозке
+                  {{ t('students.frozen') }}
                 </span>
                 <span class="text-xs font-medium text-red-600">{{ row.nextPaymentDate }}</span>
               </div>
@@ -1094,10 +1091,10 @@ onMounted(async () => {
       <div class="drawer-panel-fb">
         <div class="flex items-center justify-between border-b border-fb-line px-6 py-4">
           <h2 class="text-lg font-semibold text-fb-text">{{ panelTitle }}</h2>
-          <button type="button" class="text-fb-icon hover:text-fb-secondary" @click="closePanel">✕</button>
+          <button type="button" class="text-fb-icon hover:text-fb-secondary" :aria-label="t('common.close')" @click="closePanel">✕</button>
         </div>
 
-        <div v-if="panelLoading" class="flex-1 p-6 text-fb-secondary">Loading…</div>
+        <div v-if="panelLoading" class="flex-1 p-6 text-fb-secondary">{{ t('common.loading') }}</div>
 
         <form v-else class="flex flex-1 flex-col overflow-hidden" @submit.prevent="submitStudent">
           <div v-if="isReadOnly && detailStudent" class="flex-1 overflow-y-auto p-6">
@@ -1120,12 +1117,12 @@ onMounted(async () => {
                   class="mt-1 inline-block rounded-full px-2.5 py-0.5 text-xs font-medium"
                   :class="statusBadgeClass(detailStudent.status)"
                 >
-                  {{ detailStudent.status_label }}
+                  {{ studentStatusLabel(detailStudent.status, detailStudent.status_label) }}
                 </span>
                 <div class="mt-1 text-base text-fb-text">
                   <span class="font-semibold">{{ detailStudent.phone }}</span>
                   <span v-if="detailStudent.phone2" class="ml-3 text-sm text-fb-secondary">
-                    {{ detailStudent.phone2_owner ? `${detailStudent.phone2_owner}: ` : 'Extra: ' }}{{ detailStudent.phone2 }}
+                    {{ detailStudent.phone2_owner ? `${presetLabel(detailStudent.phone2_owner)}: ` : `${t('leads.phone2')}: ` }}{{ detailStudent.phone2 }}
                   </span>
                 </div>
               </div>
@@ -1134,21 +1131,21 @@ onMounted(async () => {
             <!-- Key facts at a glance -->
             <div class="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
               <div v-if="canSeeMoney" class="fact-tile-fb" :class="detailStudent.is_debtor ? '!border-red-200 !bg-red-50' : ''">
-                <div class="fact-label">Долг</div>
+                <div class="fact-label">{{ t('groups.debt') }}</div>
                 <div v-if="detailStudent.debt_amount" class="fact-value !text-red-700">
-                  {{ formatSum(detailStudent.debt_amount) }} сум
+                  {{ t('common.sumAmount', { amount: formatSum(detailStudent.debt_amount) }) }}
                 </div>
-                <div v-else-if="detailStudent.is_debtor" class="fact-value !text-red-700">есть</div>
-                <div v-else class="fact-value !text-emerald-700">нет</div>
+                <div v-else-if="detailStudent.is_debtor" class="fact-value !text-red-700">{{ t('common.yes') }}</div>
+                <div v-else class="fact-value !text-emerald-700">{{ t('common.no') }}</div>
                 <div v-if="detailStudent.debt_amount" class="text-xs text-fb-secondary">
-                  неоплаченных месяцев: {{ detailStudent.debt_months }}
+                  {{ t('students.unpaidMonths', { count: detailStudent.debt_months ?? 0 }) }}
                 </div>
                 <div v-else-if="detailStudent.is_debtor" class="text-xs text-fb-secondary">
-                  сумма неизвестна: нет группы с ценой курса
+                  {{ t('students.debtUnknown') }}
                 </div>
               </div>
               <div v-if="canSeeMoney" class="fact-tile-fb">
-                <div class="fact-label">Следующая оплата</div>
+                <div class="fact-label">{{ t('students.nextPayment') }}</div>
                 <div class="fact-value">
                   {{ detailStudent.next_payment_date ? formatAddedDate(detailStudent.next_payment_date) : '—' }}
                 </div>
@@ -1157,13 +1154,13 @@ onMounted(async () => {
                     v-if="detailStudent.is_debtor"
                     class="inline-block rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700"
                   >
-                    Просрочено на {{ detailStudent.overdue_days }} дн.<template v-if="detailStudent.status === 2"> (в заморозке)</template>
+                    {{ t('students.overdueDays', { count: detailStudent.overdue_days ?? 0 }) }}<template v-if="detailStudent.status === 2"> ({{ t('students.frozen') }})</template>
                   </span>
                   <span
                     v-else-if="detailStudent.next_payment_date"
                     class="inline-block rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700"
                   >
-                    Оплачено
+                    {{ t('months.state.paid') }}
                   </span>
                   <button
                     v-if="canAcceptPayment"
@@ -1171,22 +1168,22 @@ onMounted(async () => {
                     class="rounded-md bg-emerald-600 px-2.5 py-1 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700"
                     @click="openAcceptPaymentModal"
                   >
-                    + Оплатить
+                    + {{ t('students.pay') }}
                   </button>
                 </div>
               </div>
               <div v-if="canSeeMoney" class="fact-tile-fb">
-                <div class="fact-label">Последняя оплата</div>
+                <div class="fact-label">{{ t('students.lastPayment') }}</div>
                 <div class="fact-value">
-                  {{ detailStudent.last_payment_date ? formatAddedDate(detailStudent.last_payment_date) : 'не было' }}
+                  {{ detailStudent.last_payment_date ? formatAddedDate(detailStudent.last_payment_date) : t('students.noPaymentsYet') }}
                 </div>
                 <div v-if="detailStudent.wallet" class="text-xs text-amber-700">
-                  копилка {{ formatSum(detailStudent.wallet) }} сум<template v-if="detailStudent.wallet_missing">
-                    · до месяца не хватает {{ formatSum(detailStudent.wallet_missing) }}</template>
+                  {{ t('students.wallet', { amount: formatSum(detailStudent.wallet) }) }}<template v-if="detailStudent.wallet_missing">
+                    · {{ t('students.walletMissing', { amount: formatSum(detailStudent.wallet_missing) }) }}</template>
                 </div>
               </div>
               <div class="fact-tile-fb">
-                <div class="fact-label">Группа</div>
+                <div class="fact-label">{{ t('schedule.group') }}</div>
                 <div class="fact-value">
                   <button
                     v-if="detailStudent.group_id"
@@ -1199,69 +1196,69 @@ onMounted(async () => {
                   <span v-else>—</span>
                 </div>
                 <div v-if="detailStudent.group_teacher" class="text-xs text-fb-secondary">
-                  учитель: {{ detailStudent.group_teacher }}
+                  {{ t('students.teacherIs', { name: detailStudent.group_teacher }) }}
                 </div>
               </div>
               <div class="fact-tile-fb">
-                <div class="fact-label">Курс</div>
+                <div class="fact-label">{{ t('schedule.course') }}</div>
                 <div class="fact-value">{{ detailStudent.course_name || '—' }}</div>
                 <div v-if="canSeeMoney && detailStudent.course_price" class="text-xs text-fb-secondary">
-                  {{ formatSum(detailStudent.course_price) }} сум в месяц
+                  {{ t('payments.perMonth', { amount: formatSum(detailStudent.course_price) }) }}
                 </div>
               </div>
               <div class="fact-tile-fb">
-                <div class="fact-label">Дата старта</div>
+                <div class="fact-label">{{ t('students.startDate') }}</div>
                 <div class="fact-value">
                   {{ detailStudent.trial_date ? formatAddedDate(detailStudent.trial_date) : '—' }}
                 </div>
-                <div class="text-xs text-fb-secondary">с неё идут месяцы ученика</div>
+                <div class="text-xs text-fb-secondary">{{ t('students.startDateHint') }}</div>
               </div>
             </div>
 
             <div class="mt-6 grid items-start gap-6" :class="canSeeMoney ? 'xl:grid-cols-3' : ''">
             <div>
-            <div class="mb-2 text-base font-semibold text-fb-text">Данные ученика</div>
+            <div class="mb-2 text-base font-semibold text-fb-text">{{ t('students.info') }}</div>
             <dl class="space-y-3 text-sm">
               <div class="flex items-center justify-between gap-4 border-b border-fb-line pb-2">
-                <dt class="text-fb-secondary">Branch (Филиал)</dt>
+                <dt class="text-fb-secondary">{{ t('common.branch') }}</dt>
                 <dd class="text-right font-medium text-fb-text">{{ detailStudent.branch }}</dd>
               </div>
               <div class="flex items-center justify-between gap-4 border-b border-fb-line pb-2">
-                <dt class="text-fb-secondary">Address</dt>
+                <dt class="text-fb-secondary">{{ t('settings.address') }}</dt>
                 <dd class="text-right font-medium text-fb-text">{{ detailStudent.address || '-' }}</dd>
               </div>
               <div class="flex items-center justify-between gap-4 border-b border-fb-line pb-2">
-                <dt class="text-fb-secondary">School</dt>
+                <dt class="text-fb-secondary">{{ t('import.school') }}</dt>
                 <dd class="text-right font-medium text-fb-text">{{ detailStudent.school || '-' }}</dd>
               </div>
               <div v-if="detailStudent.level" class="flex items-center justify-between gap-4 border-b border-fb-line pb-2">
-                <dt class="text-fb-secondary">Level</dt>
-                <dd class="text-right font-medium text-fb-text">{{ detailStudent.level }}</dd>
+                <dt class="text-fb-secondary">{{ t('leads.level') }}</dt>
+                <dd class="text-right font-medium text-fb-text">{{ presetLabel(detailStudent.level) }}</dd>
               </div>
               <div class="flex items-center justify-between gap-4 border-b border-fb-line pb-2">
-                <dt class="text-fb-secondary">Telegram (student)</dt>
+                <dt class="text-fb-secondary">{{ t('students.telegramStudent') }}</dt>
                 <dd class="text-right font-medium text-fb-text">{{ detailStudent.telegram || '-' }}</dd>
               </div>
               <div class="flex items-center justify-between gap-4 border-b border-fb-line pb-2">
-                <dt class="text-fb-secondary">Telegram (parents)</dt>
+                <dt class="text-fb-secondary">{{ t('students.telegramParents') }}</dt>
                 <dd class="text-right font-medium" :class="detailStudent.parent_telegram ? 'text-fb-text' : 'text-fb-secondary'">
-                  {{ detailStudent.parent_telegram || 'not set' }}
+                  {{ detailStudent.parent_telegram || t('common.notSet') }}
                 </dd>
               </div>
               <div class="flex items-center justify-between gap-4 border-b border-fb-line pb-2">
-                <dt class="text-fb-secondary">Added (Добавлен)</dt>
+                <dt class="text-fb-secondary">{{ t('students.added') }}</dt>
                 <dd class="text-right font-medium text-fb-text">{{ formatAddedDate(detailStudent.created_at) }}</dd>
               </div>
               <div v-if="detailStudent.comment" class="border-b border-fb-line pb-2">
-                <dt class="text-fb-secondary">Comment</dt>
+                <dt class="text-fb-secondary">{{ t('common.comment') }}</dt>
                 <dd class="mt-1 whitespace-pre-wrap font-medium text-fb-text">{{ detailStudent.comment }}</dd>
               </div>
             </dl>
 
             <div v-if="detailParentTgLink" class="mt-5 rounded-lg border border-fb-line bg-fb-canvas px-4 py-3 text-sm">
-              <div class="font-medium text-fb-text">Parents invite link</div>
+              <div class="font-medium text-fb-text">{{ t('students.parentsLink') }}</div>
               <p class="mt-1 text-fb-secondary">
-                Send this link to the parents. They open it, press Start, and the bot starts sending them notifications automatically.
+                {{ t('students.parentsLinkHint') }}
               </p>
               <div class="mt-2 flex items-center gap-2">
                 <a :href="detailParentTgLink" target="_blank" rel="noopener" class="break-all text-fb-blue hover:underline">
@@ -1272,7 +1269,7 @@ onMounted(async () => {
                   class="ml-auto shrink-0 rounded-lg border border-fb-line px-3 py-1 text-xs font-medium text-fb-secondary hover:border-fb-blue hover:text-fb-blue"
                   @click="copyText(detailParentTgLink)"
                 >
-                  Copy
+                  {{ t('common.copy') }}
                 </button>
               </div>
             </div>
@@ -1281,22 +1278,22 @@ onMounted(async () => {
             <!-- The student's months: one line per month, its sum never changes -->
             <div v-if="canSeeMoney" class="rounded-xl border border-fb-line bg-fb-canvas p-4 text-sm">
               <div class="flex items-center gap-2 border-b border-fb-line pb-3">
-                <span class="font-semibold text-fb-text">Месяцы ученика</span>
+                <span class="font-semibold text-fb-text">{{ t('students.months') }}</span>
                 <span class="rounded-full bg-white px-2 py-0.5 text-xs font-medium text-fb-secondary shadow-sm">
                   {{ detailStudent.charges?.length || 0 }}
                 </span>
               </div>
               <div v-if="!detailStudent.charges?.length" class="py-6 text-center text-xs text-fb-secondary">
-                Месяцев пока нет: они появляются, когда ученик в группе с ценой курса.
+                {{ t('students.monthsEmpty') }}
               </div>
               <div v-else class="max-h-[55vh] overflow-y-auto">
                 <table class="w-full text-left">
                   <thead class="text-xs text-fb-secondary">
                     <tr>
-                      <th class="py-2 pr-2 font-medium">Месяц</th>
-                      <th class="py-2 pr-2 text-right font-medium">Начислено</th>
-                      <th class="py-2 pr-2 text-right font-medium">Оплачено</th>
-                      <th class="py-2 text-right font-medium">Осталось</th>
+                      <th class="py-2 pr-2 font-medium">{{ t('common.month') }}</th>
+                      <th class="py-2 pr-2 text-right font-medium">{{ t('months.charged') }}</th>
+                      <th class="py-2 pr-2 text-right font-medium">{{ t('months.paid') }}</th>
+                      <th class="py-2 text-right font-medium">{{ t('months.left') }}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1306,7 +1303,7 @@ onMounted(async () => {
                           {{ formatAddedDate(line.period_start) }} — {{ formatAddedDate(line.period_end) }}
                         </div>
                         <span class="mt-1 inline-block whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-medium" :class="CHARGE_STATE[line.state].cls">
-                          {{ CHARGE_STATE[line.state].label }}
+                          {{ t(CHARGE_STATE[line.state].label) }}
                         </span>
                       </td>
                       <td class="py-2 pr-2 text-right align-top text-fb-text">{{ formatSum(line.amount) }}</td>
@@ -1319,7 +1316,7 @@ onMounted(async () => {
                 </table>
               </div>
               <p class="mt-2 text-xs text-fb-secondary">
-                Сумма месяца записывается в его первый день и потом не меняется. Оплата закрывает самый старый неоплаченный месяц.
+                {{ t('students.monthsHint') }}
               </p>
             </div>
 
@@ -1327,7 +1324,7 @@ onMounted(async () => {
             <div v-if="canSeeMoney" class="rounded-xl border border-fb-line bg-fb-canvas p-4 text-sm">
               <div class="flex flex-wrap items-center justify-between gap-2 border-b border-fb-line pb-3">
                 <div class="flex items-center gap-2">
-                  <span class="whitespace-nowrap font-semibold text-fb-text">История оплат</span>
+                  <span class="whitespace-nowrap font-semibold text-fb-text">{{ t('students.paymentHistory') }}</span>
                   <span class="rounded-full bg-white px-2 py-0.5 text-xs font-medium text-fb-secondary shadow-sm">
                     {{ studentPayments.length }}
                   </span>
@@ -1337,10 +1334,10 @@ onMounted(async () => {
                     v-if="canWriteStudents"
                     type="button"
                     class="whitespace-nowrap rounded-lg border border-fb-line bg-white px-2.5 py-1 text-xs font-semibold text-fb-secondary hover:border-fb-blue hover:text-fb-blue shadow-sm transition-colors"
-                    title="Ссылка на оплату Click / Payme / Uzum"
+                    :title="t('students.payLinkHint')"
                     @click="openPaymentLinkModal(detailStudent)"
                   >
-                    💳 Ссылка на оплату
+                    💳 {{ t('students.payLink') }}
                   </button>
                   <button
                     v-if="canAcceptPayment"
@@ -1348,16 +1345,16 @@ onMounted(async () => {
                     class="whitespace-nowrap rounded-lg bg-emerald-600 px-3 py-1 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700"
                     @click="openAcceptPaymentModal"
                   >
-                    + Принять оплату
+                    + {{ t('payments.addTitle') }}
                   </button>
                 </div>
               </div>
 
               <div v-if="paymentsLoading" class="py-6 text-center text-xs text-fb-secondary">
-                Загрузка платежей…
+                {{ t('common.loading') }}
               </div>
               <div v-else-if="!studentPayments.length" class="py-6 text-center text-xs text-fb-secondary">
-                Оплат пока не зафиксировано
+                {{ t('students.noPayments') }}
               </div>
               <div v-else class="mt-3 space-y-2 max-h-[55vh] overflow-y-auto pr-1">
                 <div
@@ -1368,22 +1365,22 @@ onMounted(async () => {
                   <div>
                     <div class="flex items-center gap-2">
                       <template v-if="p.transaction_type === 'refund'">
-                        <span class="font-semibold text-rose-700">−{{ p.amount.toLocaleString() }} UZS</span>
-                        <span class="rounded bg-rose-100 px-2 py-0.5 text-[11px] font-semibold text-rose-700">Возврат</span>
+                        <span class="font-semibold text-rose-700">−{{ t('common.sumAmount', { amount: formatSum(p.amount) }) }}</span>
+                        <span class="rounded bg-rose-100 px-2 py-0.5 text-[11px] font-semibold text-rose-700">{{ t('txType.refund') }}</span>
                       </template>
                       <template v-else>
-                        <span class="font-semibold text-fb-blue">{{ p.amount.toLocaleString() }} UZS</span>
+                        <span class="font-semibold text-fb-blue">{{ t('common.sumAmount', { amount: formatSum(p.amount) }) }}</span>
                         <span class="rounded bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-fb-blue">
-                          {{ p.months_covered ?? 1 }} мес.
+                          {{ t('receipt.months', { count: p.months_covered ?? 1 }) }}
                         </span>
                         <span v-if="p.discount_amount" class="rounded bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700">
-                          скидка {{ p.discount_amount.toLocaleString() }}
+                          {{ t('payHint.discount', { amount: formatSum(p.discount_amount) }) }}
                         </span>
                       </template>
                     </div>
                     <div class="mt-1 text-xs text-fb-secondary">
-                      {{ p.date }} • {{ p.method_pay || p.method }}
-                      <span v-if="p.creator"> • Принял: {{ p.creator }}</span>
+                      {{ p.date }} • {{ payMethodLabel(p.method, p.method_pay) }}
+                      <span v-if="p.creator"> • {{ t('students.receivedBy', { name: p.creator }) }}</span>
                     </div>
                     <div v-if="p.comment" class="mt-1 text-xs italic text-fb-secondary">
                       {{ p.comment }}
@@ -1392,12 +1389,12 @@ onMounted(async () => {
                   <button
                     v-if="p.transaction_type !== 'refund'"
                     type="button"
-                    title="Печать квитанции"
+                    :title="t('payments.printReceipt')"
                     class="ml-2 inline-flex items-center gap-1 rounded-lg border border-fb-line bg-fb-canvas/50 px-2.5 py-1 text-xs font-medium text-fb-secondary hover:border-fb-blue hover:text-fb-blue transition-colors"
                     @click="printStudentPayment(p)"
                   >
                     <span>🖨️</span>
-                    <span>Чек</span>
+                    <span>{{ t('payments.receipt') }}</span>
                   </button>
                 </div>
               </div>
@@ -1432,7 +1429,7 @@ onMounted(async () => {
                   class="rounded-lg border border-fb-line px-3 py-1.5 text-sm font-medium text-fb-secondary hover:border-fb-blue hover:text-fb-blue"
                   @click="triggerPhotoSelect"
                 >
-                  Upload photo
+                  {{ t('students.uploadPhoto') }}
                 </button>
                 <button
                   v-if="photoPreview || photoMarkedRemove"
@@ -1440,14 +1437,14 @@ onMounted(async () => {
                   class="text-xs text-fb-danger hover:underline"
                   @click="removePhoto"
                 >
-                  Remove photo
+                  {{ t('students.removePhoto') }}
                 </button>
               </div>
             </div>
 
             <div class="grid grid-cols-2 gap-3">
               <div>
-                <label class="mb-1 block text-sm font-medium text-fb-secondary">First name</label>
+                <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('common.firstName') }}</label>
                 <input
                   v-model="form.first_name"
                   type="text"
@@ -1457,7 +1454,7 @@ onMounted(async () => {
                 />
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium text-fb-secondary">Last name</label>
+                <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('common.lastName') }}</label>
                 <input
                   v-model="form.last_name"
                   type="text"
@@ -1468,7 +1465,7 @@ onMounted(async () => {
             </div>
 
             <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Phone</label>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('common.phone') }}</label>
               <input
                 v-model="form.phone"
                 type="tel"
@@ -1481,68 +1478,62 @@ onMounted(async () => {
             <div>
               <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label class="mb-1 block text-sm font-medium text-fb-secondary">Second phone (optional)</label>
+                  <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('leads.phone2Optional') }}</label>
                   <input
                     v-model="form.phone2"
                     type="tel"
-                    placeholder="Additional phone number"
+                    :placeholder="t('leads.phone2Placeholder')"
                     :readonly="isReadOnly"
                     class="w-full rounded-lg border border-fb-line px-3 py-2 read-only:bg-fb-canvas focus:border-fb-blue focus:outline-none"
                   />
                 </div>
                 <div>
-                  <label class="mb-1 block text-sm font-medium text-fb-secondary">Whose number? (Чей номер)</label>
+                  <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('leads.phone2Owner') }}</label>
                   <input
                     v-model="form.phone2_owner"
                     list="phone2-owners-student"
                     type="text"
-                    placeholder="e.g. Мама, Отец, Брат..."
+                    :placeholder="t('leads.phone2OwnerPlaceholder')"
                     :readonly="isReadOnly"
                     class="w-full rounded-lg border border-fb-line px-3 py-2 read-only:bg-fb-canvas focus:border-fb-blue focus:outline-none"
                   />
                   <datalist id="phone2-owners-student">
-                    <option value="Мама" />
-                    <option value="Отец" />
-                    <option value="Брат" />
-                    <option value="Сестра" />
-                    <option value="Бабушка" />
-                    <option value="Дедушка" />
-                    <option value="Родственник" />
+                    <option v-for="owner in PHONE_OWNERS" :key="owner.value" :value="owner.value" :label="presetLabel(owner.value)" />
                   </datalist>
                 </div>
               </div>
               <div v-if="!isReadOnly" class="mt-1.5 flex flex-wrap items-center gap-1.5">
-                <span class="text-xs text-fb-icon">Быстрый выбор:</span>
+                <span class="text-xs text-fb-icon">{{ t('leads.quickPick') }}:</span>
                 <button
-                  v-for="owner in ['Мама', 'Отец', 'Брат', 'Сестра', 'Родственник']"
-                  :key="owner"
+                  v-for="owner in PHONE_OWNER_BUTTONS"
+                  :key="owner.value"
                   type="button"
                   class="rounded-md border px-2 py-0.5 text-xs transition-colors"
-                  :class="form.phone2_owner === owner ? 'bg-fb-blue text-white border-fb-blue' : 'border-fb-line text-fb-secondary hover:bg-fb-canvas'"
-                  @click="form.phone2_owner = form.phone2_owner === owner ? '' : owner"
+                  :class="form.phone2_owner === owner.value ? 'bg-fb-blue text-white border-fb-blue' : 'border-fb-line text-fb-secondary hover:bg-fb-canvas'"
+                  @click="form.phone2_owner = form.phone2_owner === owner.value ? '' : owner.value"
                 >
-                  {{ owner }}
+                  {{ presetLabel(owner.value) }}
                 </button>
               </div>
             </div>
 
             <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">School</label>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('import.school') }}</label>
               <input
                 v-model="form.school"
                 type="text"
-                placeholder="e.g. School #45"
+                :placeholder="t('leads.schoolPlaceholder')"
                 :readonly="isReadOnly"
                 class="w-full rounded-lg border border-fb-line px-3 py-2 read-only:bg-fb-canvas focus:border-fb-blue focus:outline-none"
               />
             </div>
 
             <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Address</label>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('settings.address') }}</label>
               <input
                 v-model="form.address"
                 type="text"
-                placeholder="e.g. Tashkent, Chilanzar"
+                :placeholder="t('leads.addressPlaceholder')"
                 :readonly="isReadOnly"
                 class="w-full rounded-lg border border-fb-line px-3 py-2 read-only:bg-fb-canvas focus:border-fb-blue focus:outline-none"
               />
@@ -1550,7 +1541,7 @@ onMounted(async () => {
 
             <div class="grid grid-cols-2 gap-3">
               <div>
-                <label class="mb-1 block text-sm font-medium text-fb-secondary">Telegram (student)</label>
+                <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('students.telegramStudent') }}</label>
                 <input
                   v-model="form.telegram"
                   type="text"
@@ -1560,11 +1551,11 @@ onMounted(async () => {
                 />
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium text-fb-secondary">Telegram (parents)</label>
+                <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('students.telegramParents') }}</label>
                 <input
                   v-model="form.parent_telegram"
                   type="text"
-                  placeholder="@username or chat_id"
+                  :placeholder="t('students.tgParentsPlaceholder')"
                   :readonly="isReadOnly"
                   class="w-full rounded-lg border border-fb-line px-3 py-2 read-only:bg-fb-canvas focus:border-fb-blue focus:outline-none"
                 />
@@ -1572,20 +1563,20 @@ onMounted(async () => {
             </div>
 
             <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Comments</label>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('common.comment') }}</label>
               <textarea
                 v-model="form.comment"
                 rows="2"
-                placeholder="Add notes or comments about student..."
+                :placeholder="t('leads.commentPlaceholder')"
                 :readonly="isReadOnly"
                 class="w-full rounded-lg border border-fb-line px-3 py-2 read-only:bg-fb-canvas focus:border-fb-blue focus:outline-none"
               ></textarea>
             </div>
 
             <div v-if="detailParentTgLink" class="rounded-lg border border-fb-line bg-fb-canvas px-4 py-3 text-sm">
-              <div class="font-medium text-fb-text">Parents invite link</div>
+              <div class="font-medium text-fb-text">{{ t('students.parentsLink') }}</div>
               <p class="mt-1 text-fb-secondary">
-                Send this link to the parents. They open it, press Start, and the bot starts sending them notifications automatically.
+                {{ t('students.parentsLinkHint') }}
               </p>
               <div class="mt-2 flex items-center gap-2">
                 <a :href="detailParentTgLink" target="_blank" rel="noopener" class="break-all text-fb-blue hover:underline">
@@ -1596,24 +1587,24 @@ onMounted(async () => {
                   class="ml-auto shrink-0 rounded-lg border border-fb-line px-3 py-1 text-xs font-medium text-fb-secondary hover:border-fb-blue hover:text-fb-blue"
                   @click="copyText(detailParentTgLink)"
                 >
-                  Copy
+                  {{ t('common.copy') }}
                 </button>
               </div>
             </div>
 
             <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Level (Уровень знаний)</label>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('leads.levelLong') }}</label>
               <input
                 v-model="form.level"
                 type="text"
-                placeholder="e.g. Beginner, Elementary, Intermediate, 5 класс, IELTS..."
+                :placeholder="t('leads.levelPlaceholder')"
                 :readonly="isReadOnly"
                 class="w-full rounded-lg border border-fb-line px-3 py-2 read-only:bg-fb-canvas focus:border-fb-blue focus:outline-none"
               />
             </div>
 
             <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Branch</label>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('common.branch') }}</label>
               <select
                 v-model="form.branch_id"
                 :disabled="isReadOnly"
@@ -1626,13 +1617,13 @@ onMounted(async () => {
             </div>
 
             <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Group</label>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('schedule.group') }}</label>
               <select
                 v-model="form.group_id"
                 :disabled="isReadOnly"
                 class="w-full rounded-lg border border-fb-line px-3 py-2 disabled:bg-fb-canvas"
               >
-                <option value="">— No group —</option>
+                <option value="">— {{ t('leads.noGroup') }} —</option>
                 <option v-for="group in filteredGroups" :key="group.id" :value="group.id">
                   {{ group.name }}
                 </option>
@@ -1640,14 +1631,14 @@ onMounted(async () => {
             </div>
 
             <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Status</label>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('common.status') }}</label>
               <select
                 v-model="form.status"
                 :disabled="isReadOnly"
                 class="w-full rounded-lg border border-fb-line px-3 py-2 disabled:bg-fb-canvas"
               >
                 <option v-for="option in STATUS_OPTIONS" :key="option.value" :value="option.value">
-                  {{ option.label }}
+                  {{ t(option.label) }}
                 </option>
               </select>
             </div>
@@ -1657,17 +1648,16 @@ onMounted(async () => {
               class="rounded-xl border border-emerald-200 bg-emerald-50 p-3"
             >
               <div class="text-xs font-semibold text-emerald-900">
-                ⚡ Возобновление обучения из заморозки
+                ⚡ {{ t('students.resumeFromFreeze') }}
               </div>
               <p class="mt-0.5 text-xs text-emerald-700">
-                Укажите дату возобновления: с неё продолжится месяц, который шёл в момент заморозки.
-                Неоплаченные месяцы остаются долгом.
+                {{ t('students.resumeFromFreezeHint') }}
               </p>
             </div>
 
             <div>
               <label class="mb-1 block text-sm font-medium text-fb-secondary">
-                Дата старта / число оплаты (Anchor date) <span class="text-rose-500">*</span>
+                {{ t('leads.startDate') }} <span class="text-rose-500">*</span>
               </label>
               <input
                 v-model="form.trial_date"
@@ -1682,14 +1672,14 @@ onMounted(async () => {
               v-if="detailStudent?.group_id"
               class="rounded-lg border border-fb-line bg-fb-canvas px-4 py-3 text-sm"
             >
-              <span class="text-fb-secondary">Group: </span>
+              <span class="text-fb-secondary">{{ t('schedule.group') }}: </span>
               <span class="font-medium text-fb-text">{{ detailStudent.group }}</span>
               <button
                 type="button"
                 class="ml-3 text-fb-blue hover:underline"
                 @click="goGroup(detailStudent)"
               >
-                Open groups →
+                {{ t('rating.groupPage') }} →
               </button>
             </div>
 
@@ -1704,14 +1694,14 @@ onMounted(async () => {
                 class="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700"
                 @click="openUnfreezeModal(detailStudent)"
               >
-                Возобновить обучение
+                {{ t('students.resume') }}
               </button>
               <button
                 type="button"
                 class="rounded-lg bg-fb-blue px-5 py-2 text-sm font-medium text-white hover:opacity-90"
                 @click="startEdit"
               >
-                Edit
+                {{ t('common.edit') }}
               </button>
             </template>
             <template v-else-if="!isReadOnly">
@@ -1720,7 +1710,7 @@ onMounted(async () => {
                 class="rounded-lg bg-fb-blue px-5 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
                 :disabled="saving"
               >
-                {{ saving ? 'Saving…' : editingStudent ? 'Save' : 'Create' }}
+                {{ saving ? t('common.saving') : editingStudent ? t('common.save') : t('common.create') }}
               </button>
             </template>
             <button
@@ -1728,7 +1718,7 @@ onMounted(async () => {
               class="rounded-lg border border-fb-line px-5 py-2 text-sm font-medium text-fb-secondary"
               @click="closePanel"
             >
-              Cancel
+              {{ t('common.cancel') }}
             </button>
           </div>
         </form>
@@ -1740,10 +1730,11 @@ onMounted(async () => {
       <div class="fixed inset-0 bg-black/40" @click="showUnfreezeModal = false" />
       <div class="relative w-full max-w-md rounded-2xl border border-fb-line bg-fb-card p-6 shadow-xl">
         <div class="flex items-center justify-between border-b border-fb-line pb-3">
-          <h3 class="text-lg font-semibold text-fb-text">Возобновление обучения</h3>
+          <h3 class="text-lg font-semibold text-fb-text">{{ t('students.resumeTitle') }}</h3>
           <button
             type="button"
             class="text-fb-icon hover:text-fb-secondary"
+            :aria-label="t('common.close')"
             @click="showUnfreezeModal = false"
           >
             ✕
@@ -1752,15 +1743,15 @@ onMounted(async () => {
 
         <div class="mt-4 space-y-4">
           <p class="text-sm text-fb-secondary">
-            Ученик <strong class="text-fb-text">{{ unfreezeStudent?.full_name }}</strong> возвращается из заморозки в статус «Обучается».
+            {{ t('students.resumeText', { name: unfreezeStudent?.full_name ?? '' }) }}
           </p>
           <div class="rounded-lg bg-fb-canvas p-3 text-xs text-fb-secondary">
-            Укажите дату возобновления занятий. Это число месяца станет новой <strong>якорной датой</strong> для расчета последующих платежей.
+            {{ t('students.resumeDateHint') }}
           </div>
 
           <div>
             <label class="mb-1 block text-sm font-medium text-fb-text">
-              Дата расчета оплаты и возобновления:
+              {{ t('students.resumeDate') }}:
             </label>
             <input
               v-model="unfreezeDate"
@@ -1777,7 +1768,7 @@ onMounted(async () => {
               class="rounded-lg border border-fb-line px-4 py-2 text-sm font-medium text-fb-secondary hover:bg-fb-canvas"
               @click="showUnfreezeModal = false"
             >
-              Отмена
+              {{ t('common.cancel') }}
             </button>
             <button
               type="button"
@@ -1785,7 +1776,7 @@ onMounted(async () => {
               :disabled="unfreezeSaving"
               @click="confirmUnfreeze"
             >
-              {{ unfreezeSaving ? 'Сохранение…' : 'Подтвердить и возобновить' }}
+              {{ unfreezeSaving ? t('common.saving') : t('students.resumeConfirm') }}
             </button>
           </div>
         </div>
@@ -1798,16 +1789,16 @@ onMounted(async () => {
       <div class="relative w-full max-w-md rounded-2xl border border-fb-line bg-fb-card p-6 shadow-2xl">
         <div class="flex items-center justify-between border-b border-fb-line pb-3">
           <div>
-            <h3 class="text-base font-semibold text-fb-text">Принять оплату</h3>
+            <h3 class="text-base font-semibold text-fb-text">{{ t('payments.addTitle') }}</h3>
             <p class="text-xs text-fb-secondary mt-0.5">{{ detailStudent?.full_name }}</p>
           </div>
-          <button type="button" class="text-fb-secondary hover:text-fb-text" @click="showPayModal = false">✕</button>
+          <button type="button" class="text-fb-secondary hover:text-fb-text" :aria-label="t('common.close')" @click="showPayModal = false">✕</button>
         </div>
 
         <form class="mt-4 space-y-4" @submit.prevent="submitPayment">
           <div>
             <label class="mb-1 block text-xs font-medium text-fb-secondary">
-              Месяцев (подставит сумму)
+              {{ t('payments.monthsNew') }}
             </label>
             <input
               v-model.number="payForm.months_covered"
@@ -1820,21 +1811,21 @@ onMounted(async () => {
           </div>
 
           <div>
-            <label class="mb-1 block text-xs font-medium text-fb-secondary">Скидка (сумма)</label>
+            <label class="mb-1 block text-xs font-medium text-fb-secondary">{{ t('payments.discount') }}</label>
             <input
               v-model.number="payForm.discount"
               type="number"
               min="0"
               step="1"
-              placeholder="Нет скидки"
+              :placeholder="t('payments.noDiscount')"
               class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none"
               @input="onPayMonthsChange"
             />
-            <p class="mt-1 text-[11px] text-fb-secondary">Заполняйте только когда скидка нужна. Не больше цены оплачиваемых месяцев.</p>
+            <p class="mt-1 text-[11px] text-fb-secondary">{{ t('payments.discountHint') }}</p>
           </div>
 
           <div>
-            <label class="mb-1 block text-xs font-medium text-fb-secondary">Сумма к оплате (UZS)</label>
+            <label class="mb-1 block text-xs font-medium text-fb-secondary">{{ t('payLink.amount') }}</label>
             <input
               v-model.number="payForm.amount"
               type="number"
@@ -1844,7 +1835,7 @@ onMounted(async () => {
               class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm font-semibold focus:border-fb-blue focus:outline-none"
             />
             <p v-if="detailStudent?.course_price" class="mt-1 text-[11px] text-fb-secondary">
-              Стоимость курса: {{ detailStudent.course_price.toLocaleString() }} UZS / мес.
+              {{ t('payLink.basePrice', { amount: formatSum(detailStudent.course_price) }) }}
             </p>
             <PaymentPreviewHint
               :student-id="detailStudent?.id"
@@ -1856,7 +1847,7 @@ onMounted(async () => {
           </div>
 
           <div>
-            <label class="mb-1 block text-xs font-medium text-fb-secondary">Дата оплаты</label>
+            <label class="mb-1 block text-xs font-medium text-fb-secondary">{{ t('payments.date') }}</label>
             <input
               v-model="payForm.payment_date"
               type="date"
@@ -1867,23 +1858,23 @@ onMounted(async () => {
           </div>
 
           <div>
-            <label class="mb-1 block text-xs font-medium text-fb-secondary">Способ оплаты</label>
+            <label class="mb-1 block text-xs font-medium text-fb-secondary">{{ t('receipt.method').replace(':', '') }}</label>
             <select
               v-model="payForm.method"
               class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none"
             >
-              <option value="cash">Наличные (Cash)</option>
-              <option value="card">Карта (Card)</option>
-              <option value="transfer">Перевод (Transfer)</option>
+              <option value="cash">{{ t('payMethod.cash') }}</option>
+              <option value="card">{{ t('payMethod.card') }}</option>
+              <option value="transfer">{{ t('payMethod.transfer') }}</option>
             </select>
           </div>
 
           <div>
-            <label class="mb-1 block text-xs font-medium text-fb-secondary">Комментарий / Примечание</label>
+            <label class="mb-1 block text-xs font-medium text-fb-secondary">{{ t('common.comment') }}</label>
             <textarea
               v-model="payForm.comment"
               rows="2"
-              placeholder="Опционально..."
+              :placeholder="t('common.optional')"
               class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none"
             />
           </div>
@@ -1896,14 +1887,14 @@ onMounted(async () => {
               class="rounded-lg border border-fb-line px-4 py-2 text-sm font-medium text-fb-secondary hover:bg-fb-canvas"
               @click="showPayModal = false"
             >
-              Отмена
+              {{ t('common.cancel') }}
             </button>
             <button
               type="submit"
               class="rounded-lg bg-emerald-600 px-5 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
               :disabled="paySaving"
             >
-              {{ paySaving ? 'Проведение…' : 'Провести оплату' }}
+              {{ paySaving ? t('common.saving') : t('payments.takePayment') }}
             </button>
           </div>
         </form>
@@ -1913,12 +1904,12 @@ onMounted(async () => {
     <ImportCsvModal
       v-if="!isCard"
       v-model:open="showImportModal"
-      title="Импорт учеников"
+      :title="t('students.importTitle')"
       upload-url="/students/import"
       template-filename="students-import-template.csv"
       :template-header="['first_name', 'last_name', 'phone', 'school', 'branch', 'group', 'status', 'parent_telegram']"
       :template-example="['Ali', 'Valiyev', '998901234567', 'School #5', 'Main branch', '', 'Active', '@parent_tg']"
-      columns-help="Поддерживаются файлы Excel (.xlsx, .xls) и CSV. Обязательные данные: имя и номер телефона. Программа автоматически разделит ФИО, очистит телефон и сопоставит группы."
+      :columns-help="t('students.importHelp')"
       @imported="loadStudents()"
     />
 

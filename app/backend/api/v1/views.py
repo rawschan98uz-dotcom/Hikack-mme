@@ -21,6 +21,7 @@ from accounts.rbac import (
     user_is_teacher,
 )
 from api.responses import fail, ok
+from api.v1.dashboard_focus import dashboard_focus
 from api.scope import (
     branch_allowed,
     branch_limit,
@@ -1045,6 +1046,7 @@ def dashboard(request):
     ]
 
     studying_students = students.filter(status=Student.Status.STUDYING)
+    debtors = None
     if is_teacher:
         # E1: teachers get no company-wide money or sales figures
         active_leads_count = 0
@@ -1053,10 +1055,12 @@ def dashboard(request):
     else:
         payments_summary = _company_payments_summary(company)
         # Same rule as the debtors list: studying + frozen, same payment lookup
-        debtors_count = sum(
-            1 for s in students.filter(status__in=Student.CURRENT_STATUSES)
-            if _get_student_payment_info(s, _lookup_student_payment_summary(s, payments_summary))['is_debtor']
-        )
+        debtors = []
+        for s in students.filter(status__in=Student.CURRENT_STATUSES):
+            info = _get_student_payment_info(s, _lookup_student_payment_summary(s, payments_summary))
+            if info['is_debtor']:
+                debtors.append((s, info))
+        debtors_count = len(debtors)
         if not user_has_permission(request.user, PERM_FINANCE_VIEW):
             # The revenue chart is a money report: the administrator does not see it (owner, 2026-09-28)
             finance_chart = []
@@ -1073,6 +1077,7 @@ def dashboard(request):
         'schedule': schedule,
         'reminders': reminders,
         'unpaid_leavers': unpaid_leavers,
+        'focus': dashboard_focus(request, company, groups, debtors if sees_debts else None),
     })
 
 

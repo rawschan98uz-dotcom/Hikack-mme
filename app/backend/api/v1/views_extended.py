@@ -881,9 +881,15 @@ def replenishments(request):
         qs = qs.filter(Q(student_name__icontains=query) | Q(comment__icontains=query))
 
     # "Show more": pages of 200 instead of silently cutting the list
+    # Totals of the whole filtered period, not only of the page shown
+    totals = qs.aggregate(
+        paid=Sum('amount', filter=Q(transaction_type=Payment.TransactionType.PAYMENT)),
+        refunded=Sum('amount', filter=Q(transaction_type=Payment.TransactionType.REFUND)),
+    )
     page = paginate_queryset(qs, request, default_limit=200)
     return ok({
         'count': page['count'],
+        'totals': {'paid': totals['paid'] or 0, 'refunded': totals['refunded'] or 0},
         'has_more': page['has_more'],
         'next_offset': page['next_offset'],
         'results': [_serialize_payment(payment) for payment in page['results']],
@@ -1249,9 +1255,11 @@ def withdraws(request):
     if query:
         qs = qs.filter(Q(name__icontains=query) | Q(comment__icontains=query))
 
+    total = qs.aggregate(total=Sum('amount'))['total'] or 0  # the whole filtered period
     page = paginate_queryset(qs, request, default_limit=200)
     return ok({
         'count': page['count'],
+        'total': total,
         'has_more': page['has_more'],
         'next_offset': page['next_offset'],
         'results': [_serialize_withdrawal(w) for w in page['results']],
@@ -1409,9 +1417,11 @@ def expense_list(request):
             Q(description__icontains=query) | Q(payee__icontains=query) | Q(category__name__icontains=query),
         )
 
+    total = qs.aggregate(total=Sum('amount'))['total'] or 0  # the whole filtered period
     page = paginate_queryset(qs, request, default_limit=200)
     return ok({
         'count': page['count'],
+        'total': total,
         'has_more': page['has_more'],
         'next_offset': page['next_offset'],
         'results': [_serialize_expense(e) for e in page['results']],

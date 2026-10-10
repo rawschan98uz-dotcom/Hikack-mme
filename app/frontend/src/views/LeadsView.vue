@@ -7,6 +7,20 @@ import { useAuthStore } from '../stores/auth';
 import { PERM } from '../utils/rbac';
 import { downloadCsv } from '../utils/csvExport';
 import { hasCreateFlag, routeWithoutCreate } from '../utils/crossLinks';
+import { t, type MessageKey } from '../i18n';
+import { leadStageLabel } from '../i18n/labels';
+import {
+  GENERAL_LEVELS,
+  LANGUAGE_LEVELS,
+  LEAD_SOURCES,
+  MATH_LEVELS,
+  PHONE_OWNER_BUTTONS,
+  PHONE_OWNERS,
+  presetLabel,
+  type Preset,
+} from '../i18n/presets';
+import { toast } from '../ui/feedback';
+import { apiErrorMessage } from '../utils/apiError';
 
 interface LeadRow {
   id: number;
@@ -57,49 +71,18 @@ interface CourseOption {
 }
 
 const STAGES = [
-  { value: 'trial_booked', label: 'Записан на пробный' },
-  { value: 'attended', label: 'Был на уроке (Думает)' },
-  { value: 'converted', label: 'Зачислен (Студент)' },
-  { value: 'rejected', label: 'Отказ' },
+  { value: 'trial_booked', label: 'leadStage.trial_booked' as MessageKey },
+  { value: 'attended', label: 'leadStage.attended' as MessageKey },
+  { value: 'converted', label: 'leadStage.converted' as MessageKey },
+  { value: 'rejected', label: 'leadStage.rejected' as MessageKey },
 ] as const;
 
 const EDITABLE_STAGES = STAGES.filter((s) => s.value !== 'converted');
 
-const POPULAR_SOURCES = [
-  'Instagram',
-  'Telegram',
-  'Звонок',
-  'Рекомендация',
-  'Наружка',
-  'Сайт',
-  'Другое',
-] as const;
-
-const LANGUAGE_LEVEL_PRESETS = [
-  'Beginner (A1)',
-  'Elementary (A2)',
-  'Pre-Intermediate',
-  'Intermediate (B1)',
-  'Upper-Intermediate (B2)',
-  'Advanced (C1)',
-  'IELTS / Экзамен',
-] as const;
-
-const MATH_LEVEL_PRESETS = [
-  '1-4 классы',
-  '5-8 классы',
-  '9-11 классы',
-  'ОГЭ / ЕГЭ / ДТМ',
-  'Олимпиадная',
-] as const;
-
-const GENERAL_LEVEL_PRESETS = [
-  'Начальный (Beginner)',
-  'Базовый (Elementary)',
-  'Средний (Intermediate)',
-  'Продвинутый (Advanced)',
-  'Экзамен / Тест',
-] as const;
+const POPULAR_SOURCES = LEAD_SOURCES;
+const LANGUAGE_LEVEL_PRESETS = LANGUAGE_LEVELS;
+const MATH_LEVEL_PRESETS = MATH_LEVELS;
+const GENERAL_LEVEL_PRESETS = GENERAL_LEVELS;
 
 const route = useRoute();
 const router = useRouter();
@@ -188,10 +171,10 @@ const filters = reactive({
   archived: '0',
 });
 
-const ALL_FILTER_LEVEL_PRESETS = [
+const ALL_FILTER_LEVEL_PRESETS: Preset[] = [
   ...LANGUAGE_LEVEL_PRESETS,
   ...MATH_LEVEL_PRESETS,
-] as const;
+];
 
 const customLevels = ref<string[]>([]);
 
@@ -219,7 +202,7 @@ const activeFilterLevelPresets = computed(() => {
 });
 
 const availableFilterLevels = computed(() => {
-  const set = new Set<string>(activeFilterLevelPresets.value);
+  const set = new Set<string>(activeFilterLevelPresets.value.map((preset) => preset.value));
   if (!filters.course_id) {
     for (const lvl of customLevels.value) {
       if (lvl.trim()) set.add(lvl.trim());
@@ -276,31 +259,36 @@ const activeLevelPresets = computed(() => {
   return GENERAL_LEVEL_PRESETS;
 });
 
-const panelTitle = computed(() => (editingLead.value ? 'Lead details' : 'Add lead'));
+const panelTitle = computed(() => (editingLead.value ? t('leads.detailTitle') : t('leads.addTitle')));
 const canExportLeads = computed(() => auth.can(PERM.LEADS_VIEW));
 const canConvertLead = computed(() => auth.can(PERM.STUDENTS_WRITE) && auth.can(PERM.LEADS_WRITE));
 
 function exportCsv() {
   downloadCsv(
     'leads.csv',
-    ['First name', 'Last name', 'Full name', 'Phone', 'Phone 2', 'Phone 2 Owner', 'Branch', 'Course', 'Level', 'School', 'Source', 'Address', 'Comment', 'Trial date', 'Status', 'Active', 'Created'],
+    [
+      t('common.firstName'), t('common.lastName'), t('common.fullName'), t('common.phone'), t('leads.phone2'),
+      t('leads.phone2Owner'), t('common.branch'), t('schedule.course'), t('leads.level'), t('import.school'),
+      t('conversion.source'), t('settings.address'), t('common.comment'), t('leads.trialDate'), t('common.status'),
+      t('common.active'), t('leads.createdColumn'),
+    ],
     rows.value.map((row) => [
       row.first_name || '',
       row.last_name || '',
       row.full_name,
       row.phone,
       row.phone2 || '',
-      row.phone2_owner || '',
+      presetLabel(row.phone2_owner),
       row.branch_name || '',
       row.course_name || '',
-      row.level || '',
+      presetLabel(row.level),
       row.school || '',
-      row.source || '',
+      presetLabel(row.source),
       row.address || '',
       row.comment || '',
       row.trial_date || '',
-      row.stage_label,
-      row.is_active ? 'Yes' : 'No',
+      leadStageLabel(row.stage, row.stage_label),
+      row.is_active ? t('common.yes') : t('common.no'),
       row.created_at,
     ]),
   );
@@ -388,49 +376,30 @@ function cleanPhoneDigits(raw: string): string {
   return d;
 }
 
-function apiErrorMessage(error: unknown, fallback: string): string {
-  const data = (error as { response?: { data?: { message?: string; error?: string; detail?: string } } })?.response?.data;
-  const msg = data?.message || data?.error || data?.detail;
-  if (!msg) return fallback;
-  if (msg.includes('Secondary phone must contain at least 9 digits')) {
-    return 'Дополнительный номер должен содержать минимум 9 цифр (например, 90 123 45 67)';
-  }
-  if (msg.includes('at least 9 digits')) {
-    return 'Номер телефона должен содержать минимум 9 цифр (например, 90 123 45 67)';
-  }
-  if (msg.includes('First name is required')) {
-    return 'Введите имя лида';
-  }
-  if (msg.includes('Trial / start date is required')) {
-    return 'Укажите дату старта / пробного урока';
-  }
-  return msg;
-}
-
 async function saveLead() {
   formError.value = '';
   if (!form.first_name.trim()) {
-    formError.value = 'Введите имя';
+    formError.value = t('errors.enterName');
     return;
   }
   if (!form.phone.trim()) {
-    formError.value = 'Введите номер телефона';
+    formError.value = t('errors.enterPhone');
     return;
   }
   const digits = cleanPhoneDigits(form.phone);
   if (digits.length < 9) {
-    formError.value = 'Номер телефона должен содержать минимум 9 цифр (например, 90 123 45 67)';
+    formError.value = t('errors.phoneMin9');
     return;
   }
   if (form.phone2.trim()) {
     const digits2 = cleanPhoneDigits(form.phone2);
     if (digits2.length < 9) {
-      formError.value = 'Дополнительный номер должен содержать минимум 9 цифр (например, 90 123 45 67)';
+      formError.value = t('errors.secondPhoneMin9');
       return;
     }
   }
   if (!form.trial_date) {
-    formError.value = 'Укажите дату старта / пробного урока';
+    formError.value = t('leads.trialRequired');
     return;
   }
 
@@ -454,6 +423,7 @@ async function saveLead() {
       trial_date: form.trial_date || null,
     };
 
+    const wasEditing = Boolean(editingLead.value);
     if (editingLead.value) {
       await client.patch(`/leads/${editingLead.value.id}`, payload);
     } else {
@@ -465,8 +435,9 @@ async function saveLead() {
       customLevels.value.push(form.level.trim());
     }
     closePanel();
+    toast.success(wasEditing ? t('toast.saved') : t('leads.created'));
   } catch (err: unknown) {
-    formError.value = apiErrorMessage(err, editingLead.value ? 'Не удалось обновить лид' : 'Не удалось создать лид');
+    formError.value = apiErrorMessage(err, t('errors.saveFailed'));
   } finally {
     saving.value = false;
   }
@@ -480,8 +451,9 @@ async function archiveLead() {
     await client.post(`/leads/${editingLead.value.id}/archive`);
     await loadLeads();
     closePanel();
+    toast.success(t('toast.archived'));
   } catch (err: unknown) {
-    formError.value = apiErrorMessage(err, 'Не удалось архивировать лид');
+    formError.value = apiErrorMessage(err, t('leads.archiveFailed'));
   } finally {
     archiving.value = false;
   }
@@ -495,8 +467,9 @@ async function restoreLead() {
     await client.patch(`/leads/${editingLead.value.id}`, { is_active: true });
     await loadLeads();
     closePanel();
+    toast.success(t('toast.restored'));
   } catch (err: unknown) {
-    formError.value = apiErrorMessage(err, 'Не удалось восстановить лид');
+    formError.value = apiErrorMessage(err, t('leads.restoreFailed'));
   } finally {
     saving.value = false;
   }
@@ -509,8 +482,9 @@ async function returnLeadToWork() {
     await client.patch(`/leads/${editingLead.value.id}`, { stage: 'trial_booked', is_active: true });
     await loadLeads();
     closePanel();
+    toast.success(t('leads.backToWork'));
   } catch (err: unknown) {
-    formError.value = apiErrorMessage(err, 'Не удалось вернуть лид в работу');
+    formError.value = apiErrorMessage(err, t('leads.backToWorkFailed'));
   } finally {
     saving.value = false;
   }
@@ -575,31 +549,31 @@ async function handleConvert() {
   convertError.value = '';
 
   if (!convertForm.first_name.trim()) {
-    convertError.value = 'Введите имя';
+    convertError.value = t('errors.enterName');
     return;
   }
   if (!convertForm.phone.trim()) {
-    convertError.value = 'Введите номер телефона';
+    convertError.value = t('errors.enterPhone');
     return;
   }
   const digits = cleanPhoneDigits(convertForm.phone);
   if (digits.length < 9) {
-    convertError.value = 'Номер телефона должен содержать минимум 9 цифр (например, 90 123 45 67)';
+    convertError.value = t('errors.phoneMin9');
     return;
   }
   if (convertForm.phone2.trim()) {
     const digits2 = cleanPhoneDigits(convertForm.phone2);
     if (digits2.length < 9) {
-      convertError.value = 'Дополнительный номер должен содержать минимум 9 цифр (например, 90 123 45 67)';
+      convertError.value = t('errors.secondPhoneMin9');
       return;
     }
   }
   if (!convertForm.branch_id) {
-    convertError.value = 'Выберите филиал';
+    convertError.value = t('groups.branchRequired');
     return;
   }
   if (!convertForm.trial_date) {
-    convertError.value = 'Укажите дату старта / число оплаты';
+    convertError.value = t('leads.startDateRequired');
     return;
   }
 
@@ -632,13 +606,14 @@ async function handleConvert() {
     rows.value = rows.value.filter((r) => r.id !== convertedLeadId);
     closeConvertModal();
     closePanel();
+    toast.success(t('leads.converted'));
     await loadLeads();
 
     if (createdStudentId) {
       router.push({ path: '/students', query: { open: String(createdStudentId) } });
     }
   } catch (err: unknown) {
-    convertError.value = apiErrorMessage(err, 'Не удалось перевести лид в студенты');
+    convertError.value = apiErrorMessage(err, t('leads.convertFailed'));
   } finally {
     converting.value = false;
   }
@@ -745,9 +720,9 @@ onMounted(async () => {
   <div class="space-y-4">
     <div class="flex flex-wrap items-center justify-between gap-3">
       <div class="flex items-baseline gap-3">
-        <h1 class="text-xl font-semibold text-fb-text">Leads</h1>
+        <h1 class="text-xl font-semibold text-fb-text">{{ t('nav.leads') }}</h1>
         <span v-if="!loading" class="text-sm text-fb-secondary">
-          Quantity — {{ totalCount }}
+          {{ t('archive.quantity', { count: totalCount }) }}
         </span>
       </div>
       <div class="flex flex-wrap gap-2">
@@ -757,21 +732,21 @@ onMounted(async () => {
           class="rounded-lg border border-fb-line px-4 py-2 text-sm font-medium text-fb-secondary hover:border-fb-blue hover:text-fb-blue"
           @click="exportCsv"
         >
-          Export
+          {{ t('common.export') }}
         </button>
         <button
           type="button"
           class="rounded-lg border border-fb-line px-4 py-2 text-sm font-medium text-fb-secondary hover:border-fb-blue hover:text-fb-blue"
           @click="showFilters = !showFilters"
         >
-          {{ showFilters ? 'Hide filters' : 'Show filters' }}
+          {{ showFilters ? t('leads.hideFilters') : t('leads.showFilters') }}
         </button>
         <button
           type="button"
           class="rounded-lg bg-fb-blue px-4 py-2 text-sm font-medium text-white hover:opacity-90"
           @click="openPanel()"
         >
-          + Add lead
+          + {{ t('leads.addTitle') }}
         </button>
       </div>
     </div>
@@ -788,7 +763,7 @@ onMounted(async () => {
             : 'bg-fb-canvas text-fb-secondary hover:text-fb-text'"
           @click="setStageFilter(stage.value)"
         >
-          {{ stage.label }}
+          {{ t(stage.label) }}
         </button>
         <button
           type="button"
@@ -798,7 +773,7 @@ onMounted(async () => {
             : 'bg-fb-canvas text-fb-secondary hover:text-fb-text'"
           @click="setStageFilter('')"
         >
-          Все статусы
+          {{ t('rating.allStatuses') }}
         </button>
         <button
           type="button"
@@ -808,18 +783,18 @@ onMounted(async () => {
             : 'bg-fb-canvas text-fb-secondary hover:text-fb-text'"
           @click="filters.archived = filters.archived === '1' ? '0' : '1'; filters.stage = '';"
         >
-          📦 Архивные
+          📦 {{ t('leads.archived') }}
         </button>
       </div>
 
       <div class="flex flex-wrap items-end gap-3">
         <div class="min-w-[240px] flex-1">
-          <label class="mb-1 block text-sm font-medium text-fb-secondary">Search</label>
+          <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('common.search') }}</label>
           <div class="relative">
             <input
               v-model="filters.q"
               type="search"
-              placeholder="Search by name, phone, or comment…"
+              :placeholder="t('leads.searchPlaceholder')"
               class="w-full rounded-lg border border-fb-line pl-9 pr-4 py-2 focus:border-fb-blue focus:outline-none"
             />
             <svg class="absolute left-3 top-2.5 text-fb-secondary" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -829,26 +804,26 @@ onMounted(async () => {
           </div>
         </div>
         <div v-if="courses.length">
-          <label class="mb-1 block text-sm font-medium text-fb-secondary">Course</label>
+          <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('schedule.course') }}</label>
           <select
             v-model="filters.course_id"
             class="rounded-lg border border-fb-line px-3 py-2 focus:border-fb-blue focus:outline-none text-sm min-w-[150px]"
           >
-            <option :value="''">All courses</option>
+            <option :value="''">{{ t('conversion.allCourses') }}</option>
             <option v-for="c in courses" :key="c.id" :value="c.id">
               {{ c.name }}
             </option>
           </select>
         </div>
         <div v-if="availableFilterLevels.length">
-          <label class="mb-1 block text-sm font-medium text-fb-secondary">Level</label>
+          <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('leads.level') }}</label>
           <select
             v-model="filters.level"
             class="rounded-lg border border-fb-line px-3 py-2 focus:border-fb-blue focus:outline-none text-sm min-w-[140px]"
           >
-            <option value="">All levels</option>
+            <option value="">{{ t('leads.allLevels') }}</option>
             <option v-for="lvl in availableFilterLevels" :key="lvl" :value="lvl">
-              {{ lvl }}
+              {{ presetLabel(lvl) }}
             </option>
           </select>
         </div>
@@ -856,19 +831,19 @@ onMounted(async () => {
     </div>
 
     <div class="overflow-hidden rounded-xl border border-fb-line bg-fb-card">
-      <div v-if="loading" class="p-8 text-center text-fb-secondary">Loading…</div>
+      <div v-if="loading" class="p-8 text-center text-fb-secondary">{{ t('common.loading') }}</div>
       <div v-else-if="!rows.length" class="p-8 text-center text-fb-icon">
-        {{ rows.length ? 'No leads match your search.' : 'No leads found. Click “+ Add lead” to create one.' }}
+        {{ t('leads.empty') }}
       </div>
       <table v-else class="w-full text-base">
         <thead class="border-b border-fb-line bg-fb-canvas">
           <tr>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Name</th>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Phone</th>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Address</th>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Comment</th>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Trial date</th>
-            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">Status</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('common.fullName') }}</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('common.phone') }}</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('settings.address') }}</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('common.comment') }}</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('leads.trialDate') }}</th>
+            <th class="px-5 py-4 text-left font-semibold text-fb-secondary">{{ t('common.status') }}</th>
           </tr>
         </thead>
         <tbody>
@@ -891,7 +866,7 @@ onMounted(async () => {
                   v-if="row.level"
                   class="rounded-md bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-800 border border-emerald-200"
                 >
-                  🎯 {{ row.level }}
+                  🎯 {{ presetLabel(row.level) }}
                 </span>
                 <span
                   v-if="row.school"
@@ -909,14 +884,14 @@ onMounted(async () => {
                   v-if="row.source"
                   class="rounded-md bg-purple-50 px-2 py-0.5 text-[11px] font-medium text-purple-700 border border-purple-200"
                 >
-                  📢 {{ row.source }}
+                  📢 {{ presetLabel(row.source) }}
                 </span>
               </div>
             </td>
             <td class="px-5 py-4 text-fb-secondary">
               <div>{{ row.phone }}</div>
               <div v-if="row.phone2" class="text-xs text-fb-icon flex items-center gap-1 mt-0.5">
-                <span v-if="row.phone2_owner" class="font-medium text-fb-secondary">({{ row.phone2_owner }})</span>
+                <span v-if="row.phone2_owner" class="font-medium text-fb-secondary">({{ presetLabel(row.phone2_owner) }})</span>
                 <span>{{ row.phone2 }}</span>
               </div>
             </td>
@@ -944,7 +919,7 @@ onMounted(async () => {
                     : 'bg-blue-100 text-blue-800'
                 "
               >
-                {{ row.stage === 'converted' && row.student_deleted ? '⚠️ Студент удален' : row.stage_label }}
+                {{ row.stage === 'converted' && row.student_deleted ? `⚠️ ${t('leads.studentDeleted')}` : leadStageLabel(row.stage, row.stage_label) }}
               </span>
             </td>
           </tr>
@@ -955,7 +930,7 @@ onMounted(async () => {
     <!-- Pagination -->
     <div v-if="!loading && totalCount > 0" class="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-fb-line bg-fb-card px-5 py-3">
       <div class="flex items-center gap-2 text-sm text-fb-secondary">
-        <span>Показывать по:</span>
+        <span>{{ t('leads.perPage') }}:</span>
         <select
           :value="pageSize"
           @change="pageSize = Number(($event.target as HTMLSelectElement).value); currentPage = 1; loadLeads();"
@@ -966,7 +941,7 @@ onMounted(async () => {
           <option :value="100">100</option>
         </select>
         <span class="ml-2">
-          Показано {{ Math.min((currentPage - 1) * pageSize + 1, totalCount) }}–{{ Math.min(currentPage * pageSize, totalCount) }} из {{ totalCount }}
+          {{ t('leads.shownRange', { from: Math.min((currentPage - 1) * pageSize + 1, totalCount), to: Math.min(currentPage * pageSize, totalCount), total: totalCount }) }}
         </span>
       </div>
       <div v-if="totalPages > 1" class="flex items-center gap-1">
@@ -976,7 +951,7 @@ onMounted(async () => {
           :disabled="currentPage <= 1"
           @click="currentPage--; loadLeads();"
         >
-          ← Назад
+          ← {{ t('common.prev') }}
         </button>
         <template v-for="p in totalPages" :key="p">
           <button
@@ -1001,7 +976,7 @@ onMounted(async () => {
           :disabled="currentPage >= totalPages"
           @click="currentPage++; loadLeads();"
         >
-          Вперёд →
+          {{ t('common.next') }} →
         </button>
       </div>
     </div>
@@ -1013,6 +988,7 @@ onMounted(async () => {
           <button
             type="button"
             class="text-2xl leading-none text-fb-icon hover:text-fb-secondary"
+            :aria-label="t('common.close')"
             @click="closePanel"
           >
             ×
@@ -1025,7 +1001,7 @@ onMounted(async () => {
         >
           <div class="grid grid-cols-2 gap-3">
             <div>
-              <label class="mb-2 block text-[15px] font-medium text-fb-secondary">First name</label>
+              <label class="mb-2 block text-[15px] font-medium text-fb-secondary">{{ t('common.firstName') }}</label>
               <input
                 v-model="form.first_name"
                 type="text"
@@ -1034,7 +1010,7 @@ onMounted(async () => {
               />
             </div>
             <div>
-              <label class="mb-2 block text-[15px] font-medium text-fb-secondary">Last name</label>
+              <label class="mb-2 block text-[15px] font-medium text-fb-secondary">{{ t('common.lastName') }}</label>
               <input
                 v-model="form.last_name"
                 type="text"
@@ -1044,12 +1020,12 @@ onMounted(async () => {
           </div>
 
           <div>
-            <label class="mb-2 block text-[15px] font-medium text-fb-secondary">Phone</label>
+            <label class="mb-2 block text-[15px] font-medium text-fb-secondary">{{ t('common.phone') }}</label>
             <input
               v-model="form.phone"
               type="tel"
               required
-              placeholder="e.g. 90 123 45 67"
+              :placeholder="t('settings.example', { value: '90 123 45 67' })"
               class="w-full rounded-lg border border-fb-line px-4 py-2.5 focus:border-fb-blue focus:outline-none"
             />
           </div>
@@ -1057,89 +1033,83 @@ onMounted(async () => {
           <div>
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label class="mb-1 block text-sm font-medium text-fb-secondary">Second phone (optional)</label>
+                <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('leads.phone2Optional') }}</label>
                 <input
                   v-model="form.phone2"
                   type="tel"
-                  placeholder="Additional phone number"
+                  :placeholder="t('leads.phone2Placeholder')"
                   class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none"
                 />
               </div>
               <div>
-                <label class="mb-1 block text-sm font-medium text-fb-secondary">Whose number? (Чей номер)</label>
+                <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('leads.phone2Owner') }}</label>
                 <input
                   v-model="form.phone2_owner"
                   list="phone2-owners-lead"
                   type="text"
-                  placeholder="e.g. Мама, Отец, Брат..."
+                  :placeholder="t('leads.phone2OwnerPlaceholder')"
                   class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none"
                 />
                 <datalist id="phone2-owners-lead">
-                  <option value="Мама" />
-                  <option value="Отец" />
-                  <option value="Брат" />
-                  <option value="Сестра" />
-                  <option value="Бабушка" />
-                  <option value="Дедушка" />
-                  <option value="Родственник" />
+                  <option v-for="owner in PHONE_OWNERS" :key="owner.value" :value="owner.value" :label="presetLabel(owner.value)" />
                 </datalist>
               </div>
             </div>
             <div class="mt-1.5 flex flex-wrap items-center gap-1.5">
-              <span class="text-xs text-fb-icon">Быстрый выбор:</span>
+              <span class="text-xs text-fb-icon">{{ t('leads.quickPick') }}:</span>
               <button
-                v-for="owner in ['Мама', 'Отец', 'Брат', 'Сестра', 'Родственник']"
-                :key="owner"
+                v-for="owner in PHONE_OWNER_BUTTONS"
+                :key="owner.value"
                 type="button"
                 class="rounded-md border px-2 py-0.5 text-xs transition-colors"
-                :class="form.phone2_owner === owner ? 'bg-fb-blue text-white border-fb-blue' : 'border-fb-line text-fb-secondary hover:bg-fb-canvas'"
-                @click="form.phone2_owner = form.phone2_owner === owner ? '' : owner"
+                :class="form.phone2_owner === owner.value ? 'bg-fb-blue text-white border-fb-blue' : 'border-fb-line text-fb-secondary hover:bg-fb-canvas'"
+                @click="form.phone2_owner = form.phone2_owner === owner.value ? '' : owner.value"
               >
-                {{ owner }}
+                {{ presetLabel(owner.value) }}
               </button>
             </div>
           </div>
 
           <div>
-            <label class="mb-2 block text-[15px] font-medium text-fb-secondary">Address</label>
+            <label class="mb-2 block text-[15px] font-medium text-fb-secondary">{{ t('settings.address') }}</label>
             <input
               v-model="form.address"
               type="text"
-              placeholder="e.g. Tashkent, Chilanzar"
+              :placeholder="t('leads.addressPlaceholder')"
               class="w-full rounded-lg border border-fb-line px-4 py-2.5 focus:border-fb-blue focus:outline-none"
             />
           </div>
 
           <div>
-            <label class="mb-2 block text-[15px] font-medium text-fb-secondary">School (Школа / Номер школы)</label>
+            <label class="mb-2 block text-[15px] font-medium text-fb-secondary">{{ t('leads.school') }}</label>
             <input
               v-model="form.school"
               type="text"
-              placeholder="например, Школа № 178"
+              :placeholder="t('leads.schoolPlaceholder')"
               class="w-full rounded-lg border border-fb-line px-4 py-2.5 focus:border-fb-blue focus:outline-none"
             />
           </div>
 
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label class="mb-2 block text-[15px] font-medium text-fb-secondary">Branch (Филиал)</label>
+              <label class="mb-2 block text-[15px] font-medium text-fb-secondary">{{ t('common.branch') }}</label>
               <select
                 v-model="form.branch_id"
                 class="w-full rounded-lg border border-fb-line px-4 py-2.5 focus:border-fb-blue focus:outline-none"
               >
-                <option :value="''">— All / Not specified —</option>
+                <option :value="''">— {{ t('common.notSet') }} —</option>
                 <option v-for="b in branches" :key="b.id" :value="b.id">
                   {{ b.name }}
                 </option>
               </select>
             </div>
             <div>
-              <label class="mb-2 block text-[15px] font-medium text-fb-secondary">Course (Курс / Предмет)</label>
+              <label class="mb-2 block text-[15px] font-medium text-fb-secondary">{{ t('schedule.course') }}</label>
               <select
                 v-model="form.course_id"
                 class="w-full rounded-lg border border-fb-line px-4 py-2.5 focus:border-fb-blue focus:outline-none"
               >
-                <option :value="''">— Not selected —</option>
+                <option :value="''">— {{ t('common.notSelected') }} —</option>
                 <option v-for="c in courses" :key="c.id" :value="c.id">
                   {{ c.name }}
                 </option>
@@ -1149,83 +1119,83 @@ onMounted(async () => {
 
           <div>
             <label class="mb-2 block text-[15px] font-medium text-fb-secondary">
-              Level (Уровень знаний / класс)
+              {{ t('leads.levelLong') }}
             </label>
             <input
               v-model="form.level"
               list="lead-levels-list"
               type="text"
-              placeholder="e.g. Beginner, Elementary, Intermediate, 5 класс, IELTS..."
+              :placeholder="t('leads.levelPlaceholder')"
               class="w-full rounded-lg border border-fb-line px-4 py-2.5 focus:border-fb-blue focus:outline-none"
             />
             <datalist id="lead-levels-list">
-              <option v-for="lvl in activeLevelPresets" :key="lvl" :value="lvl" />
+              <option v-for="lvl in activeLevelPresets" :key="lvl.value" :value="lvl.value" :label="presetLabel(lvl.value)" />
             </datalist>
             <div class="mt-1.5 flex flex-wrap items-center gap-1.5">
-              <span class="text-xs text-fb-icon">Быстрый выбор:</span>
+              <span class="text-xs text-fb-icon">{{ t('leads.quickPick') }}:</span>
               <button
                 v-for="lvl in activeLevelPresets"
-                :key="lvl"
+                :key="lvl.value"
                 type="button"
                 class="rounded-md border px-2 py-0.5 text-xs transition-colors"
-                :class="form.level === lvl ? 'bg-emerald-600 text-white border-emerald-600' : 'border-fb-line text-fb-secondary hover:bg-fb-canvas'"
-                @click="form.level = form.level === lvl ? '' : lvl"
+                :class="form.level === lvl.value ? 'bg-emerald-600 text-white border-emerald-600' : 'border-fb-line text-fb-secondary hover:bg-fb-canvas'"
+                @click="form.level = form.level === lvl.value ? '' : lvl.value"
               >
-                {{ lvl }}
+                {{ presetLabel(lvl.value) }}
               </button>
             </div>
           </div>
 
           <div>
-            <label class="mb-2 block text-[15px] font-medium text-fb-secondary">Source (Откуда узнал о нас)</label>
+            <label class="mb-2 block text-[15px] font-medium text-fb-secondary">{{ t('leads.sourceLong') }}</label>
             <input
               v-model="form.source"
               list="lead-sources-list"
               type="text"
-              placeholder="e.g. Instagram, Telegram, Рекомендация..."
+              :placeholder="t('leads.sourcePlaceholder')"
               class="w-full rounded-lg border border-fb-line px-4 py-2.5 focus:border-fb-blue focus:outline-none"
             />
             <datalist id="lead-sources-list">
-              <option v-for="src in POPULAR_SOURCES" :key="src" :value="src" />
+              <option v-for="src in POPULAR_SOURCES" :key="src.value" :value="src.value" :label="presetLabel(src.value)" />
             </datalist>
             <div class="mt-1.5 flex flex-wrap items-center gap-1.5">
-              <span class="text-xs text-fb-icon">Быстрый выбор:</span>
+              <span class="text-xs text-fb-icon">{{ t('leads.quickPick') }}:</span>
               <button
                 v-for="src in POPULAR_SOURCES"
-                :key="src"
+                :key="src.value"
                 type="button"
                 class="rounded-md border px-2 py-0.5 text-xs transition-colors"
-                :class="form.source === src ? 'bg-fb-blue text-white border-fb-blue' : 'border-fb-line text-fb-secondary hover:bg-fb-canvas'"
-                @click="form.source = form.source === src ? '' : src"
+                :class="form.source === src.value ? 'bg-fb-blue text-white border-fb-blue' : 'border-fb-line text-fb-secondary hover:bg-fb-canvas'"
+                @click="form.source = form.source === src.value ? '' : src.value"
               >
-                {{ src }}
+                {{ presetLabel(src.value) }}
               </button>
             </div>
           </div>
 
           <div class="lg:col-span-2">
-            <label class="mb-2 block text-[15px] font-medium text-fb-secondary">Comments</label>
+            <label class="mb-2 block text-[15px] font-medium text-fb-secondary">{{ t('common.comment') }}</label>
             <textarea
               v-model="form.comment"
               rows="3"
-              placeholder="Add notes or comments about lead..."
+              :placeholder="t('leads.commentPlaceholder')"
               class="w-full rounded-lg border border-fb-line px-4 py-2.5 focus:border-fb-blue focus:outline-none"
             ></textarea>
           </div>
 
           <div>
-            <label class="mb-2 block text-[15px] font-medium text-fb-secondary">Status</label>
+            <label class="mb-2 block text-[15px] font-medium text-fb-secondary">{{ t('common.status') }}</label>
             <div
               v-if="editingLead && editingLead.stage === 'converted' && editingLead.student_deleted"
               class="rounded-lg border border-amber-300 bg-amber-50 px-4 py-2.5 text-sm font-semibold text-amber-800 flex items-center gap-2"
             >
-              <span>⚠️</span> Зачислен (студент был удалён)
+              <span>⚠️</span> {{ t('leads.convertedDeleted') }}
             </div>
             <div
               v-else-if="editingLead && editingLead.stage === 'converted'"
               class="rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-2.5 text-sm font-semibold text-emerald-800 flex items-center gap-2"
             >
-              <span>✅</span> Зачислен (Студент)
+              <span>✅</span> {{ t('leadStage.converted') }}
             </div>
             <select
               v-else
@@ -1233,14 +1203,14 @@ onMounted(async () => {
               class="w-full rounded-lg border border-fb-line px-4 py-2.5 focus:border-fb-blue focus:outline-none"
             >
               <option v-for="stage in EDITABLE_STAGES" :key="stage.value" :value="stage.value">
-                {{ stage.label }}
+                {{ t(stage.label) }}
               </option>
             </select>
           </div>
 
           <div>
             <label class="mb-2 block text-[15px] font-medium text-fb-secondary">
-              Trial lesson date (Дата пробного урока) <span class="text-rose-500">*</span>
+              {{ t('leads.trialDate') }} <span class="text-rose-500">*</span>
             </label>
             <input
               v-model="form.trial_date"
@@ -1251,7 +1221,7 @@ onMounted(async () => {
           </div>
 
           <p v-if="editingLead" class="col-span-full text-sm text-fb-icon">
-            Created: {{ editingLead.created_at.slice(0, 10) }}
+            {{ t('leads.createdOn', { date: editingLead.created_at.slice(0, 10) }) }}
           </p>
 
           <p v-if="formError" class="col-span-full text-[15px] text-fb-danger">{{ formError }}</p>
@@ -1262,7 +1232,7 @@ onMounted(async () => {
               class="rounded-full bg-fb-blue px-8 py-3 text-[16px] font-semibold text-white hover:opacity-90 disabled:opacity-60"
               :disabled="saving"
             >
-              {{ saving ? 'Saving…' : editingLead ? 'Save changes' : 'Create lead' }}
+              {{ saving ? t('common.saving') : editingLead ? t('common.save') : t('leads.create') }}
             </button>
 
             <!-- Zombie lead: student was deleted -->
@@ -1271,7 +1241,7 @@ onMounted(async () => {
               class="w-full space-y-2"
             >
               <div class="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-                ⚠️ Студент был удалён из базы. Выберите действие:
+                ⚠️ {{ t('leads.studentDeletedChoose') }}
               </div>
               <div class="flex flex-wrap gap-2">
                 <button
@@ -1280,14 +1250,14 @@ onMounted(async () => {
                   @click="returnLeadToWork"
                   :disabled="saving"
                 >
-                  🔄 Вернуть как лида
+                  🔄 {{ t('leads.returnAsLead') }}
                 </button>
                 <button
                   type="button"
                   class="rounded-full bg-emerald-600 px-5 py-2.5 text-[14px] font-semibold text-white hover:bg-emerald-700"
                   @click="openConvertModal"
                 >
-                  🎓 Восстановить как студента
+                  🎓 {{ t('leads.restoreAsStudent') }}
                 </button>
               </div>
             </div>
@@ -1298,7 +1268,7 @@ onMounted(async () => {
               class="flex flex-wrap items-center gap-2"
             >
               <span class="rounded-full bg-emerald-100 text-emerald-800 px-4 py-3 text-[14px] font-semibold flex items-center gap-1.5 border border-emerald-300">
-                <span>✅</span> Уже зачислен как студент
+                <span>✅</span> {{ t('leads.alreadyStudent') }}
               </span>
               <button
                 v-if="editingLead.converted_student_id"
@@ -1306,7 +1276,7 @@ onMounted(async () => {
                 class="rounded-full bg-fb-blue px-5 py-3 text-[14px] font-semibold text-white hover:opacity-90 flex items-center gap-1.5"
                 @click="router.push({ path: '/students', query: { open: String(editingLead.converted_student_id) } })"
               >
-                <span>🎓</span> Открыть карточку студента
+                <span>🎓</span> {{ t('dashboard.openStudentCard') }}
               </button>
             </div>
 
@@ -1316,7 +1286,7 @@ onMounted(async () => {
               class="rounded-full bg-emerald-600 px-6 py-3 text-[15px] font-semibold text-white hover:bg-emerald-700 disabled:opacity-60 flex items-center gap-1.5"
               @click="openConvertModal"
             >
-              <span>🎓</span> Convert to student
+              <span>🎓</span> {{ t('leads.convert') }}
             </button>
 
             <button
@@ -1326,7 +1296,7 @@ onMounted(async () => {
               :disabled="archiving"
               @click="archiveLead"
             >
-              {{ archiving ? 'В архив…' : 'Скрыть в архив' }}
+              {{ archiving ? t('common.saving') : t('common.archive') }}
             </button>
 
             <button
@@ -1336,7 +1306,7 @@ onMounted(async () => {
               :disabled="saving"
               @click="restoreLead"
             >
-              Restore
+              {{ t('common.restore') }}
             </button>
           </div>
         </form>
@@ -1350,13 +1320,13 @@ onMounted(async () => {
         <div class="flex items-center justify-between border-b border-fb-line px-6 py-4 bg-fb-canvas">
           <div>
             <h3 class="text-lg font-bold text-fb-text flex items-center gap-2">
-              <span>🎓</span> Convert lead to student
+              <span>🎓</span> {{ t('leads.convertTitle') }}
             </h3>
             <p class="text-xs text-fb-secondary mt-0.5">
-              Переводит лид в статус "Зачислен (Студент)" и создает профиль студента.
+              {{ t('leads.convertText') }}
             </p>
           </div>
-          <button type="button" class="text-2xl leading-none text-fb-icon hover:text-fb-secondary" @click="closeConvertModal">
+          <button type="button" class="text-2xl leading-none text-fb-icon hover:text-fb-secondary" :aria-label="t('common.close')" @click="closeConvertModal">
             ×
           </button>
         </div>
@@ -1364,13 +1334,13 @@ onMounted(async () => {
         <form class="flex-1 overflow-y-auto p-6 space-y-4" @submit.prevent="handleConvert">
           <div v-if="editingLead" class="rounded-lg bg-blue-50/70 border border-blue-200 p-3 text-xs flex flex-wrap items-center gap-3">
             <span v-if="editingLead.course_name" class="font-medium text-blue-800">📚 {{ editingLead.course_name }}</span>
-            <span v-if="convertForm.level" class="font-semibold text-emerald-800">🎯 {{ convertForm.level }}</span>
+            <span v-if="convertForm.level" class="font-semibold text-emerald-800">🎯 {{ presetLabel(convertForm.level) }}</span>
             <span v-if="editingLead.branch_name" class="text-amber-800">📍 {{ editingLead.branch_name }}</span>
           </div>
 
           <div class="grid grid-cols-2 gap-3">
             <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">First name</label>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('common.firstName') }}</label>
               <input
                 v-model="convertForm.first_name"
                 type="text"
@@ -1379,7 +1349,7 @@ onMounted(async () => {
               />
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Last name</label>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('common.lastName') }}</label>
               <input
                 v-model="convertForm.last_name"
                 type="text"
@@ -1390,7 +1360,7 @@ onMounted(async () => {
 
           <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Phone</label>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('common.phone') }}</label>
               <input
                 v-model="convertForm.phone"
                 type="tel"
@@ -1399,21 +1369,21 @@ onMounted(async () => {
               />
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Second phone</label>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('leads.phone2') }}</label>
               <input
                 v-model="convertForm.phone2"
                 type="tel"
-                placeholder="Optional"
+                :placeholder="t('common.optional')"
                 class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none"
               />
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Чей номер</label>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('leads.phone2Owner') }}</label>
               <input
                 v-model="convertForm.phone2_owner"
                 list="phone2-owners-lead"
                 type="text"
-                placeholder="Мама, Отец..."
+                :placeholder="t('leads.phone2OwnerPlaceholder')"
                 class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none"
               />
             </div>
@@ -1421,48 +1391,48 @@ onMounted(async () => {
 
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Address</label>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('settings.address') }}</label>
               <input
                 v-model="convertForm.address"
                 type="text"
-                placeholder="e.g. Tashkent, Chilanzar"
+                :placeholder="t('leads.addressPlaceholder')"
                 class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none"
               />
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">School (Школа / Номер школы)</label>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('leads.school') }}</label>
               <input
                 v-model="convertForm.school"
                 type="text"
-                placeholder="например, Школа № 178"
+                :placeholder="t('leads.schoolPlaceholder')"
                 class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none"
               />
             </div>
           </div>
 
           <div>
-            <label class="mb-1 block text-sm font-medium text-fb-secondary">Level (Уровень знаний / класс)</label>
+            <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('leads.levelLong') }}</label>
             <input
               v-model="convertForm.level"
               type="text"
-              placeholder="e.g. Beginner, Intermediate..."
+              :placeholder="t('leads.levelPlaceholder')"
               class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none"
             />
           </div>
 
           <div>
-            <label class="mb-1 block text-sm font-medium text-fb-secondary">Comments</label>
+            <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('common.comment') }}</label>
             <textarea
               v-model="convertForm.comment"
               rows="2"
-              placeholder="Student notes..."
+              :placeholder="t('leads.commentPlaceholder')"
               class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none"
             ></textarea>
           </div>
 
           <div class="border-t border-fb-line pt-3 grid grid-cols-2 gap-3">
             <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Branch *</label>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('common.branch') }} *</label>
               <select
                 v-model="convertForm.branch_id"
                 required
@@ -1474,12 +1444,12 @@ onMounted(async () => {
               </select>
             </div>
             <div>
-              <label class="mb-1 block text-sm font-medium text-fb-secondary">Group</label>
+              <label class="mb-1 block text-sm font-medium text-fb-secondary">{{ t('schedule.group') }}</label>
               <select
                 v-model="convertForm.group_id"
                 class="w-full rounded-lg border border-fb-line px-3 py-2 text-sm focus:border-fb-blue focus:outline-none"
               >
-                <option value="">— No group —</option>
+                <option value="">— {{ t('leads.noGroup') }} —</option>
                 <option v-for="g in filteredConvertGroups" :key="g.id" :value="g.id">
                   {{ g.name }}
                 </option>
@@ -1489,10 +1459,10 @@ onMounted(async () => {
 
           <div>
             <label class="mb-1 block text-sm font-medium text-fb-secondary">
-              Дата старта / число оплаты <span class="text-rose-500">*</span>
+              {{ t('leads.startDate') }} <span class="text-rose-500">*</span>
             </label>
             <p class="mb-1 text-xs text-fb-secondary">
-              От этой даты считается оплата. Пробный урок был: {{ editingLead?.trial_date ? editingLead.trial_date.slice(0, 10) : '—' }}
+              {{ t('leads.startDateHint', { date: editingLead?.trial_date ? editingLead.trial_date.slice(0, 10) : '—' }) }}
             </p>
             <input
               v-model="convertForm.trial_date"
@@ -1508,7 +1478,7 @@ onMounted(async () => {
               type="checkbox"
               class="rounded border-fb-line text-fb-blue focus:ring-fb-blue"
             />
-            Был на пробном уроке (отключите, если записался сразу без пробного)
+            {{ t('leads.attendedTrial') }}
           </label>
 
           <p v-if="convertError" class="text-sm text-fb-danger">{{ convertError }}</p>
@@ -1519,15 +1489,15 @@ onMounted(async () => {
               class="rounded-lg border border-fb-line px-4 py-2 text-sm font-medium text-fb-secondary hover:bg-fb-canvas"
               @click="closeConvertModal"
             >
-              Cancel
+              {{ t('common.cancel') }}
             </button>
             <button
               type="submit"
               class="rounded-lg bg-emerald-600 px-5 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60 flex items-center gap-1.5"
               :disabled="converting"
             >
-              <span v-if="converting">Converting…</span>
-              <span v-else>Confirm & Convert</span>
+              <span v-if="converting">{{ t('common.saving') }}</span>
+              <span v-else>{{ t('leads.confirmConvert') }}</span>
             </button>
           </div>
         </form>
